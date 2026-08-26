@@ -25,14 +25,14 @@ st.set_page_config(
 )
 
 DASHBOARDS = [
+    {"title": "CME Feeder Cattle Index", "page": "apps/cme_feeder_cattle/app.py", "url_path": "cme-feeder-cattle-index",
+     "desc": "12-state feeder steer index trend, weekly rundown, and basis by sale location."},
     {"title": "Beef Weight", "page": "apps/beef_weight/app.py", "url_path": "beef-weight",
      "desc": "USDA NASS weekly beef slaughter weights by class, dressed & live."},
     {"title": "Beef Cutout", "page": "apps/beef_cutout/app.py", "url_path": "beef-cutout",
      "desc": "Daily USDA boxed beef cutout — Choice & Select composites, spread, volume."},
     {"title": "Livestock Inventory", "page": "apps/livestock_inventory/app.py", "url_path": "livestock-inventory",
      "desc": "USDA NASS livestock, poultry, aquaculture inventory & dairy production."},
-    {"title": "CME Feeder Cattle Index", "page": "apps/cme_feeder_cattle/app.py", "url_path": "cme-feeder-cattle-index",
-     "desc": "12-state feeder steer index trend, weekly rundown, and basis by sale location."},
 ]
 
 _TILE_CSS = """

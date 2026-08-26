@@ -1,0 +1,14 @@
+# JPSI brand theme (jpsi.com): dark #32373c, blue #0693e3
+# Matches jsa-home-page's config.toml — pins the whole app to light mode
+# regardless of the viewer's browser/OS dark-mode preference.
+[theme]
+base = "light"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#eef4f8"
+primaryColor = "#0693e3"
+textColor = "#32373c"
+font = "sans serif"
+
+[server]
+headless = true
+runOnSave = true
