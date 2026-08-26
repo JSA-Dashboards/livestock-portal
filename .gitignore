@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.env
+.env.*
+.streamlit/secrets.toml
+.streamlit/secrets.local.toml
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+~$*.xlsx
+*.log
+
+# NOTE: apps/cme_feeder_cattle/data/*.xlsx and *.db are intentionally NOT
+# ignored — they ARE that app's data, not a cache.
