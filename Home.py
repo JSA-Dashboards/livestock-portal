@@ -27,6 +27,8 @@ st.set_page_config(
 DASHBOARDS = [
     {"title": "CME Feeder Cattle Index", "page": "apps/cme_feeder_cattle/app.py", "url_path": "cme-feeder-cattle-index",
      "desc": "12-state feeder steer index trend, weekly rundown, and basis by sale location."},
+    {"title": "Cattle on Feed", "page": "apps/cattle_on_feed/app.py", "url_path": "cattle-on-feed",
+     "desc": "USDA on-feed inventory, placements, marketings, and the quarterly heifers-on-feed share."},
     {"title": "Beef Weight", "page": "apps/beef_weight/app.py", "url_path": "beef-weight",
      "desc": "USDA NASS weekly beef slaughter weights by class, dressed & live."},
     {"title": "Beef Cutout", "page": "apps/beef_cutout/app.py", "url_path": "beef-cutout",
@@ -90,7 +92,7 @@ def render_home():
         )
 
     st.write("")
-    cols = st.columns(4)
+    cols = st.columns(len(DASHBOARDS))
     for i, d in enumerate(DASHBOARDS):
         with cols[i]:
             with st.container(key=f"tile_{i}"):
