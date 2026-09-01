@@ -1,10 +1,13 @@
 # Livestock Portal — reconciled union of Beef Weight, Beef Cutout,
-# Livestock Inventory, and CME Feeder Cattle Index's individual requirements.
-# plotly pinned <6 to match livestock_inventory's constraint.
+# Livestock Inventory, CME Feeder Cattle Index, and Seasonal Futures &
+# Spreads' individual requirements.
+# plotly pinned <6 to match livestock_inventory's constraint; kaleido pinned
+# to 0.2.1 since newer plotly/kaleido combos silently break Cloud PNG export.
 streamlit>=1.35.0
 pandas>=2.0.0
 numpy>=1.24.0
 plotly>=5.18.0,<6.0.0
+kaleido==0.2.1
 requests>=2.31.0
 urllib3>=2.0.0
 openpyxl>=3.1.0

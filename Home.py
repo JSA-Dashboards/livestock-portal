@@ -35,6 +35,8 @@ DASHBOARDS = [
      "desc": "Daily USDA boxed beef cutout — Choice & Select composites, spread, volume."},
     {"title": "Livestock Inventory", "page": "apps/livestock_inventory/app.py", "url_path": "livestock-inventory",
      "desc": "USDA NASS livestock, poultry, aquaculture inventory & dairy production."},
+    {"title": "Seasonal Futures & Spreads", "page": "apps/livestock_seasonal/app.py", "url_path": "seasonal-futures-spreads",
+     "desc": "CME Live Cattle, Feeder Cattle, and Lean Hogs seasonal futures, spreads, and spread matrix."},
 ]
 
 _TILE_CSS = """
