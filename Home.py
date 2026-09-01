@@ -27,6 +27,8 @@ st.set_page_config(
 DASHBOARDS = [
     {"title": "CME Feeder Cattle Index", "page": "apps/cme_feeder_cattle/app.py", "url_path": "cme-feeder-cattle-index",
      "desc": "12-state feeder steer index trend, weekly rundown, and basis by sale location."},
+    {"title": "Seasonal Futures & Spreads", "page": "apps/livestock_seasonal/app.py", "url_path": "seasonal-futures-spreads",
+     "desc": "CME Live Cattle, Feeder Cattle, and Lean Hogs seasonal futures, spreads, and spread matrix."},
     {"title": "Cattle on Feed", "page": "apps/cattle_on_feed/app.py", "url_path": "cattle-on-feed",
      "desc": "USDA on-feed inventory, placements, marketings, and the quarterly heifers-on-feed share."},
     {"title": "Beef Weight", "page": "apps/beef_weight/app.py", "url_path": "beef-weight",
@@ -35,8 +37,6 @@ DASHBOARDS = [
      "desc": "Daily USDA boxed beef cutout — Choice & Select composites, spread, volume."},
     {"title": "Livestock Inventory", "page": "apps/livestock_inventory/app.py", "url_path": "livestock-inventory",
      "desc": "USDA NASS livestock, poultry, aquaculture inventory & dairy production."},
-    {"title": "Seasonal Futures & Spreads", "page": "apps/livestock_seasonal/app.py", "url_path": "seasonal-futures-spreads",
-     "desc": "CME Live Cattle, Feeder Cattle, and Lean Hogs seasonal futures, spreads, and spread matrix."},
 ]
 
 _TILE_CSS = """
