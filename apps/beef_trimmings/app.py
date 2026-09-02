@@ -248,13 +248,15 @@ with st.sidebar:
 
     st.markdown('<div class="sec-header" style="margin-top:0;">History window</div>', unsafe_allow_html=True)
     us_window = st.selectbox(
-        "US daily reports to load", [130, 260, 400, 500],
-        index=2, format_func=lambda x: {130: "~6 months", 260: "~1 year", 400: "~18 months", 500: "~2 years"}[x],
+        "US daily reports to load", [260, 400, 500, 750, 1000],
+        index=2, format_func=lambda x: {260: "~1 year", 400: "~18 months", 500: "~2 years",
+                                         750: "~3 years", 1000: "~4 years"}[x],
         label_visibility="collapsed",
     )
     import_years = st.selectbox(
-        "Import history (years)", [1, 2, 3, 5],
-        index=2, format_func=lambda x: f"{x} year{'s' if x > 1 else ''} of weekly imports",
+        "Import history (years)", [1, 2, 3, 5, 7],
+        index=3, format_func=lambda x: f"{x} year{'s' if x > 1 else ''} of weekly imports"
+                                        + (" (full history)" if x == 7 else ""),
         label_visibility="collapsed",
     )
 
