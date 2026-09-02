@@ -35,6 +35,8 @@ DASHBOARDS = [
      "desc": "USDA NASS weekly beef slaughter weights by class, dressed & live."},
     {"title": "Beef Cutout", "page": "apps/beef_cutout/app.py", "url_path": "beef-cutout",
      "desc": "Daily USDA boxed beef cutout — Choice & Select composites, spread, volume."},
+    {"title": "Beef Trimmings", "page": "apps/beef_trimmings/app.py", "url_path": "beef-trimmings",
+     "desc": "US Fresh 90s vs. South America & Australia/NZ Frozen 90s (Cow Meat) import prices."},
     {"title": "Livestock Inventory", "page": "apps/livestock_inventory/app.py", "url_path": "livestock-inventory",
      "desc": "USDA NASS livestock, poultry, aquaculture inventory & dairy production."},
 ]
