@@ -39,6 +39,8 @@ DASHBOARDS = [
      "desc": "US Fresh 90s vs. South America & Australia/NZ Frozen 90s (Cow Meat) import prices."},
     {"title": "Livestock Inventory", "page": "apps/livestock_inventory/app.py", "url_path": "livestock-inventory",
      "desc": "USDA NASS livestock, poultry, aquaculture inventory & dairy production."},
+    {"title": "Cash Cattle Trade", "page": "apps/cash_trade/app.py", "url_path": "cash-trade",
+     "desc": "Combined Steer/Heifer FOB & Dressed prices, plus national negotiated cash trade volume."},
 ]
 
 _TILE_CSS = """
