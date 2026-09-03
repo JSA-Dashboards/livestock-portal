@@ -47,6 +47,8 @@ ORIGIN_ANZ    = "Australia &/ New Zealand"
 US_FULL_HISTORY_REPORTS = 6000
 IMPORT_HISTORY_START    = "01/01/2019"
 
+WATERMARK_OPACITY = 0.10
+
 # st.set_page_config removed — the Livestock Portal shell (Home.py) makes the
 # single set_page_config call allowed per multi-page run.
 
@@ -103,6 +105,15 @@ st.markdown(f"""
 
   .note {{ color:{MUTED}; font-size:0.72rem; line-height:1.5; }}
   hr {{ border-color:{BORDER}; }}
+
+  .stButton > button {{
+    background: {JPSI_BLUE}; color: #fff; border: none;
+    border-radius: 6px; font-weight: 600;
+  }}
+  .stButton > button:hover {{ background: #057ec2; color: #fff; }}
+  [data-testid="stSidebar"] .stToggle label div[data-baseweb="toggle"][aria-checked="true"] {{
+    background-color: {JPSI_BLUE} !important;
+  }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -456,6 +467,12 @@ _default_end   = max(
     default=None,
 )
 
+fig.add_layout_image(dict(
+    source=JSA_LOGO, xref="paper", yref="paper",
+    x=0.5, y=0.5, sizex=0.5, sizey=0.5,
+    xanchor="center", yanchor="middle", sizing="contain",
+    opacity=WATERMARK_OPACITY, layer="below",
+))
 fig.update_layout(
     paper_bgcolor="#ffffff", plot_bgcolor="#ffffff",
     font=dict(color=JPSI_DARK, size=11), hovermode="x unified",
@@ -514,6 +531,12 @@ if not sa_df.empty or not anz_df.empty:
             hovertemplate="<b>US − Australia/NZ</b>: $%{y:.2f}<extra></extra>",
         ))
     fig_s.add_hline(y=0, line=dict(color=MUTED, width=1, dash="dot"))
+    fig_s.add_layout_image(dict(
+        source=JSA_LOGO, xref="paper", yref="paper",
+        x=0.5, y=0.5, sizex=0.5, sizey=0.5,
+        xanchor="center", yanchor="middle", sizing="contain",
+        opacity=WATERMARK_OPACITY, layer="below",
+    ))
     fig_s.update_layout(
         paper_bgcolor="#ffffff", plot_bgcolor="#ffffff",
         font=dict(color=JPSI_DARK, size=11), hovermode="x unified",
