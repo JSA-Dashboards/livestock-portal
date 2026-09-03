@@ -38,6 +38,15 @@ IMPORT_ITEM   = "Cow Meat (90%)"
 ORIGIN_SA     = "South America"
 ORIGIN_ANZ    = "Australia &/ New Zealand"
 
+# Full-history pull sizes. LM_XB401's "Chemical Lean, Fresh 90%" line goes back
+# to at least 2004 (confirmed against live API 2026-09-02) — 6000 reports covers
+# the entire archive (~5990 unique report dates back to 2003) as one ~175MB pull,
+# which takes 60-90s, hence the long timeout below. NW_LS421 only starts
+# 2020-02-26, so a fixed 2019-01-01 anchor safely covers its whole history and
+# stays small/fast (a few MB).
+US_FULL_HISTORY_REPORTS = 6000
+IMPORT_HISTORY_START    = "01/01/2019"
+
 # st.set_page_config removed — the Livestock Portal shell (Home.py) makes the
 # single set_page_config call allowed per multi-page run.
 
@@ -151,11 +160,11 @@ def _session(backoff=3) -> requests.Session:
 
 
 @st.cache_data(ttl=3600, persist="disk", show_spinner=False)
-def fetch_us_fresh90(last_n: int = 400) -> pd.DataFrame:
-    """Daily US Chemical Lean, Fresh 90% — National & Central lines from LM_XB401."""
+def fetch_us_fresh90() -> pd.DataFrame:
+    """Full-history daily US Chemical Lean, Fresh 90% — National & Central lines from LM_XB401."""
     url  = f"{LMR_BASE}/{XB401_ID}/"
     sess = _session()
-    resp = sess.get(url, params={"lastReports": last_n, "allSections": "true"}, timeout=60)
+    resp = sess.get(url, params={"lastReports": US_FULL_HISTORY_REPORTS, "allSections": "true"}, timeout=180)
     resp.raise_for_status()
     payload = resp.json()
 
@@ -192,14 +201,13 @@ def fetch_us_fresh90(last_n: int = 400) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=21600, persist="disk", show_spinner=False)
-def fetch_import_cow90(years_back: int = 3) -> pd.DataFrame:
-    """Weekly Cow Meat (90%) import prices by origin from NW_LS421 (Import Beef Trade)."""
-    lo = (datetime.now() - timedelta(days=365 * years_back)).strftime("%m/%d/%Y")
+def fetch_import_cow90() -> pd.DataFrame:
+    """Full-history weekly Cow Meat (90%) import prices by origin from NW_LS421 (Import Beef Trade)."""
     hi = (datetime.now() + timedelta(days=2)).strftime("%m/%d/%Y")
     url  = f"{MARS_BASE}/{LS421_ID}"
     sess = _session()
-    resp = sess.get(url, params={"q": f"report_begin_date={lo}:{hi}", "allSections": "true"},
-                     auth=(MARS_KEY, ""), timeout=60)
+    resp = sess.get(url, params={"q": f"report_begin_date={IMPORT_HISTORY_START}:{hi}", "allSections": "true"},
+                     auth=(MARS_KEY, ""), timeout=90)
     resp.raise_for_status()
     payload = resp.json()
 
@@ -246,18 +254,11 @@ with st.sidebar:
     st.image(JSA_LOGO, width="stretch")
     st.markdown("<hr>", unsafe_allow_html=True)
 
-    st.markdown('<div class="sec-header" style="margin-top:0;">History window</div>', unsafe_allow_html=True)
-    us_window = st.selectbox(
-        "US daily reports to load", [260, 400, 500, 750, 1000],
-        index=2, format_func=lambda x: {260: "~1 year", 400: "~18 months", 500: "~2 years",
-                                         750: "~3 years", 1000: "~4 years"}[x],
-        label_visibility="collapsed",
-    )
-    import_years = st.selectbox(
-        "Import history (years)", [1, 2, 3, 5, 7],
-        index=3, format_func=lambda x: f"{x} year{'s' if x > 1 else ''} of weekly imports"
-                                        + (" (full history)" if x == 7 else ""),
-        label_visibility="collapsed",
+    st.markdown('<div class="sec-header" style="margin-top:0;">History</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="note">Full available history is always loaded — '
+        'US Fresh 90s back to 2003, imports back to 2020.</div>',
+        unsafe_allow_html=True,
     )
 
     st.markdown("<hr>", unsafe_allow_html=True)
@@ -284,10 +285,10 @@ with st.sidebar:
 
 # ── Load Data ────────────────────────────────────────────────────────────────
 
-with st.spinner("Loading USDA beef trimmings data…"):
+with st.spinner("Loading full USDA beef trimmings history (US pull can take ~60-90s on a cold cache)…"):
     try:
-        us_hist = fetch_us_fresh90(last_n=us_window)
-        imp_hist = fetch_import_cow90(years_back=import_years)
+        us_hist = fetch_us_fresh90()
+        imp_hist = fetch_import_cow90()
         load_ok, err_msg = True, ""
     except Exception as e:
         load_ok, err_msg = False, str(e)
@@ -445,6 +446,16 @@ if not anz_df.empty:
         hovertemplate="<b>Australia/NZ Frozen 90s</b>: $%{y:.2f}<extra></extra>",
     ))
 
+# Default the initial view to the window where both series overlap (imports only
+# start 2020) rather than the full ~22-year US archive — "All" still reaches back
+# to 2003 via the range selector below.
+_default_start = imp_hist["report_date"].min() if not imp_hist.empty else None
+_default_end   = max(
+    [d for d in [us_hist["report_date"].max() if not us_hist.empty else None,
+                 imp_hist["report_date"].max() if not imp_hist.empty else None] if d is not None],
+    default=None,
+)
+
 fig.update_layout(
     paper_bgcolor="#ffffff", plot_bgcolor="#ffffff",
     font=dict(color=JPSI_DARK, size=11), hovermode="x unified",
@@ -453,12 +464,14 @@ fig.update_layout(
     margin=dict(l=55, r=20, t=15, b=40),
     xaxis=dict(
         **AXIS, title="",
+        range=[_default_start, _default_end] if _default_start is not None else None,
         rangeselector=dict(
             buttons=[
-                dict(count=3, label="3M", step="month", stepmode="backward"),
                 dict(count=6, label="6M", step="month", stepmode="backward"),
                 dict(count=1, label="YTD", step="year", stepmode="todate"),
                 dict(count=1, label="1Y", step="year", stepmode="backward"),
+                dict(count=5, label="5Y", step="year", stepmode="backward"),
+                dict(count=10, label="10Y", step="year", stepmode="backward"),
                 dict(step="all", label="All"),
             ],
             bgcolor="#f6f8fa", activecolor=JPSI_BLUE,
@@ -551,8 +564,8 @@ with st.expander("📋  Import Cow Meat (90%) — weekly data table"):
 # ── Debug Expander ──────────────────────────────────────────────────────────────
 
 with st.expander("🔧  Raw API debug"):
-    st.write("**US endpoint:**", f"{LMR_BASE}/{XB401_ID}/?lastReports={us_window}&allSections=true")
-    st.write("**Import endpoint:**", f"{MARS_BASE}/{LS421_ID}?q=report_begin_date=...&allSections=true")
+    st.write("**US endpoint:**", f"{LMR_BASE}/{XB401_ID}/?lastReports={US_FULL_HISTORY_REPORTS}&allSections=true")
+    st.write("**Import endpoint:**", f"{MARS_BASE}/{LS421_ID}?q=report_begin_date={IMPORT_HISTORY_START}:...&allSections=true")
     st.write("**US rows:**", len(us_hist), "| **Import rows:**", len(imp_hist))
     if not us_hist.empty:
         st.dataframe(us_hist.tail(10))
