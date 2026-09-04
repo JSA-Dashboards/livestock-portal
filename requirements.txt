@@ -12,3 +12,4 @@ requests>=2.31.0
 urllib3>=2.0.0
 openpyxl>=3.1.0
 snowflake-connector-python>=3.12  # cme_feeder_cattle DB backend when USE_SNOWFLAKE=1
+psycopg2-binary>=2.9.0  # beef_weight/livestock_inventory read the shared NASS cache (usda-nass-etl)
