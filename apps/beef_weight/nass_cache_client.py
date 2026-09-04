@@ -3,8 +3,9 @@ nass_cache_client.py -- read-only USDA NASS QuickStats cache client.
 
 This dashboard does not call the NASS API directly. A separate scheduled job
 (the usda-nass-etl repo) holds NASS_API_KEY, pulls on a daily schedule, and
-writes results into a shared Postgres cache. This file only reads that cache
-via DATABASE_URL -- it never holds the NASS key and never calls NASS live.
+writes results into a shared cache. This file only reads that cache -- it
+never holds the NASS key and never calls NASS live.
+
 That split exists because NASS registers API keys per individual, not for
 public/shared use -- every visitor to a live client-facing dashboard hitting
 NASS under one key is exactly what that restriction is meant to prevent.
@@ -12,8 +13,12 @@ NASS under one key is exactly what that restriction is meant to prevent.
 Vendored identically across crop-conditions-dashboard, beef-weight-dashboard,
 livestock-inventory-dashboard, and domestic-production-dashboard (see the
 usda-nass-etl repo). Keep this file byte-for-byte the same across all four --
-app-specific shaping belongs in each app's own fetch wrapper functions, not
-here.
+app-specific shaping belongs in each app's own fetch wrapper functions, not here.
+
+Backends (priority order):
+  Snowflake  -- USE_SNOWFLAKE=1 + SNOWFLAKE_ACCOUNT/USER/PASSWORD (+ optional
+                ROLE, WAREHOUSE, DATABASE, SCHEMA). Target: JSA.NASS_CACHE.
+  PostgreSQL -- DATABASE_URL (Supabase, legacy).
 """
 import hashlib
 import json
@@ -27,14 +32,24 @@ except ImportError:
 _IGNORED_KEYS = {"key", "format"}
 
 
-def _database_url() -> str:
-    url = ""
+def _secret(key: str, default: str = "") -> str:
+    """Read from st.secrets first, fall back to os.environ."""
     if st is not None:
         try:
-            url = st.secrets.get("DATABASE_URL", "")
+            v = st.secrets.get(key, "")
+            if v:
+                return str(v).strip()
         except Exception:
-            url = ""
-    return (url or os.environ.get("DATABASE_URL", "")).strip()
+            pass
+    return os.environ.get(key, default).strip()
+
+
+def _use_sf() -> bool:
+    return _secret("USE_SNOWFLAKE").lower() in ("1", "true", "yes", "on")
+
+
+def _database_url() -> str:
+    return _secret("DATABASE_URL")
 
 
 def _cache_key(endpoint: str, params: dict) -> str:
@@ -53,6 +68,20 @@ def _pg_dsn(url: str) -> str:
     return url
 
 
+def _sf_connect():
+    import snowflake.connector
+    return snowflake.connector.connect(
+        account=_secret("SNOWFLAKE_ACCOUNT"),
+        user=_secret("SNOWFLAKE_USER"),
+        password=_secret("SNOWFLAKE_PASSWORD"),
+        role=_secret("SNOWFLAKE_ROLE") or None,
+        warehouse=_secret("SNOWFLAKE_WAREHOUSE") or None,
+        database=_secret("SNOWFLAKE_DATABASE") or "JSA",
+        schema=_secret("SNOWFLAKE_SCHEMA") or "NASS_CACHE",
+        login_timeout=30,
+    )
+
+
 def fetch_cached(params: dict, endpoint: str = "api_GET") -> dict:
     """
     Read-only cache lookup. Returns the raw NASS response shape, e.g.
@@ -60,18 +89,33 @@ def fetch_cached(params: dict, endpoint: str = "api_GET") -> dict:
     exact query -- add the param combo to the matching jobs/*.py list in
     usda-nass-etl and re-run pull_all.py.
 
-    Raises only on a genuine DB connection failure (missing/bad
-    DATABASE_URL) so a misconfigured secret is loud, not a silent blank
-    dashboard.
+    Raises only on a genuine backend connection failure so a misconfigured
+    secret is loud, not a silent blank dashboard.
     """
+    key = _cache_key(endpoint, params)
+
+    if _use_sf():
+        conn = _sf_connect()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT data FROM nass_cache WHERE cache_key = %s", (key,))
+            row = cur.fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            return {"data": []}
+        data = row[0]
+        # Snowflake VARIANT columns are returned as Python dicts by the connector
+        return data if isinstance(data, (dict, list)) else json.loads(data)
+
     url = _database_url()
     if not url:
         raise RuntimeError(
-            "No DATABASE_URL found. Add it to `.streamlit/secrets.toml` "
-            "or as an environment variable -- this dashboard reads NASS "
-            "data from a shared cache (see usda-nass-etl), not the live API."
+            "No NASS cache backend configured. Set USE_SNOWFLAKE=1 (+ SNOWFLAKE_*) "
+            "or DATABASE_URL in `.streamlit/secrets.toml` / environment -- "
+            "this dashboard reads NASS data from a shared cache (see usda-nass-etl), "
+            "not the live API."
         )
-    key = _cache_key(endpoint, params)
     import psycopg2
     conn = psycopg2.connect(_pg_dsn(url))
     try:
@@ -89,15 +133,28 @@ def fetch_cached(params: dict, endpoint: str = "api_GET") -> dict:
 def cache_freshness() -> str:
     """Most recent fetched_at timestamp across the whole cache, or None.
     Handy for an 'as of ...' footer caption."""
-    url = _database_url()
-    if not url:
-        return None
-    import psycopg2
-    conn = psycopg2.connect(_pg_dsn(url))
     try:
-        cur = conn.cursor()
-        cur.execute("SELECT MAX(fetched_at) FROM nass_cache")
-        row = cur.fetchone()
-        return str(row[0]) if row and row[0] else None
-    finally:
-        conn.close()
+        if _use_sf():
+            conn = _sf_connect()
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT MAX(fetched_at) FROM nass_cache")
+                row = cur.fetchone()
+                return str(row[0]) if row and row[0] else None
+            finally:
+                conn.close()
+
+        url = _database_url()
+        if not url:
+            return None
+        import psycopg2
+        conn = psycopg2.connect(_pg_dsn(url))
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT MAX(fetched_at) FROM nass_cache")
+            row = cur.fetchone()
+            return str(row[0]) if row and row[0] else None
+        finally:
+            conn.close()
+    except Exception:
+        return None
