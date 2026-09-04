@@ -584,18 +584,6 @@ with st.expander("📋  Import Cow Meat (90%) — weekly data table"):
     )
 
 
-# ── Debug Expander ──────────────────────────────────────────────────────────────
-
-with st.expander("🔧  Raw API debug"):
-    st.write("**US endpoint:**", f"{LMR_BASE}/{XB401_ID}/?lastReports={US_FULL_HISTORY_REPORTS}&allSections=true")
-    st.write("**Import endpoint:**", f"{MARS_BASE}/{LS421_ID}?q=report_begin_date={IMPORT_HISTORY_START}:...&allSections=true")
-    st.write("**US rows:**", len(us_hist), "| **Import rows:**", len(imp_hist))
-    if not us_hist.empty:
-        st.dataframe(us_hist.tail(10))
-    if not imp_hist.empty:
-        st.dataframe(imp_hist.tail(10))
-
-
 # ── Legal Disclaimer Footer ───────────────────────────────────────────────────
 
 _disclaimer_year = datetime.now().year
