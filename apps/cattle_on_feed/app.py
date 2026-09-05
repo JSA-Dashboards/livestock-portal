@@ -1,4 +1,4 @@
-"""
+﻿"""
 Cattle on Feed Dashboard — USDA NASS QuickStats
 On-feed inventory, placements, marketings, and the quarterly heifers-on-feed
 share (herd-cycle signal) for the 13 major feedlot states + US total.
@@ -8,6 +8,7 @@ Data source: USDA NASS QuickStats API (https://quickstats.nass.usda.gov)
 """
 
 import io
+import os
 from datetime import datetime
 
 import pandas as pd
@@ -33,10 +34,16 @@ HEIFER_COLOR = "#6fa8c4"
 JSA_LOGO_FULL  = "https://www.jpsi.com/wp-content/themes/gate39media/img/logo-full.png"
 JSA_LOGO_WHITE = "https://www.jpsi.com/wp-content/themes/gate39media/img/logo-white.png"
 
+# NASS key comes from Streamlit secrets (Cloud) or the environment (dev); no
+# key is committed to the repo. This dashboard's six Cattle on Feed series are
+# now cached by usda-nass-etl (jobs/cattle_on_feed.py), so it can be moved onto
+# nass_cache_client and drop the key entirely -- see that job list's docstring
+# for the year-bound change the app needs first.
 try:
-    API_KEY = st.secrets.get("NASS_API_KEY", "9A6D1EB8-4D94-3221-BA0C-ADD4533EA0C1")
+    API_KEY = st.secrets.get("NASS_API_KEY", "")
 except Exception:
-    API_KEY = "9A6D1EB8-4D94-3221-BA0C-ADD4533EA0C1"
+    API_KEY = ""
+API_KEY = API_KEY or os.environ.get("NASS_API_KEY", "")
 
 BASE_URL = "https://quickstats.nass.usda.gov/api/api_GET/"
 
