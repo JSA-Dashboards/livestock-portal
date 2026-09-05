@@ -1,4 +1,4 @@
-import streamlit as st
+﻿import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import requests
@@ -6,6 +6,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from datetime import datetime, timedelta
 import time
+import os
 
 # ── JPSI Brand ───────────────────────────────────────────────────────────────
 JPSI_DARK = "#32373c"
@@ -33,7 +34,14 @@ US_ITEM       = "Chemical Lean, Fresh 90%"
 # Published weekly (Fridays). Confirmed against live API 2026-09-02.
 MARS_BASE     = "https://marsapi.ams.usda.gov/services/v1.2/reports"
 LS421_ID      = 2823
-MARS_KEY      = "oK/SXE39wQgbpn8SZanuHLkF6/GgstYl"
+# MARS key comes from Streamlit secrets (Cloud) or the environment (dev); no
+# key is committed to the repo. USDA issues MARS keys per requester, so a key
+# committed to a public repo is both a leak and a terms problem.
+try:
+    MARS_KEY = st.secrets.get("MARS_API_KEY", "")
+except Exception:
+    MARS_KEY = ""
+MARS_KEY = MARS_KEY or os.environ.get("MARS_API_KEY", "")
 IMPORT_ITEM   = "Cow Meat (90%)"
 ORIGIN_SA     = "South America"
 ORIGIN_ANZ    = "Australia &/ New Zealand"
