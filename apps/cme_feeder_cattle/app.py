@@ -684,6 +684,11 @@ def _round2(v):
     return None if v is None or pd.isna(v) else round(v, 2)
 
 
+def _mdy(d):
+    """M/D/YY, matching the tile style CIH and CME's own sheets use."""
+    return "%d/%d/%s" % (d.month, d.day, d.strftime("%y"))
+
+
 # Round each individual value to display precision BEFORE differencing, not
 # after -- otherwise a change tile can show e.g. -$0.10 while the two values
 # it's derived from display as $329.20 and $329.31 (an $0.11 difference by
@@ -691,25 +696,31 @@ def _round2(v):
 # both "correct" in isolation. Rounding first keeps every number on screen
 # self-consistent with the others.
 current = _round2(fci_df.iloc[-1]["fci_value"])
-prev_point = _round2(fci_df.iloc[-2]["fci_value"]) if len(fci_df) > 1 else None
-day_chg = _round2(current - prev_point) if prev_point is not None else None
+# Adjacent-row change, kept separate from the "Last CME Print" tile below so
+# the " DoD" caption stays a genuine day-over-day rather than spanning the
+# gap back to CME's last publication.
+_adjacent = _round2(fci_df.iloc[-2]["fci_value"]) if len(fci_df) > 1 else None
+day_chg = _round2(current - _adjacent) if _adjacent is not None else None
 
 # "Current Index" is only accurate when the latest date is a real published
 # value (source == "workbook" or "cme_official"). Any other date is JSA's
 # own reconstruction -- label it as an estimate so it's never mistaken for
-# the real published figure, which is what actually confused the user here.
+# the real published figure.
 #
-# The estimate is dated to TODAY, not last_date. If no source has reported
-# anything yet today, last_date still trails behind (e.g. a Tuesday morning
-# before any Tuesday auction/direct/video report has posted) -- but the
-# figure itself is still our current best guess FOR today (a no-change
-# carry-forward, same logic as compute_forecast's own naive-persistence
-# model), so the label should say today's date, not the date of the data
-# it's carried forward from.
-_today = datetime.now()
+# Labelled with the DATE OF THE DATA, not the calendar. This used to date the
+# estimate to TODAY, on the reasoning that a carry-forward figure is our best
+# guess "for today". That convention breaks as soon as publication lags more
+# than a day: over the 2026 Labor Day weekend it captioned a window ending
+# 9/4 as "FCI Estimate 9/8/26", three days off, and nothing on screen said
+# which date the number was actually for. CME labels each index by the date
+# its sales run THROUGH and releases it the following afternoon, so the data
+# date is both the honest label and the one that lines up with CME's own
+# print and with CIH's daily sheet.
+_cur_row = fci_df.iloc[-1]
 current_label = (
-    "Current Index" if fci_df.iloc[-1]["source"] in ("workbook", "cme_official")
-    else f"FCI Estimate {_today.month}/{_today.day}/{_today.strftime('%y')}"
+    f"Current Index ({_mdy(_cur_row['date'])})"
+    if _cur_row["source"] in ("workbook", "cme_official")
+    else f"FCI Estimate {_mdy(_cur_row['date'])}"
 )
 
 week_ago = _round2(value_on_or_before(fci_df.iloc[:-1], last_date - timedelta(days=7)))
@@ -726,18 +737,25 @@ year_chg = _round2(current - year_ago) if year_ago is not None else None
 # current_label above. Once CME actually publishes that date, the label and
 # the underlying data date will naturally line up; until then this reads
 # "yesterday" even if the value shown is itself carried forward further back.
-_yesterday = _today - timedelta(days=1)
-prev_label = f"Previous Day's FCI ({_yesterday.month}/{_yesterday.day}/{_yesterday.strftime('%y')})"
-
-# CME's own actual day-over-day change: the last two dates CME has published
-# (source == "cme_official"), independent of whatever current/prev_point are
-# showing above (which can mix an estimate with an official value, e.g. our
-# 9/1 estimate vs. CME's 8/31 actual). This is always a real-vs-real
-# comparison, never mixed with JSA's own estimate.
+# This tile is CME's last ACTUAL print, so its value, its label and its delta
+# all come from one place: the most recent cme_official row. It previously
+# showed fci_df.iloc[-2] -- whatever row happened to be second-to-last --
+# while captioning the delta "CME DoD". That is fine while the
+# reconstruction sits one day ahead of CME, but the moment it runs several
+# days past CME's last publication (which is exactly what a holiday does to
+# the lag) the tile shows an ESTIMATE under a CME label. Sourcing all three
+# from official_rows means the label and the number cannot diverge.
 official_rows = fci_df[fci_df["source"] == "cme_official"]
 cme_actual_chg = None
 if len(official_rows) > 1:
     cme_actual_chg = _round2(official_rows.iloc[-1]["fci_value"] - official_rows.iloc[-2]["fci_value"])
+
+if len(official_rows):
+    prev_point = _round2(official_rows.iloc[-1]["fci_value"])
+    prev_label = f"Last CME Print ({_mdy(official_rows.iloc[-1]['date'])})"
+else:
+    prev_point = None
+    prev_label = "Last CME Print"
 
 cols = st.columns(4)
 with cols[0]:
