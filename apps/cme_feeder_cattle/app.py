@@ -724,11 +724,29 @@ def _mdy(d):
 # intervenes: the 9/4/2026 file was released 9/8, because 9/5-9/6 were the
 # weekend and 9/7 was Labor Day.
 #
-# Everything user-facing on this page is labelled by RELEASE date, because that
-# is the print people actually wait for and quote -- "what will the index say
-# this afternoon". The underlying data keeps CME's file dates, so the sales-thru
-# date is shown alongside wherever the distinction matters.
+# Everything user-facing on this page is labelled by CME's own INDEX date -- the
+# last sale day in the window, which is how CME names its files -- with the
+# release date shown alongside as context.
+#
+# Release-date labelling was tried on 2026-09-09 and reverted the same day. It
+# reads more naturally in isolation, being the print people wait for, but CIH's
+# daily sheet -- which this desk checks against every morning -- is dated by
+# INDEX date. Release labelling put every number here one business day ahead of
+# that benchmark, turning each comparison into a mental subtraction, and it also
+# disagreed with CME's filenames and the raw data table.
+#
+# No single label satisfies every consumer: QST charts the same index against
+# what looks like the date it received each value, so CME's 9/3 index appears
+# there on a 9/8 bar. That is why both dates are shown rather than one.
 _CME_BDAY = CustomBusinessDay(calendar=USFederalHolidayCalendar())
+
+# Raw internal source strings are meaningless on screen, and without them there
+# is no way to tell a published CME value from a JSA estimate in the raw table.
+_SOURCE_LABELS = {
+    "cme_official": "CME published",
+    "workbook": "CME published (workbook)",
+    "usda_mars": "JSA estimate",
+}
 
 
 def _release_date(d):
@@ -737,11 +755,6 @@ def _release_date(d):
         return None
     return pd.Timestamp(d) + _CME_BDAY
 
-
-def _rel_mdy(d):
-    """M/D/YY of the RELEASE date for a file date."""
-    r = _release_date(d)
-    return _mdy(r) if r is not None else "—"
 
 
 # Round each individual value to display precision BEFORE differencing, not
@@ -773,9 +786,9 @@ day_chg = _round2(current - _adjacent) if _adjacent is not None else None
 # print and with CIH's daily sheet.
 _cur_row = fci_df.iloc[-1]
 current_label = (
-    f"Current Index ({_rel_mdy(_cur_row['date'])})"
+    f"Current Index ({_mdy(_cur_row['date'])})"
     if _cur_row["source"] in ("workbook", "cme_official")
-    else f"FCI Estimate {_rel_mdy(_cur_row['date'])}"
+    else f"FCI Estimate {_mdy(_cur_row['date'])}"
 )
 
 week_ago = _round2(value_on_or_before(fci_df.iloc[:-1], last_date - timedelta(days=7)))
@@ -807,7 +820,7 @@ if len(official_rows) > 1:
 
 if len(official_rows):
     prev_point = _round2(official_rows.iloc[-1]["fci_value"])
-    prev_label = f"Last CME Print ({_rel_mdy(official_rows.iloc[-1]['date'])})"
+    prev_label = f"Last CME Print ({_mdy(official_rows.iloc[-1]['date'])})"
 else:
     prev_point = None
     prev_label = "Last CME Print"
@@ -1249,9 +1262,9 @@ st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 st.markdown('<div class="sec-header">Pending CME Prints &amp; Forecast Accuracy</div>',
             unsafe_allow_html=True)
 st.caption(
-    "Dated by CME **release** date — the afternoon print, not the date CME files "
-    "it under. *Sales thru* is that filing date: the last day of sales in the "
-    "7-day window behind each number."
+    "Dated by CME **index** date — the last sale day in the 7-day window, which is "
+    "how CME names its files and how CIH dates its daily sheet. *Prints* is when "
+    "CME releases it: the next business day, which a holiday can push days out."
 )
 
 _recon = _load_recon_index()
@@ -1289,17 +1302,18 @@ else:
             st.caption("CME has published every date we hold an estimate for.")
         else:
             _p = _pending.sort_values("date", ascending=False).copy()
-            _p["Print"] = _p["date"].map(lambda d: _release_date(d).strftime("%a %m/%d"))
-            _p["Sales thru"] = _p["date"].dt.strftime("%m/%d")
+            _p["Index date"] = _p["date"].dt.strftime("%a %m/%d")
+            _p["Prints"] = _p["date"].map(lambda d: _release_date(d).strftime("%m/%d"))
             _p["Our estimate"] = _p["recon"].map(lambda v: f"${v:.2f}")
             _p["Head"] = _p["total_head"].map(
                 lambda v: f"{v:,.0f}" if pd.notna(v) else "—")
             with st.container(key="wm-pending"):
-                st.dataframe(_p[["Print", "Sales thru", "Our estimate", "Head"]],
+                st.dataframe(_p[["Index date", "Prints", "Our estimate", "Head"]],
                              use_container_width=True, hide_index=True, height=210)
             if _last_official is not None:
                 st.caption(
-                    f"CME's last print landed {_release_date(_last_official).strftime('%b %d')}. A low "
+                    f"CME's last index date is {_last_official.strftime('%b %d')} "
+                    f"(printed {_release_date(_last_official).strftime('%b %d')}). A low "
                     "*window head* means few sale days are in the 7-day window yet, so "
                     "that estimate will move as reports land."
                 )
@@ -1310,12 +1324,12 @@ else:
             st.caption("No dates where both a reconstruction and a CME print exist.")
         else:
             _s["err"] = _s["recon"] - _s["actual"]
-            _s["Print"] = _s["date"].map(lambda d: _release_date(d).strftime("%m/%d"))
+            _s["Index date"] = _s["date"].dt.strftime("%m/%d")
             _s["Ours"] = _s["recon"].map(lambda v: f"${v:.2f}")
             _s["CME"] = _s["actual"].map(lambda v: f"${v:.2f}")
             _s["Miss"] = _s["err"].map(lambda v: f"{v:+.2f}")
             with st.container(key="wm-scored"):
-                st.dataframe(_s[["Print", "Ours", "CME", "Miss"]],
+                st.dataframe(_s[["Index date", "Ours", "CME", "Miss"]],
                              use_container_width=True, hide_index=True, height=210)
             # Dollar signs escaped: st.caption renders markdown, and a $...$
             # pair is LaTeX math there -- unescaped, "$0.38" and "$2" render as
@@ -1336,12 +1350,36 @@ with st.expander("📋  Raw Data Table"):
         # styler.render.max_elements cell cap (hit at ~280k cells testing
         # the location table below), and no conditional coloring is applied
         # here anyway, just number formatting.
+        #
+        # "Date" is CME's index date, matching the tiles and both panel tables.
+        # "Prints" is when CME releases it. "Source" used to render as a raw
+        # internal string (usda_mars / cme_official), which gave no way to tell an
+        # estimate from a published value -- the single most important thing to
+        # know when reading this tab, and the reason it was easy to mistake a
+        # forecast for a settled number.
         d = fci_df.copy()
+        d["Prints"] = d["date"].map(
+            lambda x: _release_date(x).strftime("%Y-%m-%d") if pd.notna(x) else "—")
+        d["Source"] = d["source"].map(_SOURCE_LABELS).fillna(d["source"])
         d["date"] = d["date"].dt.strftime("%Y-%m-%d")
-        d = d.rename(columns={"date": "Date", "fci_value": "FCI"}).sort_values("Date", ascending=False)
+        d = d.rename(columns={
+            "date": "Date", "fci_value": "FCI", "same_day_price": "Daily $",
+            "same_day_head": "Daily head", "same_day_avg_weight": "Daily wt",
+        }).sort_values("Date", ascending=False)
         d["FCI"] = d["FCI"].map(lambda v: f"${v:.2f}" if pd.notna(v) else "—")
+        d["Daily $"] = d["Daily $"].map(lambda v: f"${v:.2f}" if pd.notna(v) else "—")
+        d["Daily head"] = d["Daily head"].map(lambda v: f"{v:,.0f}" if pd.notna(v) else "—")
+        d["Daily wt"] = d["Daily wt"].map(lambda v: f"{v:,.0f} lb" if pd.notna(v) else "—")
         with st.container(key="wm-raw-fci"):
-            st.dataframe(d, use_container_width=True, hide_index=True, height=320)
+            st.dataframe(
+                d[["Date", "Prints", "Source", "FCI", "Daily $", "Daily head", "Daily wt"]],
+                use_container_width=True, hide_index=True, height=320)
+        st.caption(
+            "**Date** is CME's index date — the last sale day in that 7-day window. "
+            "**Prints** is when CME releases it, the next business day. **Source** "
+            "separates CME's published values from JSA's own estimates; only the "
+            "estimates are forecasts."
+        )
     with tab_loc:
         d = loc_filtered[["date", "location", "state", "head", "avg_weight", "price", "fci_value", "basis"]].copy()
         d["date"] = d["date"].dt.strftime("%Y-%m-%d")
