@@ -2,6 +2,8 @@ import os
 import sys
 import streamlit as st
 import pandas as pd
+from pandas.tseries.holiday import USFederalHolidayCalendar
+from pandas.tseries.offsets import CustomBusinessDay
 import plotly.graph_objects as go
 import openpyxl
 from pathlib import Path
@@ -717,6 +719,31 @@ def _mdy(d):
     return "%d/%d/%s" % (d.month, d.day, d.strftime("%y"))
 
 
+# CME FILES an index under the date its sales run through, then RELEASES it the
+# following business day. Those two differ by more than a day whenever a holiday
+# intervenes: the 9/4/2026 file was released 9/8, because 9/5-9/6 were the
+# weekend and 9/7 was Labor Day.
+#
+# Everything user-facing on this page is labelled by RELEASE date, because that
+# is the print people actually wait for and quote -- "what will the index say
+# this afternoon". The underlying data keeps CME's file dates, so the sales-thru
+# date is shown alongside wherever the distinction matters.
+_CME_BDAY = CustomBusinessDay(calendar=USFederalHolidayCalendar())
+
+
+def _release_date(d):
+    """The date CME releases the index it filed under `d`."""
+    if d is None or pd.isna(d):
+        return None
+    return pd.Timestamp(d) + _CME_BDAY
+
+
+def _rel_mdy(d):
+    """M/D/YY of the RELEASE date for a file date."""
+    r = _release_date(d)
+    return _mdy(r) if r is not None else "—"
+
+
 # Round each individual value to display precision BEFORE differencing, not
 # after -- otherwise a change tile can show e.g. -$0.10 while the two values
 # it's derived from display as $329.20 and $329.31 (an $0.11 difference by
@@ -746,9 +773,9 @@ day_chg = _round2(current - _adjacent) if _adjacent is not None else None
 # print and with CIH's daily sheet.
 _cur_row = fci_df.iloc[-1]
 current_label = (
-    f"Current Index ({_mdy(_cur_row['date'])})"
+    f"Current Index ({_rel_mdy(_cur_row['date'])})"
     if _cur_row["source"] in ("workbook", "cme_official")
-    else f"FCI Estimate {_mdy(_cur_row['date'])}"
+    else f"FCI Estimate {_rel_mdy(_cur_row['date'])}"
 )
 
 week_ago = _round2(value_on_or_before(fci_df.iloc[:-1], last_date - timedelta(days=7)))
@@ -780,7 +807,7 @@ if len(official_rows) > 1:
 
 if len(official_rows):
     prev_point = _round2(official_rows.iloc[-1]["fci_value"])
-    prev_label = f"Last CME Print ({_mdy(official_rows.iloc[-1]['date'])})"
+    prev_label = f"Last CME Print ({_rel_mdy(official_rows.iloc[-1]['date'])})"
 else:
     prev_point = None
     prev_label = "Last CME Print"
@@ -1221,6 +1248,11 @@ else:
 st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 st.markdown('<div class="sec-header">Pending CME Prints &amp; Forecast Accuracy</div>',
             unsafe_allow_html=True)
+st.caption(
+    "Dated by CME **release** date — the afternoon print, not the date CME files "
+    "it under. *Sales thru* is that filing date: the last day of sales in the "
+    "7-day window behind each number."
+)
 
 _recon = _load_recon_index()
 _official = (
@@ -1240,6 +1272,15 @@ else:
     _pending = _sc[_sc["actual"].isna()]
     if _last_official is not None:
         _pending = _pending[_pending["date"] > _last_official]
+    # CME files an index only on business days -- verified against its own FTP
+    # archive, which holds files for 8/28, 8/31 and 9/1-9/4 but none at all for
+    # 9/5, 9/6 or 9/7 (weekend plus Labor Day). This reconstruction computes a
+    # value for every CALENDAR day, so without this filter those weekend and
+    # holiday carry-forwards show up as prints CME will never publish -- and
+    # under release-date labelling they collapse onto the same next business
+    # day, listing "Tue 09/08" three times over.
+    _pending = _pending[_pending["date"].map(
+        lambda d: _CME_BDAY.is_on_offset(pd.Timestamp(d)))]
 
     _c1, _c2 = st.columns(2)
     with _c1:
@@ -1248,16 +1289,17 @@ else:
             st.caption("CME has published every date we hold an estimate for.")
         else:
             _p = _pending.sort_values("date", ascending=False).copy()
-            _p["Index date"] = _p["date"].dt.strftime("%a %m/%d")
+            _p["Print"] = _p["date"].map(lambda d: _release_date(d).strftime("%a %m/%d"))
+            _p["Sales thru"] = _p["date"].dt.strftime("%m/%d")
             _p["Our estimate"] = _p["recon"].map(lambda v: f"${v:.2f}")
-            _p["Window head"] = _p["total_head"].map(
+            _p["Head"] = _p["total_head"].map(
                 lambda v: f"{v:,.0f}" if pd.notna(v) else "—")
             with st.container(key="wm-pending"):
-                st.dataframe(_p[["Index date", "Our estimate", "Window head"]],
+                st.dataframe(_p[["Print", "Sales thru", "Our estimate", "Head"]],
                              use_container_width=True, hide_index=True, height=210)
             if _last_official is not None:
                 st.caption(
-                    f"CME's last print is {_last_official.strftime('%b %d')}. A low "
+                    f"CME's last print landed {_release_date(_last_official).strftime('%b %d')}. A low "
                     "*window head* means few sale days are in the 7-day window yet, so "
                     "that estimate will move as reports land."
                 )
@@ -1268,12 +1310,12 @@ else:
             st.caption("No dates where both a reconstruction and a CME print exist.")
         else:
             _s["err"] = _s["recon"] - _s["actual"]
-            _s["Date"] = _s["date"].dt.strftime("%m/%d")
+            _s["Print"] = _s["date"].map(lambda d: _release_date(d).strftime("%m/%d"))
             _s["Ours"] = _s["recon"].map(lambda v: f"${v:.2f}")
             _s["CME"] = _s["actual"].map(lambda v: f"${v:.2f}")
             _s["Miss"] = _s["err"].map(lambda v: f"{v:+.2f}")
             with st.container(key="wm-scored"):
-                st.dataframe(_s[["Date", "Ours", "CME", "Miss"]],
+                st.dataframe(_s[["Print", "Ours", "CME", "Miss"]],
                              use_container_width=True, hide_index=True, height=210)
             # Dollar signs escaped: st.caption renders markdown, and a $...$
             # pair is LaTeX math there -- unescaped, "$0.38" and "$2" render as
