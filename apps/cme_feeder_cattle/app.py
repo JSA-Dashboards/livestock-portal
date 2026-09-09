@@ -502,6 +502,34 @@ def _load_workbook_precursor(before_date):
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
+def _load_recon_index():
+    """
+    JSA's own reconstruction for EVERY date, including dates CME has since
+    published. load_data() deliberately drops those (CME's own value wins for
+    display, and rightly so), but scoring the forecast needs BOTH numbers for
+    the same date -- otherwise there is no way to see whether the estimates
+    were any good.
+    """
+    empty = pd.DataFrame(columns=["date", "recon", "total_head"])
+    if not db.use_snowflake() and not MARS_DB_PATH.exists():
+        return empty
+    conn = db.get_conn()
+    try:
+        df = db.read_sql_lower(
+            "SELECT report_date AS date, fci_value, total_head FROM fci_daily", conn
+        )
+    except Exception:
+        return empty
+    finally:
+        conn.close()
+    if df.empty:
+        return empty
+    df["date"] = pd.to_datetime(df["date"])
+    return (df.rename(columns={"fci_value": "recon"})
+              .sort_values("date").reset_index(drop=True))
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def load_data():
     """
     Priority order, earliest ground-truth-quality data wins for each date:
@@ -1181,6 +1209,82 @@ else:
 
 
 # ── Data Table ────────────────────────────────────────────────────────────────
+
+# ── Pending CME Prints / Forecast Scorecard ───────────────────────────────────
+# The headline tile only ever shows the LATEST date, which is not the number
+# you want when using this as a forecast. What matters is (a) which dates CME
+# still owes a print for, with our estimate for each, and (b) how close the
+# last several estimates actually landed. Without this, both required either
+# hovering the trend chart or reading the raw table and knowing from memory
+# where CME's published history stops.
+
+st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+st.markdown('<div class="sec-header">Pending CME Prints &amp; Forecast Accuracy</div>',
+            unsafe_allow_html=True)
+
+_recon = _load_recon_index()
+_official = (
+    fci_df[fci_df["source"] == "cme_official"][["date", "fci_value"]]
+    .rename(columns={"fci_value": "actual"})
+)
+
+if _recon.empty:
+    st.info("No reconstruction available on this backend, so there is nothing to compare.")
+else:
+    _sc = _recon.merge(_official, on="date", how="left")
+    _last_official = _official["date"].max() if not _official.empty else None
+
+    # Only dates AFTER CME's last print are genuinely pending. An unmatched
+    # date before that is a day CME simply does not publish (weekend/holiday),
+    # not a forecast awaiting a result.
+    _pending = _sc[_sc["actual"].isna()]
+    if _last_official is not None:
+        _pending = _pending[_pending["date"] > _last_official]
+
+    _c1, _c2 = st.columns(2)
+    with _c1:
+        st.caption("**Awaiting CME** — our forecast for each unpublished index date")
+        if _pending.empty:
+            st.caption("CME has published every date we hold an estimate for.")
+        else:
+            _p = _pending.sort_values("date", ascending=False).copy()
+            _p["Index date"] = _p["date"].dt.strftime("%a %m/%d")
+            _p["Our estimate"] = _p["recon"].map(lambda v: f"${v:.2f}")
+            _p["Window head"] = _p["total_head"].map(
+                lambda v: f"{v:,.0f}" if pd.notna(v) else "—")
+            with st.container(key="wm-pending"):
+                st.dataframe(_p[["Index date", "Our estimate", "Window head"]],
+                             use_container_width=True, hide_index=True, height=210)
+            if _last_official is not None:
+                st.caption(
+                    f"CME's last print is {_last_official.strftime('%b %d')}. A low "
+                    "*window head* means few sale days are in the 7-day window yet, so "
+                    "that estimate will move as reports land."
+                )
+    with _c2:
+        st.caption("**Scored** — how the last ten estimates turned out")
+        _s = _sc.dropna(subset=["actual"]).sort_values("date", ascending=False).head(10).copy()
+        if _s.empty:
+            st.caption("No dates where both a reconstruction and a CME print exist.")
+        else:
+            _s["err"] = _s["recon"] - _s["actual"]
+            _s["Date"] = _s["date"].dt.strftime("%m/%d")
+            _s["Ours"] = _s["recon"].map(lambda v: f"${v:.2f}")
+            _s["CME"] = _s["actual"].map(lambda v: f"${v:.2f}")
+            _s["Miss"] = _s["err"].map(lambda v: f"{v:+.2f}")
+            with st.container(key="wm-scored"):
+                st.dataframe(_s[["Date", "Ours", "CME", "Miss"]],
+                             use_container_width=True, hide_index=True, height=210)
+            # Dollar signs escaped: st.caption renders markdown, and a $...$
+            # pair is LaTeX math there -- unescaped, "$0.38" and "$2" render as
+            # mangled math rather than money.
+            st.caption(
+                f"Mean absolute miss over these {len(_s)} dates: "
+                f"**\\${_s['err'].abs().mean():.2f}**. Dates before the direct-trade "
+                "component began (2026-08-28) ran about \\$2 high because that input "
+                "was missing entirely -- they are not representative of current accuracy."
+            )
+
 
 with st.expander("📋  Raw Data Table"):
     tab_fci, tab_loc = st.tabs(["Index Values", "Location Sales"])
