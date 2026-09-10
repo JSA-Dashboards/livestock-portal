@@ -47,36 +47,55 @@ _TILE_CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=EB+Garamond:wght@500;600&display=swap');
 
+/* The tile IS the dark box. Padding lives here and overflow is clipped to the
+   rounded corners, so both the title link and the description sit inside it.
+   Previously the description was a sibling of a fixed height:140px link, which
+   put it below the painted area and made it read as floating outside the box. */
 div[class*="st-key-tile_"] {
     background: #32373c;
-    border-radius: 4px;
-    box-shadow: 0 6px 0 #ffffff, 0 6px 14px rgba(0,0,0,0.18);
+    border-radius: 6px;
+    overflow: hidden;
+    padding: 16px 18px 18px;
+    min-height: 132px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.16);
     transition: transform 0.15s ease, box-shadow 0.15s ease;
-    margin-bottom: 28px;
+    margin-bottom: 22px;
 }
 div[class*="st-key-tile_"]:hover {
     transform: translateY(-3px);
-    box-shadow: 0 6px 0 #ffffff, 0 10px 20px rgba(0,0,0,0.25);
+    box-shadow: 0 8px 18px rgba(0,0,0,0.26);
 }
+/* Let content set the height instead of a fixed 140px, and drop the centring:
+   a wrapped two-line title reads ragged when centred in a narrow tile. */
 div[class*="st-key-tile_"] a[data-testid="stPageLink-NavLink"] {
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    height: 140px; padding: 14px 18px; text-decoration: none !important;
-    text-align: center;
+    display: block;
+    padding: 0 !important;
+    margin: 0 !important;
+    text-align: left;
+    text-decoration: none !important;
+    background: transparent !important;
 }
 div[class*="st-key-tile_"] a[data-testid="stPageLink-NavLink"] p {
     color: #ffffff !important;
     font-family: 'EB Garamond', Georgia, serif !important;
-    font-size: 21px !important;
+    font-size: 18px !important;
     font-weight: 600 !important;
-    line-height: 1.3 !important;
+    line-height: 1.22 !important;
+    letter-spacing: 0.1px !important;
     margin: 0 !important;
+    /* Long titles wrap rather than spilling past the tile edge. */
+    overflow-wrap: anywhere;
+    hyphens: none;
 }
 div[class*="st-key-tile_"] a[data-testid="stPageLink-NavLink"]:hover p {
     color: #cfe8fb !important;
 }
 .jsa-tile-desc {
-    color: #a8b3ad; font-family: 'Source Sans Pro', system-ui, sans-serif;
-    font-size: 12px; margin-top: 6px; line-height: 1.4;
+    color: #a8b3ad;
+    font-family: 'Source Sans Pro', system-ui, -apple-system, sans-serif;
+    font-size: 12px;
+    line-height: 1.45;
+    margin-top: 9px;
 }
 </style>
 """
@@ -98,12 +117,23 @@ def render_home():
         )
 
     st.write("")
-    cols = st.columns(len(DASHBOARDS))
-    for i, d in enumerate(DASHBOARDS):
-        with cols[i]:
-            with st.container(key=f"tile_{i}"):
-                st.page_link(d["page"], label=d["title"])
-                st.markdown(f"<div class='jsa-tile-desc'>{d['desc']}</div>", unsafe_allow_html=True)
+    # Four per row, not one column per dashboard. st.columns(len(DASHBOARDS))
+    # gave eight ~170px columns, too narrow for an 18px serif title -- which is
+    # why "CME Feeder Cattle Index" was spilling past its own tile edge. Always
+    # ask for TILES_PER_ROW columns even on a short final row, or the leftover
+    # tiles stretch to fill and stop matching the rows above.
+    #
+    # At nine dashboards this leaves one tile alone on the third row; 3 is the
+    # better divisor at that point.
+    TILES_PER_ROW = 4
+    for start in range(0, len(DASHBOARDS), TILES_PER_ROW):
+        cols = st.columns(TILES_PER_ROW)
+        for offset, d in enumerate(DASHBOARDS[start:start + TILES_PER_ROW]):
+            with cols[offset]:
+                with st.container(key=f"tile_{start + offset}"):
+                    st.page_link(d["page"], label=d["title"])
+                    st.markdown(f"<div class='jsa-tile-desc'>{d['desc']}</div>",
+                                unsafe_allow_html=True)
 
 
 home_page = st.Page(render_home, title="Home", url_path="home", default=True)
