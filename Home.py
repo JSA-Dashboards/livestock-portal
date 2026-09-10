@@ -31,6 +31,8 @@ DASHBOARDS = [
      "desc": "CME Live Cattle, Feeder Cattle, and Lean Hogs seasonal futures, spreads, and spread matrix."},
     {"title": "Cattle on Feed", "page": "apps/cattle_on_feed/app.py", "url_path": "cattle-on-feed",
      "desc": "USDA on-feed inventory, placements, marketings, and the quarterly heifers-on-feed share."},
+    {"title": "US Cow Herd", "page": "apps/us_cow_herd/app.py", "url_path": "us-cow-herd",
+     "desc": "Herd expansion vs liquidation — bred female values, the retention incentive, and replacement receipts."},
     {"title": "Beef Weight", "page": "apps/beef_weight/app.py", "url_path": "beef-weight",
      "desc": "USDA NASS weekly beef slaughter weights by class, dressed & live."},
     {"title": "Beef Cutout", "page": "apps/beef_cutout/app.py", "url_path": "beef-cutout",
@@ -123,9 +125,9 @@ def render_home():
     # ask for TILES_PER_ROW columns even on a short final row, or the leftover
     # tiles stretch to fill and stop matching the rows above.
     #
-    # At nine dashboards this leaves one tile alone on the third row; 3 is the
-    # better divisor at that point.
-    TILES_PER_ROW = 4
+    # Nine dashboards divide evenly by three. Four would leave a single tile
+    # alone on a third row, which reads as a mistake rather than a layout.
+    TILES_PER_ROW = 3
     for start in range(0, len(DASHBOARDS), TILES_PER_ROW):
         cols = st.columns(TILES_PER_ROW)
         for offset, d in enumerate(DASHBOARDS[start:start + TILES_PER_ROW]):
