@@ -1,7 +1,8 @@
 """
-JSA Livestock Portal — shared shell combining four livestock dashboards
-(Beef Weight, Beef Cutout, Livestock Inventory, CME Feeder Cattle Index)
-into one app with top-navigation tabs.
+JSA Livestock Portal — shared shell combining ten livestock dashboards
+(CME Feeder Cattle Index, Seasonal Futures & Spreads, Cattle on Feed, US Cow
+Herd, Mexican Feeder Imports, Cattle Weights, Beef Cutout, Beef Trimmings,
+Livestock Inventory, Cash Cattle Trade) into one app with top-navigation tabs.
 
 Makes the single set_page_config call allowed per multi-page run, then
 hands off to st.navigation (top nav, no sidebar, no login gate — matches
@@ -33,8 +34,10 @@ DASHBOARDS = [
      "desc": "USDA on-feed inventory, placements, marketings, and the quarterly heifers-on-feed share."},
     {"title": "US Cow Herd", "page": "apps/us_cow_herd/app.py", "url_path": "us-cow-herd",
      "desc": "Herd expansion vs liquidation — bred female values, the retention incentive, and replacement receipts."},
-    {"title": "Beef Weight", "page": "apps/beef_weight/app.py", "url_path": "beef-weight",
-     "desc": "USDA NASS weekly beef slaughter weights by class, dressed & live."},
+    {"title": "Mexican Feeder Imports", "page": "apps/mexican_feeder_imports/app.py", "url_path": "mexican-feeder-imports",
+     "desc": "Border status, crossing activity by port, and Mexican feeder head counts from Census trade data."},
+    {"title": "Cattle Weights", "page": "apps/beef_weight/app.py", "url_path": "beef-weight",
+     "desc": "USDA NASS weekly cattle slaughter weights by class, dressed & live."},
     {"title": "Beef Cutout", "page": "apps/beef_cutout/app.py", "url_path": "beef-cutout",
      "desc": "Daily USDA boxed beef cutout — Choice & Select composites, spread, volume."},
     {"title": "Beef Trimmings", "page": "apps/beef_trimmings/app.py", "url_path": "beef-trimmings",
@@ -125,9 +128,14 @@ def render_home():
     # ask for TILES_PER_ROW columns even on a short final row, or the leftover
     # tiles stretch to fill and stop matching the rows above.
     #
-    # Nine dashboards divide evenly by three. Four would leave a single tile
-    # alone on a third row, which reads as a mistake rather than a layout.
-    TILES_PER_ROW = 3
+    # Keep the last row from holding a SINGLE tile -- that reads as a mistake
+    # rather than a layout. This is why the number has moved as dashboards were
+    # added: 4 at eight, 3 at nine (3/3/3), and back to 4 at ten, since three
+    # would give 3/3/3/1 and strand one tile. Four gives 4/4/2 now, 4/4/3 at
+    # eleven and 4/4/4 at twelve, so it does not need revisiting each time.
+    # Five would divide ten evenly but puts the tiles back near the ~170px
+    # width that made "CME Feeder Cattle Index" spill past its own edge.
+    TILES_PER_ROW = 4
     for start in range(0, len(DASHBOARDS), TILES_PER_ROW):
         cols = st.columns(TILES_PER_ROW)
         for offset, d in enumerate(DASHBOARDS[start:start + TILES_PER_ROW]):

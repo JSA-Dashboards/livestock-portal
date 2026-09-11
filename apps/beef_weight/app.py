@@ -486,7 +486,7 @@ st.sidebar.markdown(
 st.sidebar.markdown(
     f'<div style="background:{JSA_GREEN};border-radius:4px;padding:5px 10px;'
     f'font-size:.7rem;color:#fff;font-weight:600;letter-spacing:.08em;'
-    f'text-transform:uppercase;margin-bottom:10px">Beef Weight Dashboard</div>',
+    f'text-transform:uppercase;margin-bottom:10px">Cattle Weights Dashboard</div>',
     unsafe_allow_html=True,
 )
 st.sidebar.markdown(
@@ -683,7 +683,7 @@ st.divider()
 # ── Top-level page tabs ────────────────────────────────────────────────────────
 _page_summary, _page_nass, _page_ams, _page_prod = st.tabs([
     "⭐  Summary",
-    "📊  NASS Beef Weights & Slaughter",
+    "📊  NASS Cattle Weights & Slaughter",
     "🗓️  AMS Weekly Slaughter",
     "🥩  Beef Production",
 ])
@@ -1460,7 +1460,7 @@ def _render_summary():
     # ── NASS Weight tiles ────────────────────────────────────────────────────
     st.markdown(
         f'<div class="sec-hdr" style="font-size:0.8rem;color:{JSA_GREEN_LT}">'
-        f'📊 NASS Beef Weights — Week Ending {latest_date.strftime("%b %d, %Y")}</div>',
+        f'📊 NASS Cattle Weights — Week Ending {latest_date.strftime("%b %d, %Y")}</div>',
         unsafe_allow_html=True,
     )
     wt_cols = st.columns(len(snap_classes))
