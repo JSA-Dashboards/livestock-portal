@@ -205,6 +205,11 @@ def load_all():
                                                    since=f"{date.today().year}-01-01"),
             "ytd_ams": bd.ytd_actuals(conn),
             "since_open": bd.since_reopening(conn),
+            "price_grid": bd.price_grid(conn),
+            "price_series": bd.price_series(conn, grade=bd.INDEX_GRADE),
+            "spread": bd.index_spread(conn),
+            "spread_yr": bd.spread_by_year(conn),
+            "price_cov": bd.price_coverage(conn),
         }
     except Exception as e:
         st.session_state["_mfi_error"] = f"{type(e).__name__}: {e}"
@@ -473,6 +478,156 @@ if daily:
             )
 else:
     st.info("No daily receipts stored for this year yet.")
+
+st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
+# ── Border prices ───────────────────────────────────────────────────────────
+# The border quote is on the SAME basis as the index -- $/cwt, F.O.B., Medium
+# and Large, #1-2 steers -- which is what makes subtracting the two legitimate.
+st.markdown('<div class="sec-header">Border Prices</div>', unsafe_allow_html=True)
+
+grid, grid_date = D.get("price_grid", ([], None))
+spread = D.get("spread") or []
+spread_yr = D.get("spread_yr") or {}
+cov = D.get("price_cov") or {}
+
+if grid:
+    latest = spread[-1] if spread else None
+    cur_yr_s = spread_yr.get(str(this_yr))
+    prev_yr_s = spread_yr.get(str(this_yr - 1))
+
+    c = st.columns(4)
+    with c[0]:
+        st.markdown(tile("700–800 lb #1-2 Steers",
+                         f"${latest[1]:,.2f}" if latest else "—",
+                         sub(f"Douglas, {fmt_date(latest[0])}" if latest
+                             else "not quoted")), unsafe_allow_html=True)
+    with c[1]:
+        st.markdown(tile("CME Feeder Index",
+                         f"${latest[2]:,.2f}" if latest else "—",
+                         sub("same day, 12-state 700–899 lb")),
+                    unsafe_allow_html=True)
+    with c[2]:
+        st.markdown(tile("Border Basis",
+                         f"${latest[3]:,.2f}" if latest else "—",
+                         sub("border minus index, $/cwt")), unsafe_allow_html=True)
+    with c[3]:
+        st.markdown(tile(f"{this_yr} Avg Basis",
+                         f"${cur_yr_s['mean']:,.2f}" if cur_yr_s else "—",
+                         sub(f"vs ${prev_yr_s['mean']:,.2f} in {this_yr - 1}"
+                             f" · n={cur_yr_s['n']}" if cur_yr_s and prev_yr_s
+                             else "")), unsafe_allow_html=True)
+
+    if cur_yr_s and prev_yr_s:
+        # Dollar signs MUST be escaped in st.caption. Two unescaped ones in the
+        # same string make Streamlit treat everything between them as LaTeX
+        # math, and this caption rendered as a wall of italic variables before
+        # the escapes went in. The tiles above are exempt because they are raw
+        # HTML. Escape in prose, never inside a code fence.
+        st.caption(
+            f"**The border discount has roughly halved.** Mexican cattle at "
+            f"Douglas averaged **\\${prev_yr_s['mean']:,.2f}/cwt** under the "
+            f"index in {this_yr - 1} and **\\${cur_yr_s['mean']:,.2f}** in "
+            f"{this_yr} — consistent with scarcity, since the few head crossing "
+            f"are bid much closer to the US market. Read the {this_yr} figure "
+            f"with care: it rests on **{cur_yr_s['n']} quoted days** against "
+            f"{prev_yr_s['n']} last year."
+        )
+
+    t_now, t_wt, t_sp = st.tabs(
+        ["Latest quotes", "By weight bracket", "vs CME index"])
+
+    with t_now:
+        st.dataframe(
+            pd.DataFrame([{
+                "Class": c_, "Weight": f"{wl}–{wh} lb" if wh else f"{wl}+ lb",
+                "Grade": g or "—", "Low": lo, "High": hi, "Mid": mid,
+                "Crossing": cp,
+            } for c_, wl, wh, g, lo, hi, mid, cp in grid]),
+            use_container_width=True, hide_index=True)
+        st.caption(
+            f"AMS quotes for **{fmt_date(grid_date)}**, $/cwt F.O.B. Prices are "
+            f"published only when enough head sell to establish a trend, so a "
+            f"day can report cattle crossing and carry no quote at all — in "
+            f"{this_yr} there were "
+            f"{cov.get(str(this_yr), {}).get('price_days', 0)} quoted days "
+            f"against {len(daily)} reporting days."
+        )
+
+    with t_wt:
+        ser = D.get("price_series") or {}
+        if ser:
+            fig = go.Figure()
+            for label, pts in sorted(ser.items(),
+                                     key=lambda kv: int(kv[0].split("-")[0])):
+                fig.add_trace(go.Scatter(
+                    x=[pd.Timestamp(d) for d, _p in pts],
+                    y=[p for _d, p in pts], mode="lines", name=label,
+                    hovertemplate=f"{label}<br>%{{x|%b %d, %Y}}"
+                                  "<br>$%{y:,.2f}/cwt<extra></extra>"))
+            fig.update_layout(
+                height=340, margin=dict(l=10, r=10, t=10, b=10),
+                paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
+                font=dict(color=TEXT, size=11),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+                xaxis=dict(gridcolor=BORDER, title=None),
+                yaxis=dict(gridcolor=BORDER, title="$/cwt F.O.B."))
+            st.plotly_chart(fig, use_container_width=True)
+            st.caption(
+                "#1-2 Medium & Large steers, one line per weight bracket. "
+                "**Kept separate on purpose:** AMS's brackets moved between 2024 "
+                "and 2025 — it quoted 300–400/400–500/500–600 through 2024 and "
+                "500–600/600–700/700–800 from 2025 — so a single blended "
+                "\"border price\" line would fold that change straight into the "
+                "trend and show a jump that is pure mix. The 700–800 lb bracket "
+                "simply does not exist before February 2025."
+            )
+
+    with t_sp:
+        if spread:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=[pd.Timestamp(d) for d, _b, _f, _s in spread],
+                y=[b for _d, b, _f, _s in spread], mode="lines+markers",
+                name="Border, 700–800 #1-2", line=dict(color=AMBER, width=2),
+                marker=dict(size=5)))
+            fig.add_trace(go.Scatter(
+                x=[pd.Timestamp(d) for d, _b, _f, _s in spread],
+                y=[f for _d, _b, f, _s in spread], mode="lines+markers",
+                name="CME Feeder Index", line=dict(color=JPSI_BLUE, width=2),
+                marker=dict(size=5)))
+            fig.update_layout(
+                height=320, margin=dict(l=10, r=10, t=10, b=10),
+                paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
+                font=dict(color=TEXT, size=11),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+                xaxis=dict(gridcolor=BORDER, title=None),
+                yaxis=dict(gridcolor=BORDER, title="$/cwt"))
+            st.plotly_chart(fig, use_container_width=True)
+
+            st.dataframe(
+                pd.DataFrame([{"Year": y, "Quoted days": d["n"],
+                               "Mean basis": round(d["mean"], 2),
+                               "Median basis": round(d["median"], 2)}
+                              for y, d in spread_yr.items()]),
+                use_container_width=True, hide_index=True)
+            st.caption(
+                "Both series are **$/cwt F.O.B.**, which is what makes "
+                "subtracting them meaningful — verified across all 10,401 price "
+                "rows, every one of which is Per Cwt and F.O.B. The comparison "
+                "is not exact: the border quote is 700–800 lb Mexican-origin "
+                "cattle at one crossing, the index is 700–899 lb US cattle sold "
+                "at auction and direct across 12 states. The gap is a real "
+                "market relationship — origin, quality, freight and who is "
+                "buying — not a mispricing. The index value used is JSA's "
+                "same-day reconstruction rather than CME's published file, "
+                "which runs 1–3 days behind; a spread against a stale index "
+                "would mostly measure the staleness."
+            )
+        else:
+            st.info("No overlapping days between border quotes and the index.")
+else:
+    st.info("No border price quotes stored yet.")
 
 st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 

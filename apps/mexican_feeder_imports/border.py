@@ -528,6 +528,147 @@ def since_reopening(conn):
     }
 
 
+# ── Border prices ───────────────────────────────────────────────────────────
+#
+# From 3486 "Report Detail Current". Uniform where it matters, checked over all
+# 10,401 rows 2023-2026: price_unit is "Per Cwt" and freight is "F.O.B." on
+# every single row -- the same basis as the CME index, which is what makes a
+# comparison legitimate rather than approximate.
+#
+# THE WEIGHT BRACKETS MOVED, and this is the trap on this table. AMS quoted
+# 300-400 / 400-500 / 500-600 through 2024 and 500-600 / 600-700 / 700-800 from
+# 2025:
+#
+#     bracket    2023   2024   2025   2026
+#     300-400     922   1877     10      0
+#     400-500     922   1880     10      6
+#     500-600     917   1881    545     12
+#     600-700       6    343    543     12
+#     700-800       0      0    503     12
+#
+# So an average border price by year, taken without holding weight constant,
+# measures the bracket change and not the market -- it would show a large jump
+# into 2025 that is pure mix. Every function here holds the bracket fixed.
+
+# The slice comparable to the CME index: the index is #1 & #1-2 Medium & Large
+# steers, 700-899 lb, FOB with 3% shrink, over 12 states. 700-800 #1-2 Medium
+# and Large steers FOB is as close as the border report gets. It exists only
+# from February 2025, because of the bracket shift above.
+INDEX_CLASS = "Steers"
+INDEX_GRADE = "1-2"
+INDEX_WEIGHT_LOW = 700
+
+
+def price_grid(conn, on=None):
+    """
+    [(class, weight_low, weight_high, grade, low, high, mid)] for one date.
+
+    Defaults to the latest date that actually carries prices, which is NOT the
+    latest reporting day: AMS quotes prices only when enough head sell to
+    establish a trend, so a day can report cattle crossing and no price at all
+    ("Not enough head sold on the current market to establish trend or quote
+    prices"). In 2026 there were 13 reporting days and 6 with prices.
+    """
+    cur = conn.cursor()
+    if on is None:
+        r = cur.execute("SELECT MAX(report_date) FROM border_prices").fetchone()
+        on = r[0] if r else None
+    if not on:
+        return [], None
+    rows = cur.execute(
+        "SELECT class_desc, weight_low, weight_high, muscle_grade, "
+        "       low_price, high_price, avg_price, crossing_point "
+        "FROM border_prices WHERE report_date = "
+        f"'{str(db.iso(on))}' ORDER BY class_desc, weight_low, muscle_grade"
+    ).fetchall()
+    return ([(c, wl, wh, g, lo, hi, mid, cp)
+             for c, wl, wh, g, lo, hi, mid, cp in rows], str(db.iso(on)))
+
+
+def price_series(conn, class_desc=INDEX_CLASS, grade=None, since=None):
+    """
+    {bracket_label: [(date, mid_price)]} -- one series per weight bracket.
+
+    Keyed by bracket ON PURPOSE. Collapsing brackets into a single "border
+    price" line would fold the 2024/2025 bracket shift straight into the trend.
+    """
+    sql = ("SELECT report_date, weight_low, weight_high, AVG(avg_price) "
+           "FROM border_prices WHERE avg_price IS NOT NULL "
+           f"AND class_desc = '{class_desc}'")
+    if grade:
+        sql += f" AND muscle_grade = '{grade}'"
+    if since:
+        sql += f" AND report_date >= '{since}'"
+    sql += (" GROUP BY report_date, weight_low, weight_high "
+            "ORDER BY weight_low, report_date")
+    out = {}
+    for d, wl, wh, px in conn.cursor().execute(sql).fetchall():
+        label = f"{wl}-{wh} lb" if wh else f"{wl}+ lb"
+        out.setdefault(label, []).append((str(db.iso(d)), float(px)))
+    return out
+
+
+def index_spread(conn, limit=None):
+    """
+    [(date, border_price, index_value, spread)] for the index-comparable slice.
+
+    The border quote is Mexican-origin cattle at the crossing; the index is US
+    cattle sold at auction and direct across 12 states. The gap is a real market
+    relationship -- origin, quality, freight and who is buying -- not a
+    mispricing, and the page says so. Both are $/cwt FOB, which is what makes
+    subtracting them meaningful at all.
+
+    Reads fci_daily, which lives in the same schema. Uses the reconstruction
+    rather than CME's published file because it carries the current date, and a
+    spread against a value three days stale would mostly measure the staleness.
+    """
+    rows = conn.cursor().execute(
+        "SELECT p.report_date, AVG(p.avg_price), MAX(f.fci_value) "
+        "FROM border_prices p JOIN fci_daily f ON p.report_date = f.report_date "
+        f"WHERE p.class_desc = '{INDEX_CLASS}' "
+        f"AND p.muscle_grade = '{INDEX_GRADE}' "
+        f"AND p.weight_low = {INDEX_WEIGHT_LOW} "
+        "AND p.avg_price IS NOT NULL "
+        "GROUP BY p.report_date ORDER BY p.report_date").fetchall()
+    out = [(str(db.iso(d)), float(b), float(f), float(b) - float(f))
+           for d, b, f in rows if b is not None and f is not None]
+    return out[-limit:] if limit else out
+
+
+def spread_by_year(conn):
+    """{year: {"n", "mean", "median", "last"}} for the index spread."""
+    rows = index_spread(conn)
+    by = {}
+    for d, _b, _f, s in rows:
+        by.setdefault(str(d)[:4], []).append(s)
+    out = {}
+    for y, vals in sorted(by.items()):
+        v = sorted(vals)
+        n = len(v)
+        out[y] = {
+            "n": n,
+            "mean": sum(v) / n,
+            "median": v[n // 2] if n % 2 else (v[n // 2 - 1] + v[n // 2]) / 2,
+            "last": vals[-1],
+        }
+    return out
+
+
+def price_coverage(conn):
+    """{year: {"price_days", "brackets"}} -- how thin the series is, per year."""
+    rows = conn.cursor().execute(
+        "SELECT report_date, weight_low FROM border_prices").fetchall()
+    out = {}
+    for d, wl in rows:
+        y = str(db.iso(d))[:4]
+        r = out.setdefault(y, {"days": set(), "brackets": set()})
+        r["days"].add(str(db.iso(d)))
+        r["brackets"].add(wl)
+    return {y: {"price_days": len(r["days"]),
+                "brackets": sorted(r["brackets"])}
+            for y, r in sorted(out.items())}
+
+
 def _national(conn):
     return conn.cursor().execute(
         "SELECT period, commodity, descr, head, value_usd "
