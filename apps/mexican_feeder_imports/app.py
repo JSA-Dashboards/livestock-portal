@@ -400,14 +400,16 @@ with st.container(key="wm-volumes"):
                     label_visibility="collapsed", key="vol_gran")
 
     if gran == "Monthly":
-        pts = [(pd.Timestamp(str(pp) + "-01"), h) for pp, h in (D["monthly"] or [])]
+        raw = list(D["monthly"] or [])
+        pts = [(pd.Timestamp(str(pp) + "-01"), h) for pp, h in raw]
         hover = "%{x|%b %Y}<br>%{y:,.0f} head<extra></extra>"
         src_note = (
             f"**US Census**, the official customs count, monthly back to 2019 "
             f"and current to {fmt_month(F['census_through'])}."
         )
     else:
-        pts = [(pd.Timestamp(w), h) for w, h in (D.get("weekly") or [])]
+        raw = list(D.get("weekly") or [])
+        pts = [(pd.Timestamp(w), h) for w, h in raw]
         hover = "week of %{x|%b %d, %Y}<br>%{y:,.0f} head<extra></extra>"
         src_note = (
             "**USDA AMS**, weekly actuals. This series **starts in 2023** — AMS "
@@ -434,8 +436,26 @@ with st.container(key="wm-volumes"):
         # min_run is "about a month of no trade" at each resolution. Weekly
         # needs 4 because single zero weeks happen during normal trade; monthly
         # needs 1 because a whole zero month never did until the border shut.
-        base = bd.normal_baseline([(str(x.date()), h) for x, h in pts],
-                                  min_run=1 if gran == "Monthly" else 4)
+        #
+        # Pass the ORIGINAL labels. The first version rebuilt them with
+        # `str(x.date())` off the plotted Timestamps, which is a pointless
+        # round-trip -- the labels are right there in `raw` -- and it took the
+        # whole page down in production with an AttributeError that never fired
+        # locally. Nothing here needs a date object; the label is opaque to
+        # normal_baseline.
+        #
+        # The guard is deliberate. This is one decorative statistic on a page
+        # with a dozen other things on it, and it has now demonstrated that it
+        # can replace all of them with a traceback. A missing baseline degrades
+        # to the all-periods median, which is still a true number.
+        try:
+            base = bd.normal_baseline([(str(p), h) for p, h in raw],
+                                      min_run=1 if gran == "Monthly" else 4)
+        except Exception as exc:
+            base = None
+            st.caption(f":orange[Normal-trade baseline unavailable "
+                       f"({type(exc).__name__}); showing the all-periods "
+                       f"median instead.]")
         med = base["median"] if base else all_med
 
         fig = go.Figure()
