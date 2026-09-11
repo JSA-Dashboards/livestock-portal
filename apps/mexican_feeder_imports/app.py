@@ -343,10 +343,17 @@ with c[0]:
                      sub(f"est., {fmt_date(last_day[0])}" if last_day
                          else "no reporting day yet")), unsafe_allow_html=True)
 with c[1]:
-    st.markdown(tile("Running Total",
-                     f"~{SO['head']:,}" if SO else "—",
-                     sub(f"est., since reopening {fmt_date(SO['from'])}"
-                         if SO else "")), unsafe_allow_html=True)
+    # Summed over the whole YEAR, not from the reopening date. The two are the
+    # same number today because nothing crossed before 24 August -- but the
+    # label says 2026, so the figure has to be 2026 by construction. Computing
+    # it from the reopening and calling it the year total would quietly become
+    # wrong the moment AMS backfills an earlier date.
+    yr_est = sum(v for _d, v, _w in daily) if daily else None
+    st.markdown(tile(f"{this_yr} Estimated Total Crossings",
+                     f"~{yr_est:,}" if yr_est is not None else "—",
+                     sub(f"est., {fmt_date(daily[0][0])} – "
+                         f"{fmt_date(daily[-1][0])}" if daily else "")),
+                unsafe_allow_html=True)
 with c[2]:
     st.markdown(tile(f"{this_yr} YTD Head",
                      f"{Y['ytd']:,}" if Y else "—",
@@ -368,7 +375,7 @@ if Y:
     st.caption(
         f"**The first two boxes are estimates; the last two are actuals.** The "
         f"daily figures AMS publishes are rounded to the nearest hundred head, "
-        f"so the running total is approximate and current to "
+        f"so the {this_yr} total is approximate and current to "
         f"{fmt_date(SO['latest']) if SO else 'the latest report'}. The YTD is "
         f"AMS's own count, exact but a week behind — and it is AMS's cut-off, "
         f"not one computed here, so a partial year cannot be measured against a "
