@@ -338,7 +338,7 @@ last_day = daily[-1] if daily else None
 
 c = st.columns(4)
 with c[0]:
-    st.markdown(tile("Head Crossed",
+    st.markdown(tile("Daily Head Crossings",
                      f"{last_day[1]:,}" if last_day else "—",
                      sub(f"est., {fmt_date(last_day[0])}" if last_day
                          else "no reporting day yet")), unsafe_allow_html=True)
