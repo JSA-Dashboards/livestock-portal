@@ -1,8 +1,8 @@
 """
-JSA Livestock Portal — shared shell combining ten livestock dashboards
+JSA Livestock Portal — shared shell combining eleven livestock dashboards
 (CME Feeder Cattle Index, Seasonal Futures & Spreads, Cattle on Feed, US Cow
 Herd, Mexican Feeder Imports, Cattle Weights, Beef Cutout, Beef Trimmings,
-Livestock Inventory, Cash Cattle Trade) into one app with top-navigation tabs.
+Livestock Inventory, Cash Cattle Trade, Fed Cattle Crush) into one app with top-navigation tabs.
 
 Makes the single set_page_config call allowed per multi-page run, then
 hands off to st.navigation (top nav, no sidebar, no login gate — matches
@@ -36,6 +36,8 @@ DASHBOARDS = [
      "desc": "Herd expansion vs liquidation — bred female values, the retention incentive, and replacement receipts."},
     {"title": "Mexican Feeder Imports", "page": "apps/mexican_feeder_imports/app.py", "url_path": "mexican-feeder-imports",
      "desc": "Border status, crossing activity by port, and Mexican feeder head counts from Census trade data."},
+    {"title": "Fed Cattle Crush", "page": "apps/fed_cattle_crush/app.py", "url_path": "fed-cattle-crush",
+     "desc": "Feeding margin calculator — prices your cattle off the futures curve, then every number is yours to change."},
     {"title": "Cattle Weights", "page": "apps/beef_weight/app.py", "url_path": "beef-weight",
      "desc": "USDA NASS weekly cattle slaughter weights by class, dressed & live."},
     {"title": "Beef Cutout", "page": "apps/beef_cutout/app.py", "url_path": "beef-cutout",
