@@ -428,12 +428,21 @@ with st.container(key="wm-volumes"):
         fig = go.Figure()
         fig.add_bar(x=xs, y=ys, marker_color=JPSI_BLUE, name="Head",
                     hovertemplate=hover)
+        # Right, not left: at "top left" the label lands on top of the y-axis
+        # tick numbers and neither can be read. The right end of both charts is
+        # the closure period, so it is empty space. The solid background and
+        # border keep it legible if a tall bar ever does reach under it.
         fig.add_hline(
             y=med, line_width=1.6, line_dash="dash", line_color=AMBER,
-            annotation_text=f"median {med:,.0f}", annotation_position="top left",
-            annotation_font=dict(color=AMBER, size=11))
+            annotation_text=f"median {med:,.0f}",
+            annotation_position="top right",
+            annotation_font=dict(color=AMBER, size=11),
+            annotation_bgcolor=CARD_BG,
+            annotation_bordercolor=AMBER,
+            annotation_borderwidth=1,
+            annotation_borderpad=3)
         fig.update_layout(
-            height=340, margin=dict(l=10, r=10, t=10, b=10),
+            height=340, margin=dict(l=10, r=24, t=10, b=10),
             paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
             font=dict(color=TEXT, size=11), showlegend=False,
             xaxis=dict(gridcolor=BORDER, title=None),
