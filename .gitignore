@@ -13,3 +13,4 @@ Thumbs.db
 
 # NOTE: apps/cme_feeder_cattle/data/*.xlsx and *.db are intentionally NOT
 # ignored — they ARE that app's data, not a cache.
+.claude/launch.json
