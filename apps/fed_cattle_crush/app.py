@@ -215,6 +215,37 @@ def label_contract(ticker: str, code: str) -> str:
     return f"{ticker} ({MONTH_NAME[cm[1]]} {cm[0]})" if cm else ticker
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_corn():
+    """
+    {state: {...}} DELIVERED corn cost per feeding state -- see corn_cost.py.
+
+    Delivered, not the elevator bid. Almost every published corn price is what a
+    farmer RECEIVES; a feedyard pays that plus the elevator's margin and freight
+    to the bunk. Where AMS publishes both (Texas South Plains) the gap is 86c a
+    bushel -- about $8/cwt of gain. Feeding a bid into cost of gain understates
+    corn by that much.
+
+    Returns empty rather than raising if the tables are absent: a missing corn
+    feed should leave the user typing their own number, not break the page.
+    """
+    try:
+        import snowflake_db as _db
+        import corn_cost
+        conn = _db.get_conn()
+    except Exception:
+        return {}, None
+    try:
+        return corn_cost.delivered_corn(conn), date.today().isoformat()
+    except Exception:
+        return {}, None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 @st.cache_data(ttl=900, show_spinner=False)
 def load_curves(as_of: str):
     key = get_api_key()
@@ -295,9 +326,16 @@ with in_col:
     adg = field("Rate of gain", lambda: st.number_input(
         "adg", 0.5, 6.0, DEFAULTS["adg"], 0.05, label_visibility="collapsed",
         help="lb per head per day"))
-    cog = field("Cost of gain", lambda: st.number_input(
-        "cog", 0.0, 400.0, DEFAULTS["cog"], 1.0, label_visibility="collapsed",
-        help="$/cwt of gain — all-in: feed, yardage, health, interest, death loss."))
+    cog_mode = field("Cost of gain", lambda: st.selectbox(
+        "cog_mode", ["Build from corn", "Enter directly"],
+        label_visibility="collapsed"))
+    if cog_mode == "Enter directly":
+        cog = field(" ", lambda: st.number_input(
+            "cog", 0.0, 400.0, DEFAULTS["cog"], 1.0, label_visibility="collapsed",
+            help="$/cwt of gain — all-in: feed, yardage, health, interest, "
+                 "death loss."))
+    else:
+        cog = None          # built below, once days and gain are known
     basis = field("Live basis", lambda: st.number_input(
         "basis", -30.0, 30.0, DEFAULTS["basis"], 0.25,
         label_visibility="collapsed",
@@ -385,6 +423,116 @@ with in_col:
         f'<span class="fld-derived">${gf_price:,.3f}'
         f'<span class="fld-note">{label_contract(gf_pick, "GF")}</span>'
         f'</span></div>', unsafe_allow_html=True)
+
+# ── Cost of gain, built from corn ───────────────────────────────────────────
+# Only reachable once days and gain are known, which is why it sits here rather
+# than inline with the other inputs.
+#
+# There is no single "accurate" cost of gain. It is corn price x ration mix x
+# feed conversion, plus yardage x days, plus interest on the money tied up in
+# the feeder, plus death loss. A tighter number typed into a box is still a
+# guess; showing the build-up makes it obvious which assumption is doing the
+# work, and lets a feeder put their own yard's figures in.
+if cog_mode == "Build from corn":
+    corn_states, corn_asof = load_corn()
+    with st.expander("Cost of gain build-up", expanded=True):
+        g1, g2, g3, g4 = st.columns(4)
+        with g1:
+            state_opts = list(corn_states.keys()) or ["—"]
+            default_state = "NE" if "NE" in state_opts else state_opts[0]
+            cstate = st.selectbox("Feedyard state", state_opts,
+                                  index=state_opts.index(default_state))
+            cs = corn_states.get(cstate, {})
+            seed = cs.get("price", 5.25)
+            corn = st.number_input("Corn delivered ($/bu)", 0.0, 20.0,
+                                   float(round(seed, 2)), 0.05,
+                                   help="Delivered to the feedyard, not the "
+                                        "elevator bid. See the note below for "
+                                        "how this state's figure was derived.")
+        with g2:
+            corn_pct = st.number_input("Ration corn (%)", 0.0, 100.0, 80.0, 5.0)
+            other_ton = st.number_input("Other feed ($/ton)", 0.0, 800.0, 250.0, 10.0)
+        with g3:
+            conv = st.number_input("Feed conversion", 3.0, 12.0, 6.5, 0.1,
+                                   help="lb of feed (as-fed) per lb of gain")
+            yardage = st.number_input("Yardage ($/hd/day)", 0.0, 3.0, 0.45, 0.01)
+        with g4:
+            health = st.number_input("Health/processing ($/hd)", 0.0, 200.0, 25.0, 5.0)
+            interest = st.number_input("Interest (%)", 0.0, 30.0, 8.0, 0.25)
+            death = st.number_input("Death loss (%)", 0.0, 10.0, 1.5, 0.1)
+
+        corn_ton = corn * 2000.0 / 56.0          # 56 lb to the bushel
+        ration_ton = (corn_pct / 100.0) * corn_ton + (1 - corn_pct / 100.0) * other_ton
+        gain_cwt = gain / 100.0
+
+        feed_c = conv * ration_ton / 2000.0 * 100.0      # $/cwt of gain
+        yard_c = (yardage * days) / gain_cwt if gain_cwt else 0.0
+        health_c = health / gain_cwt if gain_cwt else 0.0
+        # Interest and death loss scale with the value of the animal. Based on
+        # the FUTURES price, not the bid entered below -- the bid depends on the
+        # break-even, which depends on cost of gain, which would depend on the
+        # bid. Circular. The futures is the right order of magnitude and the
+        # difference is a few cents a hundredweight.
+        feeder_val = start_wt / 100.0 * gf_price
+        int_c = (feeder_val * interest / 100.0 * days / 365.0) / gain_cwt if gain_cwt else 0.0
+        death_c = (feeder_val * death / 100.0) / gain_cwt if gain_cwt else 0.0
+
+        cog = feed_c + yard_c + health_c + int_c + death_c
+
+        # NO backslash-escaped dollars in these HTML blocks. The LaTeX
+        # escape is a MARKDOWN rule -- inside unsafe_allow_html the
+        # backslash has no meaning and renders literally, which is exactly
+        # what it did here. st.caption below still needs the escapes.
+        # Say where the corn number came from and whether any of it is assumed.
+        # "Corn is $5.47" means something different if 40c of it is a freight
+        # estimate rather than a published delivered price.
+        if cs.get("assumed"):
+            prov = (f"{cstate} elevator bid <b>${cs['bid']:,.2f}</b> "
+                    f"({cs['source']}, {cs['n']} quotes) + <b>${cs['adder']:,.2f}</b> "
+                    f"assumed freight &amp; margin to the bunk")
+        elif cs:
+            prov = (f"{cstate} <b>delivered to feedyard</b>, published by "
+                    f"{cs['source']} ({cs['n']} quotes) — measured, not assumed")
+        else:
+            prov = "no cash corn data for this state; the figure above is yours"
+        st.markdown(
+            f"<div style='color:{MUTED};font-size:0.8rem;margin-top:6px'>"
+            f"{prov}<br>corn ${corn:,.2f}/bu → ${corn_ton:,.2f}/ton · ration "
+            f"${ration_ton:,.2f}/ton"
+            f"</div>", unsafe_allow_html=True)
+        b = pd.DataFrame([
+            {"Component": "Feed", "$/cwt gain": round(feed_c, 2),
+             "$/head": round(feed_c * gain_cwt, 2)},
+            {"Component": "Yardage", "$/cwt gain": round(yard_c, 2),
+             "$/head": round(yard_c * gain_cwt, 2)},
+            {"Component": "Health/processing", "$/cwt gain": round(health_c, 2),
+             "$/head": round(health_c * gain_cwt, 2)},
+            {"Component": "Interest", "$/cwt gain": round(int_c, 2),
+             "$/head": round(int_c * gain_cwt, 2)},
+            {"Component": "Death loss", "$/cwt gain": round(death_c, 2),
+             "$/head": round(death_c * gain_cwt, 2)},
+            {"Component": "TOTAL", "$/cwt gain": round(cog, 2),
+             "$/head": round(cog * gain_cwt, 2)},
+        ])
+        st.dataframe(b, use_container_width=True, hide_index=True)
+
+        sens = conv * (2000.0 / 56.0) * (corn_pct / 100.0) / 2000.0 * 100.0
+        st.caption(
+            f"Cost of gain **\\${cog:,.2f}/cwt** of gain, "
+            f"**\\${cog * gain_cwt:,.2f}/head** over {gain:,.0f} lb. "
+            f"At this ration and conversion, every **\\$1.00/bu** on corn moves "
+            f"cost of gain **\\${sens:,.2f}/cwt**. "
+            + (f"Corn seeded from {cstate} cash bids through {corn_asof}."
+               if corn_asof else
+               "Corn bids unavailable — the figure above is the value you typed.")
+        )
+
+    with in_col:
+        st.markdown(
+            f'<div class="fld-row"><span class="fld-label">Cost of gain</span>'
+            f'<span class="fld-derived">${cog:,.2f}'
+            f'<span class="fld-note">$/cwt gain · built from '
+            f'${corn:,.2f} corn</span></span></div>', unsafe_allow_html=True)
 
 # ── Bid price: the question a buyer actually asks ───────────────────────────
 # The board price for feeders is what the market says; the BID is what this
