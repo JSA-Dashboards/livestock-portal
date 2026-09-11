@@ -476,6 +476,76 @@ def receipts_by_crossing(conn, since=None):
     return sorted([(p, s, v or 0) for p, s, v in rows], key=lambda t: -t[2])
 
 
+def normal_baseline(series, min_run=1):
+    """
+    Median of normal trade: everything before the first SUSTAINED closure.
+
+    `series` is [(period_label, head)]; `min_run` is how many consecutive zero
+    periods count as a closure rather than a quiet spell -- 1 for a monthly
+    series, 4 for a weekly one, i.e. roughly a month of no trade either way.
+
+    WHY NOT JUST DROP THE ZEROS. That is the obvious rule and it gives the wrong
+    number, because trade did not go from normal to zero -- it went through
+    months that were open but crippled. On the monthly series:
+
+        all 83 periods              92,865
+        excluding the 7 zeros       97,378
+        before the first closure   102,732
+
+    The middle figure still contains February 2025 at 21,788 head, March at
+    74,409, July at 4,339 -- a border open at a handful of crossings under
+    restrictions. Real months, but not what "normally crosses when the border is
+    open" means, and averaging them in understates normal trade by about 5%.
+
+    WHY min_run EXISTS, and it is not a tuning knob. The first version took the
+    FIRST zero as the closure. That is right monthly -- there is no zero month
+    before 2024-12 -- and wrong weekly, where the run structure is:
+
+        2023-08-14                1 week    <- genuine, but normal trade
+        2024-11-25 .. 2025-01-27  10 weeks  <- the first real closure
+        2025-05-19 .. 2025-06-30   7 weeks
+        2025-07-14 .. 2026-07-27  47 weeks
+
+    so "first zero" ended the baseline in August 2023 and computed normal trade
+    from 32 weeks instead of 100 -- 22,985 head against the true 25,435.
+
+    That isolated week is NOT bad data: AMS's own running year-to-date holds
+    flat at 706,029 across it and only resumes the following week, and a
+    cumulative series that does not advance proves nothing crossed. Some weeks
+    genuinely have no trade. Requiring a run is what distinguishes those from a
+    border that has shut.
+    """
+    if not series:
+        return None
+
+    start = None
+    run = 0
+    for i, (_p, h) in enumerate(series):
+        if h == 0:
+            run += 1
+            if run >= min_run:
+                start = i - run + 1     # first zero OF THIS RUN
+                break
+        else:
+            run = 0
+    if start == 0:
+        return None                     # series opens mid-closure; no baseline
+
+    head = series[:start] if start is not None else series
+    vals = sorted(h for _p, h in head)
+    if not vals:
+        return None
+    n = len(vals)
+    return {
+        "median": vals[n // 2] if n % 2 else (vals[n // 2 - 1] + vals[n // 2]) / 2,
+        "n": n,
+        "from": series[0][0],
+        "until": head[-1][0],
+        "disruption_starts": series[start][0] if start is not None else None,
+        "n_after": len(series) - n,
+    }
+
+
 def weekly_volumes(conn, commodity="Feeder Cattle"):
     """
     [(week_start, head)] weekly ACTUALS from 3629.

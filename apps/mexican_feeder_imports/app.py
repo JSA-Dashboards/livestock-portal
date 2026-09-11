@@ -422,8 +422,21 @@ with st.container(key="wm-volumes"):
         ys = [h for _x, h in pts]
         srt = sorted(ys)
         n = len(srt)
-        med = srt[n // 2] if n % 2 else (srt[n // 2 - 1] + srt[n // 2]) / 2
+        all_med = srt[n // 2] if n % 2 else (srt[n // 2 - 1] + srt[n // 2]) / 2
         zeros = sum(1 for v in ys if v == 0)
+
+        # The line shows NORMAL trade -- the median before the first closure --
+        # not the median of everything plotted. A median spanning the closure
+        # answers "what was a typical month over this period", which is not the
+        # question anyone asks of this chart; they want to know what crosses
+        # when the border is open. Both numbers are reported underneath so the
+        # closure is not airbrushed out of the statistic.
+        # min_run is "about a month of no trade" at each resolution. Weekly
+        # needs 4 because single zero weeks happen during normal trade; monthly
+        # needs 1 because a whole zero month never did until the border shut.
+        base = bd.normal_baseline([(str(x.date()), h) for x, h in pts],
+                                  min_run=1 if gran == "Monthly" else 4)
+        med = base["median"] if base else all_med
 
         fig = go.Figure()
         fig.add_bar(x=xs, y=ys, marker_color=JPSI_BLUE, name="Head",
@@ -434,7 +447,8 @@ with st.container(key="wm-volumes"):
         # border keep it legible if a tall bar ever does reach under it.
         fig.add_hline(
             y=med, line_width=1.6, line_dash="dash", line_color=AMBER,
-            annotation_text=f"median {med:,.0f}",
+            annotation_text=(f"normal {med:,.0f}" if base
+                             else f"median {med:,.0f}"),
             annotation_position="top right",
             annotation_font=dict(color=AMBER, size=11),
             annotation_bgcolor=CARD_BG,
@@ -450,24 +464,34 @@ with st.container(key="wm-volumes"):
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        st.markdown(
-            f"<div style='color:{MUTED};font-size:0.8rem;margin:-4px 0 6px;'>"
-            f"Median <b style='color:{AMBER}'>{med:,.0f} head</b> per "
-            f"{'month' if gran == 'Monthly' else 'week'} across "
-            f"{n:,} {'months' if gran == 'Monthly' else 'weeks'}"
-            f"{f', {zeros} of them zero' if zeros else ''}."
-            f"</div>", unsafe_allow_html=True)
-
-        # Say WHAT the median is computed over, not how far it sits from
-        # "normal" -- an earlier draft called it "well below a normal trading
-        # month", which the numbers do not support: 92,865 against typical
-        # months of 100-120k is somewhat below, not dramatically.
         unit = "month" if gran == "Monthly" else "week"
+        if base:
+            st.markdown(
+                f"<div style='color:{MUTED};font-size:0.8rem;margin:-4px 0 6px;'>"
+                f"Normal trade: median <b style='color:{AMBER}'>{med:,.0f} head"
+                f"</b> per {unit} over the {base['n']:,} {unit}s before the "
+                f"border first closed ({fmt_month(base['from']) if gran == 'Monthly' else fmt_date(base['from'])}"
+                f" – {fmt_month(base['until']) if gran == 'Monthly' else fmt_date(base['until'])})."
+                f" &nbsp;·&nbsp; Across all {n:,} {unit}s plotted, including the "
+                f"{zeros} at zero, the median is {all_med:,.0f}."
+                f"</div>", unsafe_allow_html=True)
+        else:
+            st.markdown(
+                f"<div style='color:{MUTED};font-size:0.8rem;margin:-4px 0 6px;'>"
+                f"Median <b style='color:{AMBER}'>{med:,.0f} head</b> per {unit} "
+                f"across {n:,} {unit}s."
+                f"</div>", unsafe_allow_html=True)
+
         st.caption(
             src_note
-            + (f" The median is taken over **everything plotted, including the "
-               f"{zeros} closed {unit}s at zero**, so it sits below a typical "
-               f"trading {unit} rather than describing one." if zeros else "")
+            + (f" **The line is normal trade, not the median of the chart.** "
+               f"Dropping only the zero {unit}s would not do it: trade did not "
+               f"go from normal to nothing, it went through {unit}s that were "
+               f"open but crippled — February 2025 at 21,788 head, July at "
+               f"4,339 — and averaging those into the baseline understates "
+               f"normal by about 5%. So the baseline is everything before the "
+               f"first closure, and the all-{unit}s median is given above for "
+               f"comparison." if base and zeros else "")
         )
 
         if gran == "Monthly":
@@ -493,119 +517,6 @@ with st.container(key="wm-volumes"):
             )
     else:
         st.info("No volume data stored for this resolution yet.")
-
-st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
-
-# ── Daily crossings ─────────────────────────────────────────────────────────
-st.markdown('<div class="sec-header">Daily Crossings</div>',
-            unsafe_allow_html=True)
-
-# daily was bound above, for the year-to-date boxes.
-if daily:
-    t_day, t_wtd, t_port, t_hist = st.tabs(
-        ["Per day", "Week to date", "By crossing", "Against prior years"])
-
-    with t_day:
-        dx = [pd.Timestamp(d) for d, _v, _w in daily]
-        dy = [v for _d, v, _w in daily]
-        fig = go.Figure()
-        fig.add_bar(x=dx, y=dy, marker_color=JPSI_BLUE,
-                    hovertemplate="%{x|%a %b %d}<br>%{y:,.0f} head<extra></extra>")
-        if SO and SO.get("from"):
-            fig.add_vline(x=pd.Timestamp(SO["from"]), line_width=1.5,
-                          line_dash="dot", line_color=POS)
-            fig.add_annotation(x=pd.Timestamp(SO["from"]), y=1, yref="paper",
-                               text="reopened", showarrow=False, yanchor="bottom",
-                               font=dict(size=10, color=POS))
-        fig.update_layout(
-            height=320, margin=dict(l=10, r=10, t=24, b=10),
-            paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
-            font=dict(color=TEXT, size=11), showlegend=False,
-            xaxis=dict(gridcolor=BORDER, title=None),
-            yaxis=dict(gridcolor=BORDER, title="Head", tickformat=","))
-        st.plotly_chart(fig, use_container_width=True)
-        zero = sum(1 for _d, v, _w in daily if v == 0)
-        st.caption(
-            f"Every reporting day in {this_yr}: {len(daily)} days, "
-            f"{len(daily) - zero} with cattle and {zero} published with none. "
-            f"Head counts are AMS estimates, rounded to the nearest hundred."
-        )
-        st.dataframe(
-            pd.DataFrame([{"Date": d, "Head": v, "Week to date": w}
-                          for d, v, w in reversed(daily)]),
-            use_container_width=True, hide_index=True)
-
-    with t_wtd:
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=[pd.Timestamp(d) for d, _v, w in daily],
-            y=[w for _d, _v, w in daily], mode="lines+markers",
-            line=dict(color=AMBER, width=2), marker=dict(size=6),
-            hovertemplate="%{x|%a %b %d}<br>%{y:,.0f} head WTD<extra></extra>"))
-        fig.update_layout(
-            height=320, margin=dict(l=10, r=10, t=10, b=10),
-            paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
-            font=dict(color=TEXT, size=11), showlegend=False,
-            xaxis=dict(gridcolor=BORDER, title=None),
-            yaxis=dict(gridcolor=BORDER, title="Head, week to date",
-                       tickformat=","))
-        st.plotly_chart(fig, use_container_width=True)
-        st.caption(
-            "AMS's running week-to-date total, which **resets each Monday** — "
-            "the sawtooth is the reset, not a collapse in trade. Shown because "
-            "it is how the AMS report itself presents the week."
-        )
-
-    with t_port:
-        bc = D.get("by_crossing") or []
-        if bc:
-            st.dataframe(
-                pd.DataFrame([{"Crossing": p, "State": s, f"{this_yr} head": v}
-                              for p, s, v in bc]),
-                use_container_width=True, hide_index=True)
-            st.caption(
-                "Per-crossing detail. These are a **breakdown, not an exact "
-                "decomposition** — AMS's per-crossing rows disagreed with its "
-                "own published total on 19 of 463 days measured, so the "
-                "headline figures above use AMS's total row rather than a sum "
-                "of these."
-            )
-        else:
-            st.info(f"No per-crossing detail reported yet in {this_yr}.")
-
-    with t_hist:
-        by = D.get("by_year") or {}
-        if by:
-            years = sorted(by)
-            fig = go.Figure()
-            fig.add_bar(x=years, y=[by[y]["head"] for y in years],
-                        marker_color=JPSI_BLUE, name="Head",
-                        hovertemplate="%{x}<br>%{y:,.0f} head<extra></extra>")
-            fig.update_layout(
-                height=300, margin=dict(l=10, r=10, t=10, b=10),
-                paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
-                font=dict(color=TEXT, size=11), showlegend=False,
-                xaxis=dict(gridcolor=BORDER, title=None, type="category"),
-                yaxis=dict(gridcolor=BORDER, title="Head", tickformat=","))
-            st.plotly_chart(fig, use_container_width=True)
-            st.dataframe(
-                pd.DataFrame([{"Year": y, "Head (AMS est.)": by[y]["head"],
-                               "Reporting days": by[y]["days"],
-                               "Head per reporting day":
-                                   round(by[y]["head"] / by[y]["days"])
-                                   if by[y]["days"] else 0}
-                              for y in years]),
-                use_container_width=True, hide_index=True)
-            st.caption(
-                "Whole-year totals from the same daily series. **2023 is "
-                "incomplete** — AMS's daily volume section only runs from part "
-                "way through that year (156 reporting days against 225 in "
-                "2024), so its total is not comparable. 2024 and 2025 tie to "
-                "Census within about 3%, which is the cross-check that the "
-                "estimates are sound."
-            )
-else:
-    st.info("No daily receipts stored for this year yet.")
 
 st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
@@ -759,6 +670,119 @@ else:
 
 st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
+# ── Daily crossings ─────────────────────────────────────────────────────────
+st.markdown('<div class="sec-header">Daily Crossings</div>',
+            unsafe_allow_html=True)
+
+# daily was bound above, for the year-to-date boxes.
+if daily:
+    t_day, t_wtd, t_port, t_hist = st.tabs(
+        ["Per day", "Week to date", "By crossing", "Against prior years"])
+
+    with t_day:
+        dx = [pd.Timestamp(d) for d, _v, _w in daily]
+        dy = [v for _d, v, _w in daily]
+        fig = go.Figure()
+        fig.add_bar(x=dx, y=dy, marker_color=JPSI_BLUE,
+                    hovertemplate="%{x|%a %b %d}<br>%{y:,.0f} head<extra></extra>")
+        if SO and SO.get("from"):
+            fig.add_vline(x=pd.Timestamp(SO["from"]), line_width=1.5,
+                          line_dash="dot", line_color=POS)
+            fig.add_annotation(x=pd.Timestamp(SO["from"]), y=1, yref="paper",
+                               text="reopened", showarrow=False, yanchor="bottom",
+                               font=dict(size=10, color=POS))
+        fig.update_layout(
+            height=320, margin=dict(l=10, r=10, t=24, b=10),
+            paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
+            font=dict(color=TEXT, size=11), showlegend=False,
+            xaxis=dict(gridcolor=BORDER, title=None),
+            yaxis=dict(gridcolor=BORDER, title="Head", tickformat=","))
+        st.plotly_chart(fig, use_container_width=True)
+        zero = sum(1 for _d, v, _w in daily if v == 0)
+        st.caption(
+            f"Every reporting day in {this_yr}: {len(daily)} days, "
+            f"{len(daily) - zero} with cattle and {zero} published with none. "
+            f"Head counts are AMS estimates, rounded to the nearest hundred."
+        )
+        st.dataframe(
+            pd.DataFrame([{"Date": d, "Head": v, "Week to date": w}
+                          for d, v, w in reversed(daily)]),
+            use_container_width=True, hide_index=True)
+
+    with t_wtd:
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=[pd.Timestamp(d) for d, _v, w in daily],
+            y=[w for _d, _v, w in daily], mode="lines+markers",
+            line=dict(color=AMBER, width=2), marker=dict(size=6),
+            hovertemplate="%{x|%a %b %d}<br>%{y:,.0f} head WTD<extra></extra>"))
+        fig.update_layout(
+            height=320, margin=dict(l=10, r=10, t=10, b=10),
+            paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
+            font=dict(color=TEXT, size=11), showlegend=False,
+            xaxis=dict(gridcolor=BORDER, title=None),
+            yaxis=dict(gridcolor=BORDER, title="Head, week to date",
+                       tickformat=","))
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption(
+            "AMS's running week-to-date total, which **resets each Monday** — "
+            "the sawtooth is the reset, not a collapse in trade. Shown because "
+            "it is how the AMS report itself presents the week."
+        )
+
+    with t_port:
+        bc = D.get("by_crossing") or []
+        if bc:
+            st.dataframe(
+                pd.DataFrame([{"Crossing": p, "State": s, f"{this_yr} head": v}
+                              for p, s, v in bc]),
+                use_container_width=True, hide_index=True)
+            st.caption(
+                "Per-crossing detail. These are a **breakdown, not an exact "
+                "decomposition** — AMS's per-crossing rows disagreed with its "
+                "own published total on 19 of 463 days measured, so the "
+                "headline figures above use AMS's total row rather than a sum "
+                "of these."
+            )
+        else:
+            st.info(f"No per-crossing detail reported yet in {this_yr}.")
+
+    with t_hist:
+        by = D.get("by_year") or {}
+        if by:
+            years = sorted(by)
+            fig = go.Figure()
+            fig.add_bar(x=years, y=[by[y]["head"] for y in years],
+                        marker_color=JPSI_BLUE, name="Head",
+                        hovertemplate="%{x}<br>%{y:,.0f} head<extra></extra>")
+            fig.update_layout(
+                height=300, margin=dict(l=10, r=10, t=10, b=10),
+                paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
+                font=dict(color=TEXT, size=11), showlegend=False,
+                xaxis=dict(gridcolor=BORDER, title=None, type="category"),
+                yaxis=dict(gridcolor=BORDER, title="Head", tickformat=","))
+            st.plotly_chart(fig, use_container_width=True)
+            st.dataframe(
+                pd.DataFrame([{"Year": y, "Head (AMS est.)": by[y]["head"],
+                               "Reporting days": by[y]["days"],
+                               "Head per reporting day":
+                                   round(by[y]["head"] / by[y]["days"])
+                                   if by[y]["days"] else 0}
+                              for y in years]),
+                use_container_width=True, hide_index=True)
+            st.caption(
+                "Whole-year totals from the same daily series. **2023 is "
+                "incomplete** — AMS's daily volume section only runs from part "
+                "way through that year (156 reporting days against 225 in "
+                "2024), so its total is not comparable. 2024 and 2025 tie to "
+                "Census within about 3%, which is the cross-check that the "
+                "estimates are sound."
+            )
+else:
+    st.info("No daily receipts stored for this year yet.")
+
+st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
 # ── Tiles ───────────────────────────────────────────────────────────────────
 st.markdown('<div class="sec-header">Current Activity</div>', unsafe_allow_html=True)
 
@@ -818,7 +842,6 @@ with c[3]:
                      sub(f"{max(ann, key=ann.get)} peak of {peak:,} head"
                          if ann else "")), unsafe_allow_html=True)
 
-# ── Monthly series ──────────────────────────────────────────────────────────
 # ── Annual + crossing days, the two sources side by side ────────────────────
 st.markdown('<div class="sec-header">Both Sources, By Year</div>',
             unsafe_allow_html=True)
