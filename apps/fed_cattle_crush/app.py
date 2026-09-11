@@ -109,6 +109,43 @@ st.markdown(f"""
     padding:10px 14px; color:{MUTED}; font-size:0.82rem;
   }}
   .derived b {{ color:{TEXT}; font-size:1.05rem; }}
+
+  /* Tight label/field rows. The label is right-aligned against its input so
+     the values form one scannable column instead of drifting apart. */
+  .fld-label {{
+    text-align:right; color:{TEXT}; font-size:0.86rem; font-weight:600;
+    padding-top:0.55rem; line-height:1.2;
+  }}
+  .fld-row {{
+    display:flex; align-items:baseline; gap:12px; padding:5px 0 5px;
+    border-top:1px solid {BORDER};
+  }}
+  .fld-row .fld-label {{ flex:0 0 46%; padding-top:0; }}
+  .fld-derived {{ color:{TEXT}; font-size:1.0rem; font-weight:700; }}
+  .fld-note {{
+    display:block; color:{MUTED}; font-size:0.68rem; font-weight:400;
+    margin-top:1px;
+  }}
+
+  /* Bid / profit hero. Deliberately the largest thing on the page -- it is
+     the number a buyer is deciding. */
+  .be-line {{
+    color:{MUTED}; font-size:0.82rem; margin:0 0 4px 2px;
+  }}
+  .be-line b {{ color:{TEXT}; font-size:0.95rem; }}
+  .profit-box {{
+    border-radius:12px; padding:14px 18px; margin-top:10px; text-align:center;
+  }}
+  .profit-pos {{ background:{POS}; }}
+  .profit-neg {{ background:{NEG}; }}
+  .profit-label {{
+    color:rgba(255,255,255,0.92); font-size:0.72rem; font-weight:700;
+    text-transform:uppercase; letter-spacing:0.12em;
+  }}
+  .profit-value {{
+    color:#ffffff; font-size:2.1rem; font-weight:800; line-height:1.15;
+  }}
+  .profit-unit {{ font-size:1.0rem; font-weight:600; opacity:0.9; }}
   .srcline {{ color:{MUTED}; font-size:0.72rem; line-height:1.6; }}
   hr {{ border-color:{BORDER}; }}
   #MainMenu, footer {{ visibility:hidden; }}
@@ -231,128 +268,163 @@ if err or gf is None or le is None or gf.empty or le.empty:
     st.stop()
 
 # ── Inputs ──────────────────────────────────────────────────────────────────
-st.markdown('<div class="sec-header">Your Cattle</div>', unsafe_allow_html=True)
+# Laid out as tight label/field ROWS rather than a grid of full-width widgets.
+# The grid version put every caption above its box and left the numbers far
+# apart, so the thing a feeder actually scans -- the column of values -- was
+# broken up by whitespace and help text. Here the labels sit right-aligned
+# against the fields, so the values line up and read as a single column.
+in_col, out_col = st.columns([1.05, 1])
 
-solve_for = st.radio(
-    "Solve for",
-    ["Finish weight", "Average daily gain", "Finish date"],
-    horizontal=True, key="solve_for",
-    help="Weights, gain and dates are linked — days = finish − start, gain = "
-         "finish weight − start weight, ADG = gain ÷ days. Pick the one to "
-         "calculate and enter the rest.",
-)
+with in_col:
+    st.markdown('<div class="sec-header">Your Cattle</div>', unsafe_allow_html=True)
 
-c1, c2, c3, c4 = st.columns(4)
-with c1:
-    start_wt = st.number_input("Starting weight (lb)", 200.0, 1200.0,
-                               DEFAULTS["start_wt"], 25.0)
-with c2:
-    finish_wt = st.number_input("Target finish weight (lb)", 800.0, 1800.0,
-                                DEFAULTS["finish_wt"], 25.0,
-                                disabled=(solve_for == "Finish weight"))
-with c3:
-    adg = st.number_input("Average daily gain (lb/day)", 0.5, 6.0,
-                          DEFAULTS["adg"], 0.05,
-                          disabled=(solve_for == "Average daily gain"))
-with c4:
-    cog = st.number_input("Cost of gain ($/cwt)", 0.0, 400.0,
-                          DEFAULTS["cog"], 1.0,
-                          help="All-in cost per hundredweight of gain: feed, "
-                               "yardage, health, interest, death loss.")
+    def field(label, widget_fn):
+        lc, fc = st.columns([0.92, 1.08])
+        with lc:
+            st.markdown(f'<div class="fld-label">{label}</div>',
+                        unsafe_allow_html=True)
+        with fc:
+            return widget_fn()
 
-d1, d2, d3 = st.columns(3)
-with d1:
-    start_date = st.date_input("Feeding start date", date.today())
-with d2:
-    seed_finish = date.today() + timedelta(days=DEFAULTS["dof"])
-    finish_date = st.date_input("Planned sale date", seed_finish,
-                                disabled=(solve_for == "Finish date"))
-with d3:
-    basis = st.number_input("Live basis ($/cwt)", -30.0, 30.0,
-                            DEFAULTS["basis"], 0.25,
-                            help="Cash minus futures at the time of sale. "
-                                 "Positive means cash trades OVER the board.")
+    start_wt = field("Avg start weight", lambda: st.number_input(
+        "start_wt", 200.0, 1200.0, DEFAULTS["start_wt"], 25.0,
+        label_visibility="collapsed"))
+    finish_wt = field("Target finish", lambda: st.number_input(
+        "finish_wt", 500.0, 1800.0, DEFAULTS["finish_wt"], 25.0,
+        label_visibility="collapsed"))
+    adg = field("Rate of gain", lambda: st.number_input(
+        "adg", 0.5, 6.0, DEFAULTS["adg"], 0.05, label_visibility="collapsed",
+        help="lb per head per day"))
+    cog = field("Cost of gain", lambda: st.number_input(
+        "cog", 0.0, 400.0, DEFAULTS["cog"], 1.0, label_visibility="collapsed",
+        help="$/cwt of gain — all-in: feed, yardage, health, interest, death loss."))
+    basis = field("Live basis", lambda: st.number_input(
+        "basis", -30.0, 30.0, DEFAULTS["basis"], 0.25,
+        label_visibility="collapsed",
+        help="$/cwt, cash minus futures at sale. Positive = cash over the board."))
+    start_date = field("Start date", lambda: st.date_input(
+        "start_date", date.today(), label_visibility="collapsed"))
 
-# ── Reconcile the over-determined inputs ────────────────────────────────────
-warn = None
-if solve_for == "Finish weight":
-    days = (finish_date - start_date).days
-    if days <= 0:
-        warn = "The sale date must be after the start date."
-        days = 0
-    finish_wt = start_wt + adg * days
-elif solve_for == "Average daily gain":
-    days = (finish_date - start_date).days
-    if days <= 0:
-        warn = "The sale date must be after the start date."
-        adg = 0.0
-    else:
-        adg = (finish_wt - start_wt) / days
-        if adg <= 0:
-            warn = "Finish weight must be greater than starting weight."
-else:  # Finish date
-    gain_needed = finish_wt - start_wt
-    if gain_needed <= 0 or adg <= 0:
-        warn = "Finish weight must exceed starting weight, with a positive gain."
-        days = 0
-    else:
-        days = int(round(gain_needed / adg))
-    finish_date = start_date + timedelta(days=days)
-
+# ── Derive the dependent values ─────────────────────────────────────────────
+# Finish date is ALWAYS derived, rather than offering a "solve for" choice.
+# Start weight, target finish, rate of gain and start date are the four a
+# feeder actually knows; the sale date falls out of them. The earlier version
+# made the user pick which of five linked numbers to solve for, which was
+# correct but asked them to think about the arithmetic before they could think
+# about the cattle.
 gain = finish_wt - start_wt
+warn = None
+if gain <= 0:
+    warn = "Target finish weight must be greater than the starting weight."
+    days = 0
+elif adg <= 0:
+    warn = "Rate of gain must be positive."
+    days = 0
+else:
+    days = int(round(gain / adg))
+finish_date = start_date + timedelta(days=days)
 
 if warn:
-    st.warning(warn)
+    with in_col:
+        st.warning(warn)
     st.stop()
-
-st.markdown(
-    f'<div class="derived">Solved for <b>{solve_for.lower()}</b> — '
-    f'<b>{days}</b> days on feed &nbsp;·&nbsp; <b>{gain:,.0f} lb</b> of gain '
-    f'&nbsp;·&nbsp; finish <b>{finish_wt:,.0f} lb</b> on '
-    f'<b>{finish_date.strftime("%b %d, %Y")}</b> at <b>{adg:.2f}</b> lb/day'
-    f'</div>', unsafe_allow_html=True)
-
-# ── Contracts ───────────────────────────────────────────────────────────────
-st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
-st.markdown('<div class="sec-header">Contracts Priced Against</div>',
-            unsafe_allow_html=True)
 
 gf_auto = pick_contract(gf, "GF", start_date)
 le_auto = pick_contract(le, "LE", finish_date)
 
-e1, e2 = st.columns(2)
-with e1:
-    gf_tickers = list(gf["ticker"])
-    gf_idx = gf_tickers.index(gf_auto["ticker"]) if gf_auto else 0
-    gf_pick = st.selectbox("Feeder Cattle (buy)", gf_tickers, index=gf_idx,
-                           format_func=lambda t: label_contract(t, "GF"))
-    gf_price = float(gf[gf["ticker"] == gf_pick]["price"].iloc[0])
-    st.caption(f"\\${gf_price:,.3f}/cwt · auto-selected for a "
-               f"{start_date.strftime('%b %d')} start")
-with e2:
-    le_tickers = list(le["ticker"])
-    le_idx = le_tickers.index(le_auto["ticker"]) if le_auto else 0
-    le_pick = st.selectbox("Live Cattle (sell)", le_tickers, index=le_idx,
-                           format_func=lambda t: label_contract(t, "LE"))
-    le_price = float(le[le["ticker"] == le_pick]["price"].iloc[0])
-    st.caption(f"\\${le_price:,.3f}/cwt · auto-selected for a "
-               f"{finish_date.strftime('%b %d')} sale")
+# Auto-selected by default so the common case needs no thought, but still
+# overridable: a silent month-shift between the contract the page picked and
+# the one a feeder is actually hedging against is worth several dollars a
+# hundredweight, and would be invisible if it could not be changed or seen.
+with st.expander("Override the contracts", expanded=False):
+    o1, o2 = st.columns(2)
+    with o1:
+        gf_tickers = list(gf["ticker"])
+        gf_pick = st.selectbox(
+            "Feeder Cattle (buy)", gf_tickers,
+            index=gf_tickers.index(gf_auto["ticker"]) if gf_auto else 0,
+            format_func=lambda t: label_contract(t, "GF"))
+    with o2:
+        le_tickers = list(le["ticker"])
+        le_pick = st.selectbox(
+            "Live Cattle (sell)", le_tickers,
+            index=le_tickers.index(le_auto["ticker"]) if le_auto else 0,
+            format_func=lambda t: label_contract(t, "LE"))
+    st.caption(
+        "Feeder Cattle trades Jan, Mar, Apr, May, Aug, Sep, Oct, Nov; Live "
+        "Cattle only the even months. The page picks the first contract "
+        "expiring **on or after** your date — you cannot sell into an expired "
+        "contract — which is why a September sale prices off October."
+    )
+
+gf_price = float(gf[gf["ticker"] == gf_pick]["price"].iloc[0])
+le_price = float(le[le["ticker"] == le_pick]["price"].iloc[0])
 
 if le_auto and le_auto.get("beyond_curve"):
     st.warning(
         f"Your sale date is past the last listed Live Cattle contract "
-        f"({label_contract(le_auto['ticker'], 'LE')}), so that one is being used. "
+        f"({label_contract(le_auto['ticker'], 'LE')}), so that one is used. "
         f"The board does not trade that far out yet."
     )
 
-# ── The crush ───────────────────────────────────────────────────────────────
-feeder_cost = start_wt / 100.0 * gf_price
+with in_col:
+    # %-m is glibc-only and raises ValueError on Windows; %b %d, %Y is portable
+    # and this runs on both a Windows desktop and Streamlit Cloud's Linux.
+    st.markdown(
+        f'<div class="fld-row"><span class="fld-label">Finish date</span>'
+        f'<span class="fld-derived">{finish_date.strftime("%b %d, %Y")}'
+        f'<span class="fld-note">{days} days on feed · {gain:,.0f} lb gain</span>'
+        f'</span></div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="fld-row"><span class="fld-label">Live at finish</span>'
+        f'<span class="fld-derived">${le_price:,.3f}'
+        f'<span class="fld-note">{label_contract(le_pick, "LE")}</span>'
+        f'</span></div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="fld-row"><span class="fld-label">Feeder at start</span>'
+        f'<span class="fld-derived">${gf_price:,.3f}'
+        f'<span class="fld-note">{label_contract(gf_pick, "GF")}</span>'
+        f'</span></div>', unsafe_allow_html=True)
+
+# ── Bid price: the question a buyer actually asks ───────────────────────────
+# The board price for feeders is what the market says; the BID is what this
+# buyer will pay, and it is the only number they control on the buy side. So it
+# is the input, seeded from the futures, and the feeder break-even sits above it
+# as the ceiling to stay under.
 gain_cost = gain / 100.0 * cog
-total_cost = feeder_cost + gain_cost
 sale_price = le_price + basis
 revenue = finish_wt / 100.0 * sale_price
+feeder_be = (revenue - gain_cost) / (start_wt / 100.0) if start_wt else 0.0
+
+with out_col:
+    st.markdown('<div class="sec-header">Bid Price</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="be-line">Feeder break even '
+        f'<b>${feeder_be:,.2f}</b> /cwt</div>', unsafe_allow_html=True)
+    bid = st.number_input("Bid ($/cwt)", 0.0, 1000.0,
+                          float(round(gf_price, 2)), 0.25,
+                          label_visibility="collapsed",
+                          help="What you would pay for the feeders, $/cwt. "
+                               "Seeded from the futures; move it to your bid.")
+
+feeder_cost = start_wt / 100.0 * bid
+total_cost = feeder_cost + gain_cost
 profit = revenue - total_cost
 breakeven = total_cost / (finish_wt / 100.0) if finish_wt else 0.0
+
+with out_col:
+    pk = "pos" if profit >= 0 else "neg"
+    st.markdown(
+        f'<div class="profit-box profit-{pk}">'
+        f'<div class="profit-label">Profit</div>'
+        f'<div class="profit-value">{"+" if profit >= 0 else "−"}'
+        f'${abs(profit):,.2f}<span class="profit-unit">/head</span></div>'
+        f'</div>', unsafe_allow_html=True)
+    st.caption(
+        f"At a \\${bid:,.2f} bid. Break even on the feeders is "
+        f"**\\${feeder_be:,.2f}** — bid under that and this pen makes money at "
+        f"today's board."
+    )
 
 st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 st.markdown('<div class="sec-header">The Crush</div>', unsafe_allow_html=True)
