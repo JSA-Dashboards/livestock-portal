@@ -476,6 +476,34 @@ def receipts_by_crossing(conn, since=None):
     return sorted([(p, s, v or 0) for p, s, v in rows], key=lambda t: -t[2])
 
 
+def weekly_volumes(conn, commodity="Feeder Cattle"):
+    """
+    [(week_start, head)] weekly ACTUALS from 3629.
+
+    STARTS IN 2023, and no further back is possible. AMS's series simply does
+    not exist before then -- asking MARS for 2014 onward returns nothing earlier
+    for either the weekly or the daily section. Census is the only source with
+    2019 history and it publishes MONTHLY only, so a weekly series reaching 2019
+    would have to be manufactured by splitting months into weeks. It is not
+    manufactured here; the chart says where the data starts instead.
+
+    A NULL volume is stored as 0, not dropped. 65 of 181 weeks are NULL and they
+    are the suspension weeks -- checked against the daily series, which agrees:
+    of the 100 overlapping weeks, only one is NULL in 3629 while daily data
+    exists, and that week's daily estimates are themselves 0. Dropping them
+    would draw a continuous line across the closure and hide the whole story.
+
+    These are ACTUALS, which is why they are preferred over rolling the daily
+    estimates into weeks: over 99 comparable weeks the two differ by a mean of
+    1,255 head, the estimates being rounded to the nearest hundred per day.
+    """
+    rows = conn.cursor().execute(
+        "SELECT report_begin, current_volume FROM border_volumes "
+        f"WHERE category = 'Import' AND commodity = '{commodity}' "
+        "AND origin = 'Mexico' ORDER BY report_begin").fetchall()
+    return [(str(db.iso(b)), int(v or 0)) for b, v in rows]
+
+
 def ytd_actuals(conn, commodity="Feeder Cattle"):
     """
     AMS's OWN year-to-date, not one this page computes.

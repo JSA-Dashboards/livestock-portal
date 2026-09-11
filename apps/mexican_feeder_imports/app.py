@@ -205,6 +205,7 @@ def load_all():
                                                    since=f"{date.today().year}-01-01"),
             "ytd_ams": bd.ytd_actuals(conn),
             "since_open": bd.since_reopening(conn),
+            "weekly": bd.weekly_volumes(conn),
             "price_grid": bd.price_grid(conn),
             "price_series": bd.price_series(conn, grade=bd.INDEX_GRADE),
             "spread": bd.index_spread(conn),
@@ -384,6 +385,105 @@ if Y:
         + (f", a {gap:+.1f}% rounding gap" if gap is not None else "")
         + ", which is why the boxes do not tie exactly."
     )
+
+st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
+# ── Import volumes: one chart, monthly or weekly ────────────────────────────
+# ONE chart with a toggle rather than two stacked charts: these answer the same
+# question at two resolutions, and showing both at once invites reading a
+# monthly bar against a weekly one.
+with st.container(key="wm-volumes"):
+    st.markdown('<div class="sec-header">Import Volumes</div>',
+                unsafe_allow_html=True)
+
+    gran = st.radio("Resolution", ["Monthly", "Weekly"], horizontal=True,
+                    label_visibility="collapsed", key="vol_gran")
+
+    if gran == "Monthly":
+        pts = [(pd.Timestamp(str(pp) + "-01"), h) for pp, h in (D["monthly"] or [])]
+        hover = "%{x|%b %Y}<br>%{y:,.0f} head<extra></extra>"
+        src_note = (
+            f"**US Census**, the official customs count, monthly back to 2019 "
+            f"and current to {fmt_month(F['census_through'])}."
+        )
+    else:
+        pts = [(pd.Timestamp(w), h) for w, h in (D.get("weekly") or [])]
+        hover = "week of %{x|%b %d, %Y}<br>%{y:,.0f} head<extra></extra>"
+        src_note = (
+            "**USDA AMS**, weekly actuals. This series **starts in 2023** — AMS "
+            "does not publish it any earlier, and Census, which does reach 2019, "
+            "publishes monthly only. Splitting Census months into weeks would "
+            "invent data, so the weekly view simply starts where the weekly data "
+            "does. Switch to Monthly for the longer history."
+        )
+
+    if pts:
+        xs = [x for x, _h in pts]
+        ys = [h for _x, h in pts]
+        srt = sorted(ys)
+        n = len(srt)
+        med = srt[n // 2] if n % 2 else (srt[n // 2 - 1] + srt[n // 2]) / 2
+        zeros = sum(1 for v in ys if v == 0)
+
+        fig = go.Figure()
+        fig.add_bar(x=xs, y=ys, marker_color=JPSI_BLUE, name="Head",
+                    hovertemplate=hover)
+        fig.add_hline(
+            y=med, line_width=1.6, line_dash="dash", line_color=AMBER,
+            annotation_text=f"median {med:,.0f}", annotation_position="top left",
+            annotation_font=dict(color=AMBER, size=11))
+        fig.update_layout(
+            height=340, margin=dict(l=10, r=10, t=10, b=10),
+            paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
+            font=dict(color=TEXT, size=11), showlegend=False,
+            xaxis=dict(gridcolor=BORDER, title=None),
+            yaxis=dict(gridcolor=BORDER, title="Head", tickformat=","),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown(
+            f"<div style='color:{MUTED};font-size:0.8rem;margin:-4px 0 6px;'>"
+            f"Median <b style='color:{AMBER}'>{med:,.0f} head</b> per "
+            f"{'month' if gran == 'Monthly' else 'week'} across "
+            f"{n:,} {'months' if gran == 'Monthly' else 'weeks'}"
+            f"{f', {zeros} of them zero' if zeros else ''}."
+            f"</div>", unsafe_allow_html=True)
+
+        # Say WHAT the median is computed over, not how far it sits from
+        # "normal" -- an earlier draft called it "well below a normal trading
+        # month", which the numbers do not support: 92,865 against typical
+        # months of 100-120k is somewhat below, not dramatically.
+        unit = "month" if gran == "Monthly" else "week"
+        st.caption(
+            src_note
+            + (f" The median is taken over **everything plotted, including the "
+               f"{zeros} closed {unit}s at zero**, so it sits below a typical "
+               f"trading {unit} rather than describing one." if zeros else "")
+        )
+
+        if gran == "Monthly":
+            st.caption(
+                f"**Not every decline here is the border.** The 2021–22 slide — "
+                f"from 1.44m head in 2020 to 869,630 in 2022 — was drought and "
+                f"herd liquidation in northern Mexico, with the border open the "
+                f"whole time; volume then recovered to about 1.24m in 2023 and "
+                f"2024. Only the collapse from December 2024 is New World "
+                f"Screwworm, and it came in two closures: the first took "
+                f"November 2024's 102,751 head to zero that December, then a "
+                f"partial reopening ran February–May 2025 before closing again "
+                f"in June. Census is current to "
+                f"{fmt_month(F['census_through'])}, so the August 2026 "
+                f"reopening is not in this chart yet — it should first appear "
+                f"in the August 2026 release, around early October."
+            )
+        else:
+            st.caption(
+                "The weekly view shows the reopening that the monthly Census "
+                "chart cannot yet: the week of 24 August 2026 is the first "
+                "non-zero week since July 2025."
+            )
+    else:
+        st.info("No volume data stored for this resolution yet.")
 
 st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
@@ -710,40 +810,6 @@ with c[3]:
                          if ann else "")), unsafe_allow_html=True)
 
 # ── Monthly series ──────────────────────────────────────────────────────────
-with st.container(key="wm-monthly"):
-    st.markdown('<div class="sec-header">Monthly Imports, Feeder Cattle</div>',
-                unsafe_allow_html=True)
-    m = D["monthly"]
-    if m:
-        mx = [pd.Timestamp(str(p) + "-01") for p, _ in m]
-        my = [h for _, h in m]
-        fig = go.Figure()
-        fig.add_bar(x=mx, y=my, marker_color=JPSI_BLUE, name="Head",
-                    hovertemplate="%{x|%b %Y}<br>%{y:,.0f} head<extra></extra>")
-        fig.update_layout(
-            height=340, margin=dict(l=10, r=10, t=10, b=10),
-            paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
-            font=dict(color=TEXT, size=11), showlegend=False,
-            xaxis=dict(gridcolor=BORDER, title=None),
-            yaxis=dict(gridcolor=BORDER, title="Head", tickformat=","),
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        st.caption(
-            f"**Not every decline here is the border.** The 2021–22 slide — from "
-            f"1.44m head in 2020 to 869,630 in 2022 — was drought and herd "
-            f"liquidation in northern Mexico, with the border open the whole "
-            f"time; volume then recovered to about 1.24m in 2023 and 2024. Only "
-            f"the collapse from December 2024 is New World Screwworm, and it came "
-            f"in two closures: the first took November 2024's 102,751 head to "
-            f"zero that December, then a partial reopening ran February–May 2025 "
-            f"before closing again in June. "
-            f"Census is current to {fmt_month(F['census_through'])}, so the "
-            f"August 2026 reopening is not in this chart yet — it should first "
-            f"appear in the August 2026 release, around early October."
-        )
-    else:
-        st.info("No Census months stored yet.")
-
 # ── Annual + crossing days, the two sources side by side ────────────────────
 st.markdown('<div class="sec-header">Both Sources, By Year</div>',
             unsafe_allow_html=True)
