@@ -6,14 +6,21 @@ the US calf crop and concentrated in the southern Plains. New World Screwworm
 suspensions cut that to 214,394 head in 2025 and to zero for the first seven
 months of 2026. Douglas, AZ reopened on 24 August 2026 -- one crossing of five.
 
-THE PAGE IS BUILT AROUND A LAG. Census carries the head counts but runs about
-six weeks behind; AMS carries the border status daily but publishes no numbers
-at all (every one of its seven International Livestock reports returns empty
-data fields through MARS). So the top of the page is AMS -- current to
-yesterday, qualitative -- and the volume charts below are Census, clearly
-labelled with what they are current to. In September 2026 a Census-only page
-would have shown zero imports all year and said nothing about the reopening
-three weeks earlier.
+THE PAGE IS BUILT AROUND A LAG. AMS publishes daily head counts by crossing
+point, current to yesterday, plus exact weekly totals with its own year-to-date
+a week behind that. Census is the official customs count with seven years of
+history but runs about six weeks late. So AMS answers "what is crossing now"
+and Census answers "how does that compare to a normal year". In September 2026
+a Census-only page would have shown zero imports for the whole year and said
+nothing about the border reopening three weeks earlier.
+
+A CORRECTION WORTH KEEPING. The first version of this page asserted that AMS
+published no numbers at all and showed crossing DAYS as a proxy for volume.
+That was wrong. MARS reports are split into SECTIONS addressed as PATH segments
+(/reports/3486/Report%20Volume); requesting a report without one returns just
+its header -- narrative and dates, nothing numeric -- which looks exactly like
+a report with no data. The section list was in the response's `reportSections`
+key all along.
 
 DIRECTION MATTERS. AMS's status report covers both directions, and its standing
 September 2026 note is about EXPORTS to Mexico being suspended while imports
@@ -191,6 +198,13 @@ def load_all():
             "kind_year": kind_year,
             "vph": bd.value_per_head(conn),
             "fresh": bd.data_freshness(conn),
+            "daily": bd.daily_receipts(conn, since=f"{date.today().year}-01-01"),
+            "daily_all": bd.daily_receipts(conn),
+            "by_year": bd.receipts_by_year(conn),
+            "by_crossing": bd.receipts_by_crossing(conn,
+                                                   since=f"{date.today().year}-01-01"),
+            "ytd_ams": bd.ytd_actuals(conn),
+            "since_open": bd.since_reopening(conn),
         }
     except Exception as e:
         st.session_state["_mfi_error"] = f"{type(e).__name__}: {e}"
@@ -222,7 +236,7 @@ F = D["fresh"]
 col_title, col_date = st.columns([6, 2])
 with col_title:
     st.markdown("## JSA — Mexican Feeder Imports")
-    st.caption("Border status from USDA AMS · head counts from Census trade data")
+    st.caption("Daily head counts and border status from USDA AMS · historical customs counts from US Census trade data")
 with col_date:
     st.markdown(
         f"<div style='text-align:right;color:{MUTED};font-size:0.75rem;padding-top:6px;'>"
@@ -291,15 +305,176 @@ if ex_segs:
 
 # ── Data currency ───────────────────────────────────────────────────────────
 st.caption(
-    f"**Two sources, two different lags.** Border status and crossing activity "
-    f"are current to {fmt_date(F['ams_through'])}. Census head counts run about "
-    f"six weeks behind and are current to **{fmt_month(F['census_through'])}**; "
-    f"the last month with any volume was {fmt_month(F['census_last_volume'])}. "
-    f"The charts below are Census, so a reopening shows up in the banner weeks "
-    f"before it reaches them."
+    f"**Two sources, two different lags.** AMS publishes head counts daily and "
+    f"is current to {fmt_date(F['ams_through'])}, with exact weekly totals a "
+    f"week behind that. Census is the official customs count with seven years "
+    f"of history, but runs about six weeks late — currently through "
+    f"**{fmt_month(F['census_through'])}**. So AMS answers *what is crossing "
+    f"now* and Census answers *how this compares to a normal year*."
 )
 
 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+
+# ── Year to date ────────────────────────────────────────────────────────────
+# The question the page exists to answer once the border reopens: how much has
+# actually crossed this year, and against what.
+Y = D.get("ytd_ams")
+SO = D.get("since_open")
+this_yr = date.today().year
+
+st.markdown(f'<div class="sec-header">{this_yr} Year to Date</div>',
+            unsafe_allow_html=True)
+
+c = st.columns(4)
+with c[0]:
+    st.markdown(tile(f"{this_yr} YTD Head",
+                     f"{Y['ytd']:,}" if Y else "—",
+                     pct_delta(Y.get("pct") if Y else None,
+                               f" vs {Y['prior_year']}" if Y else "")
+                     + sub(f"AMS actual, through {fmt_date(Y['week_end'])}"
+                           if Y else "no YTD published")),
+                unsafe_allow_html=True)
+with c[1]:
+    st.markdown(tile(f"{Y['prior_year']} YTD Head" if Y else "Prior YTD",
+                     f"{Y['prior_ytd']:,}" if Y and Y.get("prior_ytd") else "—",
+                     sub("same point last year")), unsafe_allow_html=True)
+with c[2]:
+    st.markdown(tile("Since Reopening",
+                     f"~{SO['head']:,}" if SO else "—",
+                     sub(f"est., {fmt_date(SO['from'])} – {fmt_date(SO['latest'])}"
+                         if SO else "")), unsafe_allow_html=True)
+with c[3]:
+    st.markdown(tile("Latest Week",
+                     f"{Y['week']:,}" if Y and Y.get("week") is not None else "—",
+                     sub(f"week ending {fmt_date(Y['week_end'])}" if Y else "")),
+                unsafe_allow_html=True)
+
+if Y:
+    st.caption(
+        f"**{this_yr} YTD is AMS's own figure, not one computed here** — AMS "
+        f"defines the cut-off, so a partial year cannot be measured against a "
+        f"full one by accident. It is an ACTUAL count and runs a week behind "
+        f"the daily series below; the daily numbers are estimates rounded to "
+        f"the nearest hundred head. Through {fmt_date(Y['week_end'])} the daily "
+        f"estimates summed to about 2,600 against an actual {Y['ytd']:,} — a "
+        f"1.7% rounding gap, which is why the two tiles above do not tie "
+        f"exactly."
+    )
+
+st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
+# ── Daily crossings ─────────────────────────────────────────────────────────
+st.markdown('<div class="sec-header">Daily Crossings</div>',
+            unsafe_allow_html=True)
+
+daily = D.get("daily") or []
+if daily:
+    t_day, t_wtd, t_port, t_hist = st.tabs(
+        ["Per day", "Week to date", "By crossing", "Against prior years"])
+
+    with t_day:
+        dx = [pd.Timestamp(d) for d, _v, _w in daily]
+        dy = [v for _d, v, _w in daily]
+        fig = go.Figure()
+        fig.add_bar(x=dx, y=dy, marker_color=JPSI_BLUE,
+                    hovertemplate="%{x|%a %b %d}<br>%{y:,.0f} head<extra></extra>")
+        if SO and SO.get("from"):
+            fig.add_vline(x=pd.Timestamp(SO["from"]), line_width=1.5,
+                          line_dash="dot", line_color=POS)
+            fig.add_annotation(x=pd.Timestamp(SO["from"]), y=1, yref="paper",
+                               text="reopened", showarrow=False, yanchor="bottom",
+                               font=dict(size=10, color=POS))
+        fig.update_layout(
+            height=320, margin=dict(l=10, r=10, t=24, b=10),
+            paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
+            font=dict(color=TEXT, size=11), showlegend=False,
+            xaxis=dict(gridcolor=BORDER, title=None),
+            yaxis=dict(gridcolor=BORDER, title="Head", tickformat=","))
+        st.plotly_chart(fig, use_container_width=True)
+        zero = sum(1 for _d, v, _w in daily if v == 0)
+        st.caption(
+            f"Every reporting day in {this_yr}: {len(daily)} days, "
+            f"{len(daily) - zero} with cattle and {zero} published with none. "
+            f"Head counts are AMS estimates, rounded to the nearest hundred."
+        )
+        st.dataframe(
+            pd.DataFrame([{"Date": d, "Head": v, "Week to date": w}
+                          for d, v, w in reversed(daily)]),
+            use_container_width=True, hide_index=True)
+
+    with t_wtd:
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=[pd.Timestamp(d) for d, _v, w in daily],
+            y=[w for _d, _v, w in daily], mode="lines+markers",
+            line=dict(color=AMBER, width=2), marker=dict(size=6),
+            hovertemplate="%{x|%a %b %d}<br>%{y:,.0f} head WTD<extra></extra>"))
+        fig.update_layout(
+            height=320, margin=dict(l=10, r=10, t=10, b=10),
+            paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
+            font=dict(color=TEXT, size=11), showlegend=False,
+            xaxis=dict(gridcolor=BORDER, title=None),
+            yaxis=dict(gridcolor=BORDER, title="Head, week to date",
+                       tickformat=","))
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption(
+            "AMS's running week-to-date total, which **resets each Monday** — "
+            "the sawtooth is the reset, not a collapse in trade. Shown because "
+            "it is how the AMS report itself presents the week."
+        )
+
+    with t_port:
+        bc = D.get("by_crossing") or []
+        if bc:
+            st.dataframe(
+                pd.DataFrame([{"Crossing": p, "State": s, f"{this_yr} head": v}
+                              for p, s, v in bc]),
+                use_container_width=True, hide_index=True)
+            st.caption(
+                "Per-crossing detail. These are a **breakdown, not an exact "
+                "decomposition** — AMS's per-crossing rows disagreed with its "
+                "own published total on 19 of 463 days measured, so the "
+                "headline figures above use AMS's total row rather than a sum "
+                "of these."
+            )
+        else:
+            st.info(f"No per-crossing detail reported yet in {this_yr}.")
+
+    with t_hist:
+        by = D.get("by_year") or {}
+        if by:
+            years = sorted(by)
+            fig = go.Figure()
+            fig.add_bar(x=years, y=[by[y]["head"] for y in years],
+                        marker_color=JPSI_BLUE, name="Head",
+                        hovertemplate="%{x}<br>%{y:,.0f} head<extra></extra>")
+            fig.update_layout(
+                height=300, margin=dict(l=10, r=10, t=10, b=10),
+                paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
+                font=dict(color=TEXT, size=11), showlegend=False,
+                xaxis=dict(gridcolor=BORDER, title=None, type="category"),
+                yaxis=dict(gridcolor=BORDER, title="Head", tickformat=","))
+            st.plotly_chart(fig, use_container_width=True)
+            st.dataframe(
+                pd.DataFrame([{"Year": y, "Head (AMS est.)": by[y]["head"],
+                               "Reporting days": by[y]["days"],
+                               "Head per reporting day":
+                                   round(by[y]["head"] / by[y]["days"])
+                                   if by[y]["days"] else 0}
+                              for y in years]),
+                use_container_width=True, hide_index=True)
+            st.caption(
+                "Whole-year totals from the same daily series. **2023 is "
+                "incomplete** — AMS's daily volume section only runs from part "
+                "way through that year (156 reporting days against 225 in "
+                "2024), so its total is not comparable. 2024 and 2025 tie to "
+                "Census within about 3%, which is the cross-check that the "
+                "estimates are sound."
+            )
+else:
+    st.info("No daily receipts stored for this year yet.")
+
+st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
 # ── Tiles ───────────────────────────────────────────────────────────────────
 st.markdown('<div class="sec-header">Current Activity</div>', unsafe_allow_html=True)
@@ -500,9 +675,9 @@ if D["commentary"]:
     st.dataframe(pd.DataFrame(crows), use_container_width=True, hide_index=True,
                  column_config={"Report": st.column_config.TextColumn(width="large")})
     st.caption(
-        "AMS's own words, newest first. This is the only place the weight ranges "
-        "and trade tone appear at all — MARS returns no structured fields for "
-        "these reports, so the narrative is the data."
+        "AMS's own words, newest first — trade tone, demand, and what the supply "
+        "consisted of. The head counts above come from the same report's volume "
+        "section; this is the colour that no number carries."
     )
 
 # ── Suspension timeline ─────────────────────────────────────────────────────
@@ -541,14 +716,22 @@ with st.expander("Sources and method"):
     st.markdown(f"""
 **AMS (USDA Market News), current to {fmt_date(F['ams_through'])}**
 
-- Report 3486, *Mexico to United States Feeder Cattle Import Summary* — the
-  narrative log and crossing activity.
-- Report 3629, *U.S. – Mexico Livestock Imports/Exports* — the weekly status
-  note.
-- Every one of AMS's seven International Livestock reports returns **zero
-  structured data fields** through the MARS API. The published head counts exist
-  only in the report body on mymarketnews, not in the API, which is why the
-  volumes here come from Census instead.
+- Report 3486, *Mexico to United States Feeder Cattle Import Summary* —
+  section **Report Volume** gives daily receipts by crossing point
+  (`receipts_current_est`, rounded to the nearest hundred head) and the
+  week-to-date running total; section **Report Header** gives the narrative log.
+- Report 3629, *U.S. – Mexico Livestock Imports/Exports* — section **Report
+  Volume** gives exact weekly volumes with AMS's own year-to-date and
+  prior-year-to-date; **Report Header** gives the weekly status note.
+- MARS sections are **path** segments (`/reports/3486/Report%20Volume`). Passing
+  `section` as a query parameter is accepted and silently ignored, returning the
+  header — which is how this source was first mistaken for having no data.
+- Daily figures are AMS **estimates**; weekly and YTD figures are **actuals**.
+  Through 2026-09-04 the daily estimates summed to ~2,600 against an actual
+  2,557 — a 1.7% rounding gap.
+- Head counts use AMS's own "All Crossing Points / All Crossing States" row.
+  The per-crossing rows are hierarchical rollups that triple-count if summed,
+  and they disagreed with the published total on 19 of 463 days measured.
 - Crossing days exclude days AMS published but reported no cattle crossing. AMS
   only began publishing those in 2026, so the raw report count understates the
   closure.
@@ -568,10 +751,11 @@ with st.expander("Sources and method"):
 
 **Not shown, and why**
 
-- No price series. AMS quotes the border market in the narrative but publishes
-  no structured prices for these reports, and Census value-per-head is a
-  declared customs value that moves with both the market and the weight mix —
-  useful as a level check, not as a quote.
+- No price series **yet**. Report 3486's *Report Detail Current* section does
+  carry structured prices, weight breaks, frame and muscle grade — it is simply
+  not ingested here, and is the obvious next addition. Census value-per-head is
+  a declared customs value that moves with both the market and the weight mix,
+  so it is a level check rather than a quote.
 """)
 
 st.markdown("<hr style='margin:18px 0 8px;'>", unsafe_allow_html=True)

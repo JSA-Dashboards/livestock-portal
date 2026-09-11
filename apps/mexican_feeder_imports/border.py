@@ -9,20 +9,32 @@ daily job pushes both to JSA.CME_FEEDER_CATTLE.
 
 TWO SOURCES, NEITHER SUFFICIENT ALONE.
 
-  AMS (border_reports)      current to yesterday, but carries NO numbers. All
-                            seven of AMS's International Livestock reports
-                            return zero structured data fields through MARS, so
-                            the narrative text is the data. Gives trade status,
-                            which crossings are open, and market tone.
+  AMS daily      (border_receipts)  head counts by crossing point, current to
+                                    yesterday. ESTIMATES, rounded to the
+                                    nearest hundred head.
+  AMS weekly     (border_volumes)   exact weekly volumes with AMS's own YTD and
+                                    prior-year YTD. A week behind the daily.
+  AMS narrative  (border_reports)   trade status, which crossings are open,
+                                    market tone -- what no number carries.
+  Census         (census_cattle_    the official customs count, seven years of
+                 imports)           history, about six weeks late. January
+                                    publishes in early March.
 
-  Census (census_cattle_    the actual head counts, but about six weeks late:
-  imports)                  January publishes in early March. Cannot answer
-                            "what crossed last week".
+So AMS answers "what is crossing now" and Census answers "how does that compare
+to a normal year". In September 2026 Census showed zero imports for the entire
+year while AMS showed Douglas, AZ reopening on 24 August and 5,200 head crossing
+since -- not a contradiction, just the six-week lag. The two tie out where they
+overlap: AMS's 2024 and 2025 daily totals land within ~3% of Census.
 
-The two together are the point. In September 2026 Census showed zero imports
-for the entire year while AMS showed Douglas, AZ reopening on 24 August -- not a
-contradiction, just the six-week lag. Anything built on Census alone would have
-reported the border closed more than three weeks after it opened.
+A CORRECTION WORTH KEEPING. The first version of this module asserted AMS
+"carries NO numbers ... all seven International Livestock reports return zero
+structured data fields", and the page showed crossing DAYS as a proxy. That was
+wrong. MARS reports are split into SECTIONS addressed as PATH segments
+(/reports/3486/Report%20Volume); ask for a report without one and you get its
+header -- narrative and dates, nothing numeric -- which is indistinguishable
+from a report that has no data. Passing `section` as a query parameter is
+accepted and silently ignored. The section list was in the response's
+`reportSections` key the whole time.
 
 WHY 320 KG MATTERS. Census's weight bands top out at "320 kg or more", and
 320 kg is 705 lb -- the very bottom of the CME index's 700-899 lb window. Nearly
@@ -399,6 +411,121 @@ def weight_band(descr: str) -> str:
     if "320 KG OR MORE" in d:
         return BANDS[3]
     return BANDS[4]
+
+
+# ── AMS head counts (the timely series) ─────────────────────────────────────
+#
+# These come from MARS report SECTIONS, which are PATH segments
+# (/reports/3486/Report%20Volume). Requesting a report without one returns only
+# its header -- narrative and dates, nothing numeric -- which is why an earlier
+# version of this page concluded AMS published no numbers at all and showed
+# crossing DAYS as a proxy. It publishes head counts daily.
+#
+# Two series, different in kind, never to be mixed:
+#   border_receipts  DAILY, field named receipts_current_EST, rounded to the
+#                    nearest 50-100 head. Current to yesterday.
+#   border_volumes   WEEKLY ACTUALS with AMS's own YTD and prior-year YTD
+#                    already computed. Exact, but a week behind.
+# Through 2026-09-04 the daily estimates summed to 2,600 against an actual
+# 2,557 -- a 1.7% rounding gap. Small, but the page labels which it is showing.
+
+def daily_receipts(conn, since=None):
+    """
+    [(date, head, week_to_date)] -- AMS's own grand-total row per day.
+
+    NEVER sums the per-crossing rows to get this. They are hierarchical rollups
+    (all-points / per-state / per-crossing), so summing triple-counts, and the
+    parts do not always reconcile: over 463 days the named crossings disagreed
+    with AMS's published total on 19 of them. is_total flags the authoritative
+    row at ingest so no reader has to re-derive that rule.
+    """
+    sql = ("SELECT report_date, receipts_est, receipts_wtd_est "
+           "FROM border_receipts WHERE is_total = 1")
+    if since:
+        sql += f" AND report_date >= '{since}'"
+    sql += " ORDER BY report_date"
+    return [(str(db.iso(d)), v or 0, w or 0)
+            for d, v, w in conn.cursor().execute(sql).fetchall()]
+
+
+def receipts_by_year(conn):
+    """{year: {"head", "days"}} from the daily estimate series."""
+    out = {}
+    for d, v, _w in daily_receipts(conn):
+        y = str(d)[:4]
+        r = out.setdefault(y, {"head": 0, "days": 0})
+        r["head"] += v
+        r["days"] += 1
+    return dict(sorted(out.items()))
+
+
+def receipts_by_crossing(conn, since=None):
+    """
+    [(crossing, state, head)] detail, busiest first.
+
+    Detail only: these can disagree with the published total, so the page must
+    present them as a breakdown rather than as something that adds up.
+    """
+    sql = ("SELECT crossing_point, crossing_state, SUM(receipts_est) "
+           "FROM border_receipts WHERE is_total = 0 "
+           "AND crossing_point <> 'All Crossing Points'")
+    if since:
+        sql += f" AND report_date >= '{since}'"
+    sql += " GROUP BY crossing_point, crossing_state"
+    rows = conn.cursor().execute(sql).fetchall()
+    return sorted([(p, s, v or 0) for p, s, v in rows], key=lambda t: -t[2])
+
+
+def ytd_actuals(conn, commodity="Feeder Cattle"):
+    """
+    AMS's OWN year-to-date, not one this page computes.
+
+    Worth using rather than summing the daily series: AMS defines the cut-off,
+    so a partial current year cannot be mismeasured against a full prior one --
+    the trap that had the index's 2026 YTD reading the wrong sign before the
+    weekday alignment went in. Returns the latest week carrying a YTD figure.
+    """
+    rows = conn.cursor().execute(
+        "SELECT report_begin, report_end, current_volume, current_ytd, "
+        "       prior_volume, prior_ytd, current_year, prior_year "
+        "FROM border_volumes WHERE category = 'Import' "
+        f"AND commodity = '{commodity}' AND origin = 'Mexico' "
+        "ORDER BY report_begin DESC").fetchall()
+    for b, e, cv, cy, pv, py, yr, pyr in rows:
+        if cy is None:
+            continue          # weeks during the shutdown carry no YTD at all
+        return {
+            "week_begin": str(db.iso(b)), "week_end": str(db.iso(e)),
+            "week": cv, "ytd": cy, "prior_week": pv, "prior_ytd": py,
+            "year": yr, "prior_year": pyr,
+            "pct": ((cy / py - 1) * 100) if py else None,
+        }
+    return None
+
+
+def since_reopening(conn):
+    """
+    Head crossed since the border reopened, from the daily series.
+
+    Deliberately the daily estimates rather than AMS's weekly actuals: the
+    actuals lag a week, and "how many since it reopened" is a question about
+    right now. The caller is told it is an estimate.
+    """
+    r = reopening(conn)
+    if not r or not r.get("date"):
+        return None
+    rows = daily_receipts(conn, since=r["date"])
+    if not rows:
+        return None
+    crossed = [(d, v) for d, v, _w in rows if v > 0]
+    return {
+        "from": r["date"],
+        "head": sum(v for _d, v, _w in rows),
+        "days": len(rows),
+        "days_with_cattle": len(crossed),
+        "best_day": max(crossed, key=lambda t: t[1]) if crossed else None,
+        "latest": rows[-1][0],
+    }
 
 
 def _national(conn):
