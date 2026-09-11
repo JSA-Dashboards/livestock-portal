@@ -330,8 +330,24 @@ this_yr = date.today().year
 st.markdown(f'<div class="sec-header">{this_yr} Year to Date</div>',
             unsafe_allow_html=True)
 
+# Reads left to right from most immediate to broadest context: what crossed on
+# the last reporting day, what that adds up to since the border reopened, the
+# official year to date, and the same point last year.
+daily = D.get("daily") or []
+last_day = daily[-1] if daily else None
+
 c = st.columns(4)
 with c[0]:
+    st.markdown(tile("Head Crossed",
+                     f"{last_day[1]:,}" if last_day else "—",
+                     sub(f"est., {fmt_date(last_day[0])}" if last_day
+                         else "no reporting day yet")), unsafe_allow_html=True)
+with c[1]:
+    st.markdown(tile("Running Total",
+                     f"~{SO['head']:,}" if SO else "—",
+                     sub(f"est., since reopening {fmt_date(SO['from'])}"
+                         if SO else "")), unsafe_allow_html=True)
+with c[2]:
     st.markdown(tile(f"{this_yr} YTD Head",
                      f"{Y['ytd']:,}" if Y else "—",
                      pct_delta(Y.get("pct") if Y else None,
@@ -339,31 +355,27 @@ with c[0]:
                      + sub(f"AMS actual, through {fmt_date(Y['week_end'])}"
                            if Y else "no YTD published")),
                 unsafe_allow_html=True)
-with c[1]:
+with c[3]:
     st.markdown(tile(f"{Y['prior_year']} YTD Head" if Y else "Prior YTD",
                      f"{Y['prior_ytd']:,}" if Y and Y.get("prior_ytd") else "—",
                      sub("same point last year")), unsafe_allow_html=True)
-with c[2]:
-    st.markdown(tile("Since Reopening",
-                     f"~{SO['head']:,}" if SO else "—",
-                     sub(f"est., {fmt_date(SO['from'])} – {fmt_date(SO['latest'])}"
-                         if SO else "")), unsafe_allow_html=True)
-with c[3]:
-    st.markdown(tile("Latest Week",
-                     f"{Y['week']:,}" if Y and Y.get("week") is not None else "—",
-                     sub(f"week ending {fmt_date(Y['week_end'])}" if Y else "")),
-                unsafe_allow_html=True)
 
 if Y:
+    # Derived, not hardcoded: the estimate-vs-actual gap moves every week, and a
+    # literal here would quietly go stale while still reading as a measurement.
+    est_to_date = sum(v for d, v, _w in daily if str(d) <= str(Y["week_end"]))
+    gap = ((est_to_date / Y["ytd"] - 1) * 100) if Y.get("ytd") else None
     st.caption(
-        f"**{this_yr} YTD is AMS's own figure, not one computed here** — AMS "
-        f"defines the cut-off, so a partial year cannot be measured against a "
-        f"full one by accident. It is an ACTUAL count and runs a week behind "
-        f"the daily series below; the daily numbers are estimates rounded to "
-        f"the nearest hundred head. Through {fmt_date(Y['week_end'])} the daily "
-        f"estimates summed to about 2,600 against an actual {Y['ytd']:,} — a "
-        f"1.7% rounding gap, which is why the two tiles above do not tie "
-        f"exactly."
+        f"**The first two boxes are estimates; the last two are actuals.** The "
+        f"daily figures AMS publishes are rounded to the nearest hundred head, "
+        f"so the running total is approximate and current to "
+        f"{fmt_date(SO['latest']) if SO else 'the latest report'}. The YTD is "
+        f"AMS's own count, exact but a week behind — and it is AMS's cut-off, "
+        f"not one computed here, so a partial year cannot be measured against a "
+        f"full one by accident. Over the same span the estimates sum to "
+        f"{est_to_date:,} against an actual {Y['ytd']:,}"
+        + (f", a {gap:+.1f}% rounding gap" if gap is not None else "")
+        + ", which is why the boxes do not tie exactly."
     )
 
 st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
@@ -372,7 +384,7 @@ st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 st.markdown('<div class="sec-header">Daily Crossings</div>',
             unsafe_allow_html=True)
 
-daily = D.get("daily") or []
+# daily was bound above, for the year-to-date boxes.
 if daily:
     t_day, t_wtd, t_port, t_hist = st.tabs(
         ["Per day", "Week to date", "By crossing", "Against prior years"])
