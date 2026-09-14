@@ -363,7 +363,13 @@ with tab_crush:
         basis = field("Live basis", lambda: st.number_input(
             "basis", -30.0, 30.0, DEFAULTS["basis"], 0.25,
             label_visibility="collapsed",
-            help="$/cwt, cash minus futures at sale. Positive = cash over the board."))
+            help="$/cwt, cash minus futures at sale. Positive = cash over the "
+                 "board. Quote it on UNSHRUNK live weight — USDA's negotiated "
+                 "live price already works that way, priced per cwt of net "
+                 "weight after shrink. If instead you derived this from your "
+                 "own closeout (cheque divided by live weight), the shrink is "
+                 "already inside it: set Plant shrink to 0 rather than "
+                 "counting it twice."))
         start_date = field("Start date", lambda: st.date_input(
             "start_date", date.today(), label_visibility="collapsed"))
 
@@ -680,7 +686,7 @@ with tab_crush:
     pay weight     = finish weight x (1 - plant shrink)
     revenue/hd     = pay weight/100 x sale price
     profit/hd      = revenue - total cost
-    breakeven      = total cost / (finish weight/100)
+    breakeven      = total cost / (pay weight/100)
     ```
 
     **The two legs are priced off different contracts on purpose.** Cattle bought

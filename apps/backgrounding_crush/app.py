@@ -317,6 +317,18 @@ with in_col:
              "interest on the calf. Iowa State's 2026 budgets put backgrounding "
              "at $109-111/cwt -- about the same as finishing, because every "
              "per-day cost is spread over half as many pounds."))
+    # NO PLANT SHRINK LINE HERE, deliberately -- asked and answered 2026-09-14.
+    #
+    # The Fed Cattle Crush has one, because a packer buying fat cattle live pays
+    # against a shrunk scale ticket and the full finish weight overstates
+    # revenue. The sell side of THIS page is different: it prices against CME
+    # Feeder Cattle futures, and that index is already quoted "FOB, 3% standing
+    # shrink" -- the shrink is inside the price being used as the reference.
+    # Applying it again to the weight would count it twice and understate the
+    # calf bid, which is the number this page exists to produce.
+    #
+    # A backgrounder selling into a cash market on different terms should put
+    # the difference in the basis below, where it belongs.
     basis = field("Feeder basis", lambda: st.number_input(
         "basis", -40.0, 40.0, DEFAULTS["basis"], 0.25,
         label_visibility="collapsed",
