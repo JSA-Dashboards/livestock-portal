@@ -75,6 +75,9 @@ MONTH_NAME = {v: k for k, v in
 DEFAULTS = {
     "start_wt": 750.0,      # typical yearling placement
     "finish_wt": 1400.0,
+    # Packers shrink the scale weight before paying. 3% matches the shrink
+    # convention CME already uses on the feeder side ("FOB 3% standing shrink").
+    "shrink": 3.0,
     "adg": 3.25,
     "cog": 125.0,           # $/cwt of gain
     "basis": 2.00,          # $/cwt, cash over futures at sale
@@ -337,6 +340,13 @@ with tab_crush:
         finish_wt = field("Target finish", lambda: st.number_input(
             "finish_wt", 500.0, 1800.0, DEFAULTS["finish_wt"], 25.0,
             label_visibility="collapsed"))
+        shrink = field("Plant shrink", lambda: st.number_input(
+            "shrink", 0.0, 10.0, DEFAULTS["shrink"], 0.25,
+            label_visibility="collapsed",
+            help="%. Packers pay on a shrunk weight, not the weight you fed to. "
+                 "Commonly 1-3% on a live purchase. Target finish above is "
+                 "unchanged -- you still feed them to it, you are just paid on "
+                 "less."))
         adg = field("Rate of gain", lambda: st.number_input(
             "adg", 0.5, 6.0, DEFAULTS["adg"], 0.05, label_visibility="collapsed",
             help="lb per head per day"))
@@ -365,6 +375,17 @@ with tab_crush:
     # correct but asked them to think about the arithmetic before they could think
     # about the cattle.
     gain = finish_wt - start_wt
+    # PAY weight -- what the packer writes the cheque against, not the weight you
+    # fed to. Applied to the WEIGHT rather than discounted off the price because
+    # that is how a live purchase is written: a $/cwt bid struck against a shrunk
+    # scale ticket. The basis entered above must therefore be an UNSHRUNK quote
+    # -- USDA's live cash series is reported on actual weight -- or the shrink
+    # gets counted twice, once in the weight and again inside the basis.
+    #
+    # GAIN IS DELIBERATELY NOT TOUCHED by this, and neither is cost of gain.
+    # Those are real pounds, really put on, really paid for. Shrink is a term of
+    # sale, not a feeding outcome, so it belongs on the revenue side only.
+    pay_wt = finish_wt * (1.0 - shrink / 100.0)
     warn = None
     if gain <= 0:
         warn = "Target finish weight must be greater than the starting weight."
@@ -426,6 +447,12 @@ with tab_crush:
             f'<div class="fld-row"><span class="fld-label">Finish date</span>'
             f'<span class="fld-derived">{finish_date.strftime("%b %d, %Y")}'
             f'<span class="fld-note">{days} days on feed · {gain:,.0f} lb gain</span>'
+            f'</span></div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="fld-row"><span class="fld-label">Pay weight</span>'
+            f'<span class="fld-derived">{pay_wt:,.0f} lb'
+            f'<span class="fld-note">{finish_wt:,.0f} lb scale less '
+            f'{shrink:,.2f}% = {finish_wt - pay_wt:,.0f} lb unpaid</span>'
             f'</span></div>', unsafe_allow_html=True)
         st.markdown(
             f'<div class="fld-row"><span class="fld-label">Live at finish</span>'
@@ -565,7 +592,7 @@ with tab_crush:
     # as the ceiling to stay under.
     gain_cost = gain / 100.0 * cog
     sale_price = le_price + basis
-    revenue = finish_wt / 100.0 * sale_price
+    revenue = pay_wt / 100.0 * sale_price
     feeder_be = (revenue - gain_cost) / (start_wt / 100.0) if start_wt else 0.0
 
     with out_col:
@@ -582,7 +609,7 @@ with tab_crush:
     feeder_cost = start_wt / 100.0 * bid
     total_cost = feeder_cost + gain_cost
     profit = revenue - total_cost
-    breakeven = total_cost / (finish_wt / 100.0) if finish_wt else 0.0
+    breakeven = total_cost / (pay_wt / 100.0) if pay_wt else 0.0
 
     with out_col:
         pk = "pos" if profit >= 0 else "neg"
@@ -623,9 +650,9 @@ with tab_crush:
                     unsafe_allow_html=True)
     with n2:
         st.markdown(tile("Revenue", f"${revenue:,.2f}",
-                         f"{finish_wt:,.0f} lb @ ${sale_price:,.2f}"), unsafe_allow_html=True)
+                         f"{pay_wt:,.0f} lb pay wt @ ${sale_price:,.2f}"), unsafe_allow_html=True)
     with n3:
-        margin_cwt = profit / (finish_wt / 100.0) if finish_wt else 0.0
+        margin_cwt = profit / (pay_wt / 100.0) if pay_wt else 0.0
         st.markdown(tile("Margin", f"${margin_cwt:,.2f}", "per cwt sold", k),
                     unsafe_allow_html=True)
     with n4:
@@ -636,7 +663,7 @@ with tab_crush:
 
     st.caption(
         f"**Breakeven of \\${breakeven:,.2f}/cwt** is total cost spread over the "
-        f"{finish_wt:,.0f} lb sale weight. With basis at \\${basis:+,.2f}, "
+        f"{pay_wt:,.0f} lb PAY weight, {finish_wt:,.0f} lb off the scale less {shrink:,.2f}% shrink. With basis at \\${basis:+,.2f}, "
         f"{le_pick} needs to be **\\${need:,.2f}** for this pen to pay its way — it is "
         f"**\\${le_price:,.2f}** now, "
         + ("**above** that." if le_price >= need else "**below** that.")
@@ -650,7 +677,8 @@ with tab_crush:
     cost of gain   = (finish - start)/100 x cost of gain
     total cost     = feeder cost + cost of gain
     sale price     = live futures ({le_pick}) + basis
-    revenue/hd     = finish weight/100 x sale price
+    pay weight     = finish weight x (1 - plant shrink)
+    revenue/hd     = pay weight/100 x sale price
     profit/hd      = revenue - total cost
     breakeven      = total cost / (finish weight/100)
     ```
