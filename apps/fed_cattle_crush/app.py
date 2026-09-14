@@ -364,12 +364,12 @@ with tab_crush:
             "basis", -30.0, 30.0, DEFAULTS["basis"], 0.25,
             label_visibility="collapsed",
             help="$/cwt, cash minus futures at sale. Positive = cash over the "
-                 "board. Quote it on UNSHRUNK live weight — USDA's negotiated "
-                 "live price already works that way, priced per cwt of net "
-                 "weight after shrink. If instead you derived this from your "
-                 "own closeout (cheque divided by live weight), the shrink is "
-                 "already inside it: set Plant shrink to 0 rather than "
-                 "counting it twice."))
+                 "board. Use the QUOTED cash price, before pencil shrink — "
+                 "that is what USDA publishes, and the shrink below is applied "
+                 "to the weight instead. If instead you worked this out from "
+                 "your own closeout (net cheque divided by out weight), the "
+                 "shrink is already inside it: set Plant shrink to 0 rather "
+                 "than counting it twice."))
         start_date = field("Start date", lambda: st.date_input(
             "start_date", date.today(), label_visibility="collapsed"))
 
@@ -383,10 +383,25 @@ with tab_crush:
     gain = finish_wt - start_wt
     # PAY weight -- what the packer writes the cheque against, not the weight you
     # fed to. Applied to the WEIGHT rather than discounted off the price because
-    # that is how a live purchase is written: a $/cwt bid struck against a shrunk
-    # scale ticket. The basis entered above must therefore be an UNSHRUNK quote
-    # -- USDA's live cash series is reported on actual weight -- or the shrink
-    # gets counted twice, once in the weight and again inside the basis.
+    # that is how a live purchase is written: a headline $/cwt with the pencil
+    # shrink stated as a separate term of the same trade.
+    #
+    # WHY THIS IS NOT DOUBLE-COUNTING THE BASIS, which is the obvious worry.
+    # USDA AMS footnotes its negotiated live prices "FOB prices based on net
+    # weights FOB the feedyard after a 3-4% shrink" -- it publishes the headline
+    # price as traded and never adjusts it for shrink. So that price is a rate
+    # per hundredweight of PAY weight, and a basis built from it carries no
+    # shrink of its own. The shrink belongs on the weight, once.
+    #
+    # An earlier version of this comment said the opposite -- "USDA's live cash
+    # series is reported on actual weight" -- which is false and contradicted
+    # the help text on the basis field itself.
+    #
+    # The narrow case where a user WOULD double-count: a basis they derived from
+    # their own closeout as (net proceeds / actual out weight) - futures. That
+    # is not how basis is published or quoted, but it is how someone might build
+    # it from their own records, which is why the basis help says to set shrink
+    # to 0 in that case.
     #
     # GAIN IS DELIBERATELY NOT TOUCHED by this, and neither is cost of gain.
     # Those are real pounds, really put on, really paid for. Shrink is a term of
@@ -501,7 +516,19 @@ with tab_cog:
                                         "how this state's figure was derived.")
             corn_pct = st.number_input("Ration corn (%)", 0.0, 100.0, 80.0, 5.0)
         with g2:
-            other_ton = st.number_input("Other feed ($/ton)", 0.0, 800.0, 250.0, 10.0)
+            other_ton = st.number_input(
+                "Other feed ($/ton)", 0.0, 800.0, 250.0, 10.0,
+                help="Everything in the ration that is NOT corn — the other "
+                     "20% at the mix above. Three things, usually: ROUGHAGE "
+                     "(corn silage, alfalfa, ground stalks, straw), a PROTEIN "
+                     "or BYPRODUCT feed (wet or dry distillers, corn gluten, "
+                     "soybean meal), and the SUPPLEMENT carrying minerals, "
+                     "vitamins and an ionophore such as monensin. Rough "
+                     "$/ton: silage 45-55, wet distillers 45-55 as-fed, dry "
+                     "distillers 150-175, alfalfa 200-300, supplement "
+                     "400-600. Blended, most finishing rations land near 250. "
+                     "Implants and processing are not here — they are in "
+                     "Health/processing.")
             conv = st.number_input("Feed conversion", 3.0, 12.0, 6.5, 0.1,
                                    help="lb of feed (as-fed) per lb of gain")
             yardage = st.number_input("Yardage ($/hd/day)", 0.0, 3.0, 0.45, 0.01)
@@ -580,8 +607,12 @@ with tab_cog:
             prov = "no cash corn data for this state; the figure above is yours"
         st.markdown(
             f"<div style='color:{MUTED};font-size:0.8rem;margin-top:6px'>"
-            f"{prov}<br>corn ${corn:,.2f}/bu → ${corn_ton:,.2f}/ton · ration "
-            f"${ration_ton:,.2f}/ton"
+            f"{prov}<br>corn ${corn:,.2f}/bu → ${corn_ton:,.2f}/ton · "
+            f"ration = {corn_pct:,.0f}% corn + {100 - corn_pct:,.0f}% other "
+            f"feed at ${other_ton:,.2f}/ton → <b>${ration_ton:,.2f}/ton</b>"
+            f"<br><span style='opacity:0.85'>Other feed is roughage, a protein "
+            f"or byproduct feed, and the mineral/ionophore supplement — priced "
+            f"by hand for now, not from market data like the corn above.</span>"
             f"</div>", unsafe_allow_html=True)
         b = pd.DataFrame([
             {"Component": "Feed", "$/cwt gain": round(feed_c, 2),
