@@ -1,5 +1,5 @@
 """
-Backgrounding Crush -- buy calves, put on cheap gain, sell feeders.
+Backgrounding Crush -- buy calves, put weight on them, sell feeders.
 
 Same shape as the Fed Cattle Crush, different trade. There the question is
 "what can I bid for feeders against the fed cattle board". Here it is "what can
@@ -65,12 +65,35 @@ MONTH_NAME = dict(zip(range(1, 13),
                        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]))
 
 # Backgrounding, not finishing: forage or a grower ration, lower daily gain,
-# shorter and cheaper than a feedyard. Starting points, all editable.
+# shorter than a feedyard. Starting points, all editable.
+#
+# COST OF GAIN IS NOT CHEAPER THAN FINISHING, which this page asserted at $95
+# until it was checked. Iowa State's Livestock Enterprise Budgets for Iowa-2026
+# (FM 1815 / B1-21) put all six of their beef systems within $4.43/cwt of each
+# other -- backgrounding winter drylot $111.37, backgrounding summer pasture
+# $109.40, and the four finishing systems $106.94 to $110.52. $95 sat below
+# every one of them.
+#
+# The reason backgrounding is not cheaper is arithmetic, not agronomy: every
+# per-head and per-day cost is spread over half as many pounds. At 2.0 ADG a
+# $0.50/hd/day yardage is $25.00/cwt of gain against $15.38 at 3.25, and feed
+# conversion does not rescue it -- a medium-frame steer runs 6.6:1 DM at 500 lb
+# and 8.4:1 at 700 lb (UNL G2064), WORSE than a finishing closeout's 6.0-6.5:1.
+#
+# Backgrounding gain is cheap when it is cheap because the feed costs $114-134
+# a ton of dry matter instead of $217 -- not because of conversion, and not
+# because of corn.
+#
+# The one honest exception is worth knowing: strip out interest on the purchased
+# calf and summer pasture backgrounding IS the cheapest gain in the book at
+# $75.40/cwt. At today's calf values that interest line is enormous, so whether
+# backgrounding looks cheap depends almost entirely on whether you charge it --
+# which is exactly why the build-up shows it as its own line.
 DEFAULTS = {
     "start_wt": 525.0,
     "sell_wt": 800.0,
     "adg": 2.00,       # grower/forage, against ~3.25 in a feedyard
-    "cog": 95.0,       # $/cwt of gain -- cheap gain is the whole point
+    "cog": 110.0,      # $/cwt of gain, all-in -- ISU 2026, see above
     "basis": -2.00,    # feeder cash typically under the board
 }
 
@@ -290,7 +313,10 @@ with in_col:
              "below a feedyard's 3.0-3.5."))
     cog = field("Cost of gain", lambda: st.number_input(
         "cog", 0.0, 300.0, DEFAULTS["cog"], 1.0, label_visibility="collapsed",
-        help="$/cwt of gain, all-in. Cheap gain is the entire trade."))
+        help="$/cwt of gain, all-in: feed, yardage, health, death loss and "
+             "interest on the calf. Iowa State's 2026 budgets put backgrounding "
+             "at $109-111/cwt -- about the same as finishing, because every "
+             "per-day cost is spread over half as many pounds."))
     basis = field("Feeder basis", lambda: st.number_input(
         "basis", -40.0, 40.0, DEFAULTS["basis"], 0.25,
         label_visibility="collapsed",
@@ -469,8 +495,13 @@ comparable to what your forage or grower ration costs, and it is what tells you
 whether to buy lighter or heavier cattle. Profit per head follows from it but
 mixes in how many pounds you put on.
 
-**Not included:** death loss, interest, trucking, commission, or any charge for
-the risk. Fold those into cost of gain if you want them counted.
+**Death loss and interest are not separate lines here — they belong inside your
+cost of gain, and they are not small.** On a \\$2,165 calf, moving death loss from
+1% to 5% swings cost of gain \\$31.50/cwt. A full \\$1.00/bu move in corn swings
+it about \\$9. Death loss is roughly three times the lever corn is on this page,
+and on high-risk sale-barn calves health and death loss together can run level
+with the feed bill. Trucking, commission and any charge for risk also belong in
+that number.
 """)
 
 st.markdown("<hr style='margin:18px 0 8px;'>", unsafe_allow_html=True)
