@@ -499,17 +499,44 @@ with tab_cog:
                                    help="Delivered to the feedyard, not the "
                                         "elevator bid. See the note below for "
                                         "how this state's figure was derived.")
-        with g2:
             corn_pct = st.number_input("Ration corn (%)", 0.0, 100.0, 80.0, 5.0)
+        with g2:
             other_ton = st.number_input("Other feed ($/ton)", 0.0, 800.0, 250.0, 10.0)
-        with g3:
             conv = st.number_input("Feed conversion", 3.0, 12.0, 6.5, 0.1,
                                    help="lb of feed (as-fed) per lb of gain")
             yardage = st.number_input("Yardage ($/hd/day)", 0.0, 3.0, 0.45, 0.01)
-        with g4:
+        with g3:
             health = st.number_input("Health/processing ($/hd)", 0.0, 200.0, 25.0, 5.0)
             interest = st.number_input("Interest (%)", 0.0, 30.0, 8.0, 0.25)
             death = st.number_input("Death loss (%)", 0.0, 10.0, 1.5, 0.1)
+        with g4:
+            # BOTH DEFAULT TO ZERO, deliberately. Freight is the one line here
+            # most likely to be already counted somewhere else: plenty of
+            # feeders are quoted a DELIVERED price, which has the inbound haul
+            # inside it, and cattle sold FOB the feedyard are hauled out on the
+            # packer's dime. A non-zero default would silently double-charge
+            # those people, and unlike corn or conversion there is no typical
+            # value worth guessing -- it is entirely a function of how far the
+            # cattle came and who pays. Zero asserts nothing.
+            #
+            # The two lines are separate because the hauls are not the same
+            # cost. A pot is payload-limited near 48,000 lb, so it holds about
+            # 64 head of 750 lb feeders but only about 34 head of 1,400 lb fats
+            # -- the SAME truck at the SAME rate runs nearly twice as much per
+            # head going out, usually offset by a much shorter haul, since
+            # yards sit near packers while feeders come out of ranch country.
+            freight_in = st.number_input(
+                "Freight in ($/hd)", 0.0, 200.0, 0.00, 1.0,
+                help="Hauling the feeders to the yard. Leave at 0 if your "
+                     "feeder price is quoted DELIVERED — the haul is already "
+                     "inside it. A pot holds roughly 64 head at 750 lb, so a "
+                     "300-mile haul at $5.50 a loaded mile is about $26/head.")
+            freight_out = st.number_input(
+                "Freight out ($/hd)", 0.0, 200.0, 0.00, 1.0,
+                help="Hauling the fats to the plant. Leave at 0 if you sell FOB "
+                     "the feedyard and the packer hauls. Only about 34 head to "
+                     "a pot at 1,400 lb, so per head this runs near double the "
+                     "inbound rate over the same distance.")
 
         corn_ton = corn * 2000.0 / 56.0          # 56 lb to the bushel
         ration_ton = (corn_pct / 100.0) * corn_ton + (1 - corn_pct / 100.0) * other_ton
@@ -526,8 +553,14 @@ with tab_cog:
         feeder_val = start_wt / 100.0 * gf_price
         int_c = (feeder_val * interest / 100.0 * days / 365.0) / gain_cwt if gain_cwt else 0.0
         death_c = (feeder_val * death / 100.0) / gain_cwt if gain_cwt else 0.0
+        # Freight is a per-HEAD cost spread over the gain, like health, not a
+        # per-day one like yardage: the haul happens twice whatever the days on
+        # feed. Short-fed cattle therefore carry it much more heavily per cwt.
+        truck_in_c = freight_in / gain_cwt if gain_cwt else 0.0
+        truck_out_c = freight_out / gain_cwt if gain_cwt else 0.0
 
-        cog = feed_c + yard_c + health_c + int_c + death_c
+        cog = (feed_c + yard_c + health_c + int_c + death_c
+               + truck_in_c + truck_out_c)
 
         # NO backslash-escaped dollars in these HTML blocks. The LaTeX
         # escape is a MARKDOWN rule -- inside unsafe_allow_html the
@@ -561,6 +594,10 @@ with tab_cog:
              "$/head": round(int_c * gain_cwt, 2)},
             {"Component": "Death loss", "$/cwt gain": round(death_c, 2),
              "$/head": round(death_c * gain_cwt, 2)},
+            {"Component": "Freight in", "$/cwt gain": round(truck_in_c, 2),
+             "$/head": round(truck_in_c * gain_cwt, 2)},
+            {"Component": "Freight out", "$/cwt gain": round(truck_out_c, 2),
+             "$/head": round(truck_out_c * gain_cwt, 2)},
             {"Component": "TOTAL", "$/cwt gain": round(cog, 2),
              "$/head": round(cog * gain_cwt, 2)},
         ])
