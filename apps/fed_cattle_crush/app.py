@@ -75,9 +75,18 @@ MONTH_NAME = {v: k for k, v in
 DEFAULTS = {
     "start_wt": 750.0,      # typical yearling placement
     "finish_wt": 1400.0,
-    # Packers shrink the scale weight before paying. 3% matches the shrink
-    # convention CME already uses on the feeder side ("FOB 3% standing shrink").
-    "shrink": 3.0,
+    # Packers shrink the scale weight before paying. 4% is USDA's own basis for
+    # FED cattle specifically: AMS footnotes negotiated live prices "FOB prices
+    # based on net weights FOB the feedyard after a 3-4% shrink", and NDSU
+    # splits that range by class -- 3% for cattle off pasture, 4% for off-feed
+    # weights of fed cattle, with pay weight "usually 4%".
+    #
+    # An earlier version used 3%, reasoning from CME's "FOB 3% standing shrink"
+    # on the FEEDER index. Wrong contract: that is the feeder convention, and
+    # this page sells fat cattle. Each 1% is $32.13/head and $4.28/cwt on the
+    # feeder break even at the defaults, so picking from the wrong class of
+    # cattle is not a rounding matter.
+    "shrink": 4.0,
     "adg": 3.25,
     "cog": 125.0,           # $/cwt of gain
     "basis": 2.00,          # $/cwt, cash over futures at sale
@@ -343,10 +352,14 @@ with tab_crush:
         shrink = field("Plant shrink", lambda: st.number_input(
             "shrink", 0.0, 10.0, DEFAULTS["shrink"], 0.25,
             label_visibility="collapsed",
-            help="%. Packers pay on a shrunk weight, not the weight you fed to. "
-                 "Commonly 1-3% on a live purchase. Target finish above is "
-                 "unchanged -- you still feed them to it, you are just paid on "
-                 "less."))
+            help="%. Packers pay on a shrunk weight, not the weight you fed "
+                 "to. USDA reports fed cattle on net weights after a 3-4% "
+                 "shrink; 4% is the usual figure for cattle sold off feed FOB "
+                 "the feedyard, 3% if they are weighed at the plant after a "
+                 "haul, when some shrink has already happened on the truck. "
+                 "Target finish above is unchanged — you still feed them to "
+                 "it, you are just paid on less. Each 1% here is about "
+                 "$32/head."))
         adg = field("Rate of gain", lambda: st.number_input(
             "adg", 0.5, 6.0, DEFAULTS["adg"], 0.05, label_visibility="collapsed",
             help="lb per head per day"))
