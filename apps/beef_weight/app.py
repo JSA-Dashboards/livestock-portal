@@ -327,7 +327,7 @@ def _nearest_week(df: pd.DataFrame, year: int, iso_week: int) -> float:
     return sub.loc[idx, "Value"]
 
 
-def olympic_avg(df: pd.DataFrame, ref_year: int, iso_week: int, n: int = 5) -> float:
+def prior_years_avg(df: pd.DataFrame, ref_year: int, iso_week: int, n: int = 5) -> float:
     """Simple average of the n prior years for the same ISO week."""
     vals = [_nearest_week(df, ref_year - i, iso_week) for i in range(1, n + 1)]
     vals = [v for v in vals if not pd.isna(v)]
@@ -336,12 +336,12 @@ def olympic_avg(df: pd.DataFrame, ref_year: int, iso_week: int, n: int = 5) -> f
     return sum(vals) / len(vals)
 
 
-def olympic_series(df: pd.DataFrame, ref_year: int, n: int = 5) -> pd.Series:
-    """Olympic avg for every ISO week, returned as Series indexed by iso_week."""
+def prior_years_series(df: pd.DataFrame, ref_year: int, n: int = 5) -> pd.Series:
+    """Plain average of the prior n years, per ISO week, indexed by iso_week."""
     weeks = sorted(df["iso_week"].unique())
     return pd.Series(
-        {w: olympic_avg(df, ref_year, w, n) for w in weeks},
-        name="olympic_avg",
+        {w: prior_years_avg(df, ref_year, w, n) for w in weeks},
+        name="prior_years_avg",
     )
 
 
@@ -358,7 +358,7 @@ def week_kpis(wt: pd.DataFrame, cls: str) -> dict:
     """Compute all snapshot KPIs for one class."""
     nan = dict(current=float("nan"), wow=float("nan"), wow_pct=float("nan"),
                yoy=float("nan"), yoy_pct=float("nan"), t4w=float("nan"),
-               olympic=float("nan"), vs_olympic=float("nan"), vs_olympic_pct=float("nan"),
+               prior_avg=float("nan"), vs_prior_avg=float("nan"), vs_prior_avg_pct=float("nan"),
                latest_date=None, latest_year=None, iso_week=None)
 
     sub = wt[wt["class_desc"] == cls].sort_values("week_ending")
@@ -388,13 +388,13 @@ def week_kpis(wt: pd.DataFrame, cls: str) -> dict:
     recent4 = sub.tail(4)["Value"]
     t4w = float(recent4.mean()) if len(recent4) >= 1 else float("nan")
 
-    # Olympic avg
-    olym = olympic_avg(sub, latest_year, iso_week)
-    vs_olympic = current - olym if not pd.isna(olym) else float("nan")
-    vs_olympic_pct = vs_olympic / olym * 100 if (not pd.isna(olym) and olym) else float("nan")
+    # Plain average of the prior 5 years for this ISO week
+    prior_val = prior_years_avg(sub, latest_year, iso_week)
+    vs_prior_avg = current - prior_val if not pd.isna(prior_val) else float("nan")
+    vs_prior_avg_pct = vs_prior_avg / prior_val * 100 if (not pd.isna(prior_val) and prior_val) else float("nan")
 
     return dict(current=current, wow=wow, wow_pct=wow_pct, yoy=yoy, yoy_pct=yoy_pct,
-                t4w=t4w, olympic=olym, vs_olympic=vs_olympic, vs_olympic_pct=vs_olympic_pct,
+                t4w=t4w, prior_avg=prior_val, vs_prior_avg=vs_prior_avg, vs_prior_avg_pct=vs_prior_avg_pct,
                 latest_date=latest_date, latest_year=latest_year, iso_week=iso_week)
 
 
@@ -416,7 +416,7 @@ def _snap_item(label: str, delta_html: str) -> str:
 def _snap_card(cls: str, kpi: dict, unit_label: str) -> str:
     val_str = f'{kpi["current"]:,.1f}' if not pd.isna(kpi["current"]) else "—"
     t4w_str = f'{kpi["t4w"]:,.1f}' if not pd.isna(kpi["t4w"]) else "—"
-    olym_str = f'{kpi["olympic"]:,.1f}' if not pd.isna(kpi["olympic"]) else "—"
+    prior_str = f'{kpi["prior_avg"]:,.1f}' if not pd.isna(kpi["prior_avg"]) else "—"
     color = CLASS_COLORS.get(cls, DM_MUTED)
     return f"""
     <div class="snap-card">
@@ -426,10 +426,10 @@ def _snap_card(cls: str, kpi: dict, unit_label: str) -> str:
         {_snap_item("WoW", _dc(kpi['wow'], '+.1f', ' lb') + ' ' + _dc(kpi['wow_pct'], '+.1f', '%'))}
         {_snap_item("YoY", _dc(kpi['yoy'], '+.1f', ' lb') + ' ' + _dc(kpi['yoy_pct'], '+.1f', '%'))}
         {_snap_item("4-Wk Avg", f'<span class="snap-neu">{t4w_str} lb</span>')}
-        {_snap_item("vs 5yr Avg", _dc(kpi['vs_olympic'], '+.1f', ' lb') + ' ' + _dc(kpi['vs_olympic_pct'], '+.1f', '%'))}
+        {_snap_item("vs 5yr Avg", _dc(kpi['vs_prior_avg'], '+.1f', ' lb') + ' ' + _dc(kpi['vs_prior_avg_pct'], '+.1f', '%'))}
       </div>
       <div style="margin-top:8px;font-size:0.7rem;color:{DM_MUTED}">
-        5yr avg: {olym_str} lb &nbsp;·&nbsp; {unit_label}
+        5yr avg: {prior_str} lb &nbsp;·&nbsp; {unit_label}
       </div>
     </div>"""
 
@@ -496,7 +496,7 @@ st.sidebar.markdown(
 st.sidebar.divider()
 
 current_year = datetime.now().year
-# Always load enough history for 5-yr olympic avg + trend charts
+# Always load enough history for the 5-yr average + trend charts
 LOAD_YEARS = tuple(range(current_year - 7, current_year + 1))
 
 weight_unit = st.sidebar.radio("Weight basis", ["Dressed Weight", "Live Weight"])
@@ -706,7 +706,7 @@ def _render_nass():
     def vol_kpis(vol_df: pd.DataFrame, cls: str) -> dict:
         nan = dict(current=float("nan"), wow=float("nan"), wow_pct=float("nan"),
                    yoy=float("nan"), yoy_pct=float("nan"), t4w=float("nan"),
-                   olympic=float("nan"), vs_olympic=float("nan"), vs_olympic_pct=float("nan"))
+                   prior_avg=float("nan"), vs_prior_avg=float("nan"), vs_prior_avg_pct=float("nan"))
         sub = vol_df[vol_df["class_desc"] == cls].sort_values("week_ending")
         if sub.empty:
             return nan
@@ -728,17 +728,17 @@ def _render_nass():
         yoy_pct = yoy / ly_val * 100 if (not pd.isna(ly_val) and ly_val) else float("nan")
 
         t4w   = float(sub.tail(4)["Value"].mean())
-        olym  = olympic_avg(sub, latest_y, iso_w)
-        vs_ol = current - olym if not pd.isna(olym) else float("nan")
-        vs_ol_pct = vs_ol / olym * 100 if (not pd.isna(olym) and olym) else float("nan")
+        prior_val  = prior_years_avg(sub, latest_y, iso_w)
+        vs_prior = current - prior_val if not pd.isna(prior_val) else float("nan")
+        vs_prior_pct = vs_prior / prior_val * 100 if (not pd.isna(prior_val) and prior_val) else float("nan")
         return dict(current=current, wow=wow, wow_pct=wow_pct, yoy=yoy, yoy_pct=yoy_pct,
-                    t4w=t4w, olympic=olym, vs_olympic=vs_ol, vs_olympic_pct=vs_ol_pct)
+                    t4w=t4w, prior_avg=prior_val, vs_prior_avg=vs_prior, vs_prior_avg_pct=vs_prior_pct)
 
 
     def _vol_card(cls: str, kpi: dict) -> str:
         val_str  = f'{kpi["current"]:,.0f}' if not pd.isna(kpi["current"]) else "—"
         t4w_str  = f'{kpi["t4w"]:,.0f}' if not pd.isna(kpi["t4w"]) else "—"
-        olym_str = f'{kpi["olympic"]:,.0f}' if not pd.isna(kpi["olympic"]) else "—"
+        prior_str = f'{kpi["prior_avg"]:,.0f}' if not pd.isna(kpi["prior_avg"]) else "—"
         color = CLASS_COLORS.get(cls, DM_MUTED)
         return f"""
         <div class="snap-card">
@@ -748,10 +748,10 @@ def _render_nass():
             {_snap_item("WoW", _dc(kpi['wow'], '+.0f', ' hd') + ' ' + _dc(kpi['wow_pct'], '+.1f', '%'))}
             {_snap_item("YoY", _dc(kpi['yoy'], '+.0f', ' hd') + ' ' + _dc(kpi['yoy_pct'], '+.1f', '%'))}
             {_snap_item("4-Wk Avg", f'<span class="snap-neu">{t4w_str} hd</span>')}
-            {_snap_item("vs 5yr Avg", _dc(kpi['vs_olympic'], '+.0f', ' hd') + ' ' + _dc(kpi['vs_olympic_pct'], '+.1f', '%'))}
+            {_snap_item("vs 5yr Avg", _dc(kpi['vs_prior_avg'], '+.0f', ' hd') + ' ' + _dc(kpi['vs_prior_avg_pct'], '+.1f', '%'))}
           </div>
           <div style="margin-top:8px;font-size:0.7rem;color:{DM_MUTED}">
-            5yr avg: {olym_str} head
+            5yr avg: {prior_str} head
           </div>
         </div>"""
 
@@ -789,7 +789,7 @@ def _render_nass():
               <td>{_fmt_delta(kpi['wow'], kpi['wow_pct'])}</td>
               <td>{t4} lb</td>
               <td>{_fmt_delta(kpi['yoy'], kpi['yoy_pct'])}</td>
-              <td>{_fmt_delta(kpi['vs_olympic'], kpi['vs_olympic_pct'])}</td>
+              <td>{_fmt_delta(kpi['vs_prior_avg'], kpi['vs_prior_avg_pct'])}</td>
             </tr>"""
         return f"""
         <table class="sum-table">
@@ -817,7 +817,7 @@ def _render_nass():
               <td>{_fmt_delta(kpi['wow'], kpi['wow_pct'], ' hd')}</td>
               <td>{t4} hd</td>
               <td>{_fmt_delta(kpi['yoy'], kpi['yoy_pct'], ' hd')}</td>
-              <td>{_fmt_delta(kpi['vs_olympic'], kpi['vs_olympic_pct'], ' hd')}</td>
+              <td>{_fmt_delta(kpi['vs_prior_avg'], kpi['vs_prior_avg_pct'], ' hd')}</td>
             </tr>"""
         return f"""
         <table class="sum-table">
@@ -888,14 +888,14 @@ def _render_nass():
             prev_y = [prev_lookup.get(w, float("nan")) for w in iso_weeks]
 
             # 5yr avg and range — mapped to current year dates
-            olym_map = olympic_series(sub, latest_year)
-            olym_y    = [olym_map.get(w, float("nan")) for w in iso_weeks]
-            olym_highs, olym_lows = [], []
+            prior_map = prior_years_series(sub, latest_year)
+            prior_y    = [prior_map.get(w, float("nan")) for w in iso_weeks]
+            prior_highs, prior_lows = [], []
             for w in iso_weeks:
                 yr_vals = [_nearest_week(sub, latest_year - i, w) for i in range(1, 6)]
                 yr_vals = [v for v in yr_vals if not pd.isna(v)]
-                olym_highs.append(max(yr_vals) if yr_vals else float("nan"))
-                olym_lows.append(min(yr_vals) if yr_vals else float("nan"))
+                prior_highs.append(max(yr_vals) if yr_vals else float("nan"))
+                prior_lows.append(min(yr_vals) if yr_vals else float("nan"))
 
             # 4-week rolling avg for current year
             sub_roll = sub[sub["year"] == latest_year].sort_values("week_ending").copy()
@@ -908,7 +908,7 @@ def _render_nass():
             # 5yr range band
             fig.add_trace(go.Scatter(
                 x=list(x_dates) + list(x_dates)[::-1],
-                y=olym_highs + olym_lows[::-1],
+                y=prior_highs + prior_lows[::-1],
                 fill="toself", fillcolor="rgba(122,153,144,0.12)",
                 line=dict(color="rgba(0,0,0,0)"),
                 name="5yr Range", hoverinfo="skip", showlegend=True,
@@ -916,7 +916,7 @@ def _render_nass():
 
             # 5yr avg line
             fig.add_trace(go.Scatter(
-                x=x_dates, y=olym_y,
+                x=x_dates, y=prior_y,
                 name="5yr Avg", mode="lines",
                 line=dict(color="rgba(122,153,144,0.7)", width=1.8, dash="dash"),
                 hovertemplate="5yr avg: %{y:,.1f} lb<extra></extra>",
@@ -947,7 +947,7 @@ def _render_nass():
                 hovertemplate="4-wk avg: %{y:,.1f} lb<extra></extra>",
             ))
 
-            _wt_vals = list(curr_yr["Value"]) + [v for v in prev_y if not pd.isna(v)] + [v for v in olym_y if not pd.isna(v)]
+            _wt_vals = list(curr_yr["Value"]) + [v for v in prev_y if not pd.isna(v)] + [v for v in prior_y if not pd.isna(v)]
             _apply(fig, f"{cls.title()} — {weight_unit} · Last {trend_weeks} Weeks", 440, "lb / head",
                    y_range=_tight_range(_wt_vals))
             st.plotly_chart(fig, use_container_width=True)
@@ -994,30 +994,30 @@ def _render_nass():
             # ── Multi-year overlay ────────────────────────────────────────────────
             fig3 = go.Figure()
 
-            # Olympic avg band
-            olym_all = olympic_series(yoy_sub, ly_max, n=5)
+            # 5yr average band
+            prior_all = prior_years_series(yoy_sub, ly_max, n=5)
             all_doys = sorted(yoy_sub["day_of_year"].unique())
             doy_to_iso = yoy_sub.groupby("day_of_year")["iso_week"].first().to_dict()
-            olym_y_all = [olym_all.get(doy_to_iso.get(d, 0), float("nan")) for d in all_doys]
+            prior_y_all = [prior_all.get(doy_to_iso.get(d, 0), float("nan")) for d in all_doys]
 
             # Range band
-            olym_high_all, olym_low_all = [], []
+            prior_high_all, prior_low_all = [], []
             for d in all_doys:
                 iw = doy_to_iso.get(d, 0)
                 yr_vals = [_nearest_week(yoy_sub, ly_max - i, iw) for i in range(1, 6)]
                 yr_vals = [v for v in yr_vals if not pd.isna(v)]
-                olym_high_all.append(max(yr_vals) if yr_vals else float("nan"))
-                olym_low_all.append(min(yr_vals) if yr_vals else float("nan"))
+                prior_high_all.append(max(yr_vals) if yr_vals else float("nan"))
+                prior_low_all.append(min(yr_vals) if yr_vals else float("nan"))
 
             fig3.add_trace(go.Scatter(
                 x=all_doys + all_doys[::-1],
-                y=olym_high_all + olym_low_all[::-1],
+                y=prior_high_all + prior_low_all[::-1],
                 fill="toself", fillcolor="rgba(122,153,144,0.10)",
                 line=dict(color="rgba(0,0,0,0)"),
                 name="5yr Range", hoverinfo="skip",
             ))
             fig3.add_trace(go.Scatter(
-                x=all_doys, y=olym_y_all,
+                x=all_doys, y=prior_y_all,
                 name="5yr Avg",
                 mode="lines",
                 line=dict(color="rgba(122,153,144,0.7)", width=1.8, dash="dash"),
@@ -1048,8 +1048,8 @@ def _render_nass():
             wk_vals = []
             for yr in range(ly_max - n_years + 1, ly_max + 1):
                 v = _nearest_week(yoy_sub, yr, latest_iso)
-                olym = olympic_avg(yoy_sub, yr, latest_iso)
-                wk_vals.append({"Year": yr, "Value": v, "Olympic": olym})
+                prior_val = prior_years_avg(yoy_sub, yr, latest_iso)
+                wk_vals.append({"Year": yr, "Value": v, "PriorAvg": prior_val})
             wk_df = pd.DataFrame(wk_vals).dropna(subset=["Value"])
 
             fig4 = go.Figure()
@@ -1061,7 +1061,7 @@ def _render_nass():
                 hovertemplate="%{x}: %{y:,.1f} lb<extra></extra>",
             ))
             fig4.add_trace(go.Scatter(
-                x=wk_df["Year"], y=wk_df["Olympic"],
+                x=wk_df["Year"], y=wk_df["PriorAvg"],
                 name="5yr Avg",
                 mode="lines+markers",
                 line=dict(color=DM_MUTED, dash="dash", width=1.5),
@@ -1071,18 +1071,18 @@ def _render_nass():
             fig4.update_xaxes(tickmode="linear", dtick=1)
             st.plotly_chart(fig4, use_container_width=True)
 
-            # ── YoY delta vs Olympic avg ──────────────────────────────────────────
+            # ── YoY delta vs 5yr avg ──────────────────────────────────────────────
             st.markdown('<div class="sec-hdr">Current Year vs 5yr Avg — Weekly Delta</div>', unsafe_allow_html=True)
             curr_full = yoy_sub[yoy_sub["year"] == ly_max].sort_values("iso_week")
-            olym_curr = [olympic_avg(yoy_sub, ly_max, w) for w in curr_full["iso_week"]]
+            prior_curr = [prior_years_avg(yoy_sub, ly_max, w) for w in curr_full["iso_week"]]
             curr_full = curr_full.copy()
-            curr_full["vs_olympic"] = curr_full["Value"].values - pd.array(olym_curr)
+            curr_full["vs_prior_avg"] = curr_full["Value"].values - pd.array(prior_curr)
 
             fig5 = go.Figure(go.Bar(
                 x=curr_full["week_ending"],
-                y=curr_full["vs_olympic"],
-                marker_color=[COL_POS if v >= 0 else COL_NEG for v in curr_full["vs_olympic"]],
-                hovertemplate="%{x|%b %d}: %{y:+.1f} lb vs Olympic avg<extra></extra>",
+                y=curr_full["vs_prior_avg"],
+                marker_color=[COL_POS if v >= 0 else COL_NEG for v in curr_full["vs_prior_avg"]],
+                hovertemplate="%{x|%b %d}: %{y:+.1f} lb vs 5yr avg<extra></extra>",
             ))
             fig5.add_hline(y=0, line_color=DM_BORDER)
             _apply(fig5, f"{ly_max} vs 5yr Avg — Weekly \u0394", 260, "\u0394 lb / head")
@@ -1648,16 +1648,16 @@ def _render_summary():
     # 5yr range + avg
     all_doys    = sorted(chart_df["day_of_year"].unique())
     doy_to_iso  = chart_df.groupby("day_of_year")["iso_week"].first().to_dict()
-    olym_map    = olympic_series(chart_df, ly_max, n=5)
+    prior_map    = prior_years_series(chart_df, ly_max, n=5)
 
-    olym_hi, olym_lo, olym_avg = [], [], []
+    prior_hi, prior_lo, prior_avg_vals = [], [], []
     for d in all_doys:
         iw = doy_to_iso.get(d, 0)
         yr_vals = [_nearest_week(chart_df, ly_max - i, iw) for i in range(1, 6)]
         yr_vals = [v for v in yr_vals if not pd.isna(v)]
-        olym_hi.append(max(yr_vals)  if yr_vals else float("nan"))
-        olym_lo.append(min(yr_vals)  if yr_vals else float("nan"))
-        olym_avg.append(olym_map.get(iw, float("nan")))
+        prior_hi.append(max(yr_vals)  if yr_vals else float("nan"))
+        prior_lo.append(min(yr_vals)  if yr_vals else float("nan"))
+        prior_avg_vals.append(prior_map.get(iw, float("nan")))
 
     # Year color palette — current year gets JSA green, others cycle through muted tones
     _yr_palette = [
@@ -1669,13 +1669,13 @@ def _render_summary():
 
     fig.add_trace(go.Scatter(
         x=all_doys + all_doys[::-1],
-        y=olym_hi + olym_lo[::-1],
+        y=prior_hi + prior_lo[::-1],
         fill="toself", fillcolor="rgba(122,153,144,0.10)",
         line=dict(color="rgba(0,0,0,0)"),
         name="5yr Range", hoverinfo="skip",
     ))
     fig.add_trace(go.Scatter(
-        x=all_doys, y=olym_avg,
+        x=all_doys, y=prior_avg_vals,
         name="5yr Avg", mode="lines",
         line=dict(color="rgba(122,153,144,0.75)", width=1.8, dash="dash"),
         hovertemplate=f"5yr avg: %{{y:{val_fmt}}}<extra></extra>",
@@ -1820,7 +1820,7 @@ def _render_beef_production():
     doy_to_iso = beef_prod_nass.groupby("day_of_year")["iso_week"].first().to_dict()
 
     # 5yr range + avg
-    olym_hi, olym_lo, olym_avg = [], [], []
+    prior_hi, prior_lo, prior_avg_vals = [], [], []
     for d in all_doys:
         iw = doy_to_iso.get(d, 0)
         yr_vals = []
@@ -1828,9 +1828,9 @@ def _render_beef_production():
             sub = beef_prod_nass[(beef_prod_nass["year"] == ly-i) & (beef_prod_nass["iso_week"] == iw)]
             if not sub.empty:
                 yr_vals.append(float(sub["prod_mlbs"].iloc[0]))
-        olym_hi.append(max(yr_vals)  if yr_vals else float("nan"))
-        olym_lo.append(min(yr_vals)  if yr_vals else float("nan"))
-        olym_avg.append(sum(yr_vals)/len(yr_vals) if yr_vals else float("nan"))
+        prior_hi.append(max(yr_vals)  if yr_vals else float("nan"))
+        prior_lo.append(min(yr_vals)  if yr_vals else float("nan"))
+        prior_avg_vals.append(sum(yr_vals)/len(yr_vals) if yr_vals else float("nan"))
 
     _prod_palette = ["#6fa8c4","#c98a56","#9b89c4","#c4b456","#e07070","#c8d4ca","#7a9485","#fbbf24"]
     month_ticks   = [1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335]
@@ -1838,13 +1838,13 @@ def _render_beef_production():
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(
-        x=all_doys + all_doys[::-1], y=olym_hi + olym_lo[::-1],
+        x=all_doys + all_doys[::-1], y=prior_hi + prior_lo[::-1],
         fill="toself", fillcolor="rgba(201,138,86,0.10)",
         line=dict(color="rgba(0,0,0,0)"),
         name="5yr Range", hoverinfo="skip",
     ))
     fig.add_trace(go.Scatter(
-        x=all_doys, y=olym_avg, name="5yr Avg", mode="lines",
+        x=all_doys, y=prior_avg_vals, name="5yr Avg", mode="lines",
         line=dict(color="rgba(201,138,86,0.75)", width=1.8, dash="dash"),
         hovertemplate="5yr avg: %{y:,.1f} M lbs<extra></extra>",
     ))
