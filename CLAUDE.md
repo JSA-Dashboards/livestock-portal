@@ -1,9 +1,10 @@
 # JSA Livestock Portal
 
-A single Streamlit process (`Home.py`) bundling ten livestock dashboards
+A single Streamlit process (`Home.py`) bundling twelve livestock dashboards
 under `apps/`: CME Feeder Cattle Index, Seasonal Futures & Spreads, Cattle on
-Feed, US Cow Herd, Mexican Feeder Imports, Cattle Weights, Beef Cutout, Beef
-Trimmings, Livestock Inventory, Cash Cattle Trade.
+Feed, US Cow Herd, Mexican Feeder Imports, Fed Cattle Crush, Backgrounding
+Crush, Cattle Weights, Beef Cutout, Beef Trimmings, Livestock Inventory, Cash
+Cattle Trade.
 
 `Cattle Weights` was renamed from `Beef Weight` on 2026-09-10. Only the visible
 label changed — the folder is still `apps/beef_weight/` and the `url_path` is
@@ -70,14 +71,22 @@ here does nothing to the standalone app — and vice versa. Check both.
 US Cow Herd and Mexican Feeder Imports have no standalone twin, so they are the
 two you can change here without checking elsewhere.
 
-A related trap: `snowflake_db.py` now exists **three times** — under
-`apps/cme_feeder_cattle/`, `apps/us_cow_herd/` and
-`apps/mexican_feeder_imports/`. Each page does
-`sys.path.insert(0, <its own dir>)`, but Python caches modules by NAME in
-`sys.modules`, so whichever page loads first wins and the others get its copy.
-The three are equivalent today, which is the only reason this works. Do not let
-them drift: a change to one must be made to all three, or a page will silently
-run against another page's connection logic.
+A related trap, and the worst one here: `snowflake_db.py` now exists **five
+times** — under `apps/cme_feeder_cattle/`, `apps/us_cow_herd/`,
+`apps/mexican_feeder_imports/`, `apps/fed_cattle_crush/` and
+`apps/backgrounding_crush/` — plus a sixth copy in the cme-feeder-cattle-index
+repo. `cash_calves.py` exists twice here and once there.
+
+Each page does `sys.path.insert(0, <its own dir>)`, but Python caches modules by
+NAME in `sys.modules`, so whichever page loads first wins and every other page
+gets ITS copy. All six are byte-identical today, which is the only reason this
+works. A page running against another page's connection logic raises nothing and
+gives no clue which copy it got.
+
+`tests/test_no_drift.py` in the cme-feeder-cattle-index repo now compares EVERY
+copy, not just one pair — run it after touching any shared module:
+
+    cd ../cme-feeder-cattle-index && .venv/Scripts/python.exe -m pytest tests/ -q
 
 The same applies to `app.py` for CME Feeder Cattle Index, which also lives in
 the cme-feeder-cattle-index repo. The two are deliberately NOT identical (the
@@ -92,3 +101,55 @@ diff before copying — but a layout or logic fix belongs in both.
   move it to the org workspace on 2026-09-05 failed for reasons never
   established, and was reverted. Do not retry casually — it takes all ten
   dashboards down.
+
+## The crush pages
+
+Two margin calculators added 2026-09-13/14: **Fed Cattle Crush** (buy a feeder,
+sell a fat) and **Backgrounding Crush** (buy a calf, sell a feeder). Both seed
+from live data — CME futures via Massive, cash calf prices and delivered corn
+from Snowflake — and let the user override everything.
+
+Domain decisions in these that look like oversights and are not:
+
+- **Plant shrink is on the fed page and deliberately NOT on backgrounding.**
+  A packer pays on a shrunk scale weight, so the fed page computes a pay weight
+  (4% default, USDA's basis for cattle sold off feed). The backgrounding page
+  prices against the CME feeder index, which is *already* quoted "FOB, 3%
+  standing shrink" — applying shrink again would double-count and understate the
+  calf bid. There is a comment saying so where someone would add it.
+- **Shrink applies to the WEIGHT, and the basis must be an unshrunk quote.**
+  USDA publishes negotiated live prices "based on net weights FOB the feedyard
+  after a 3-4% shrink" — the headline $/cwt is not discounted, the weight is. A
+  user who derives basis from their own closeout has shrink inside it already
+  and should set the shrink field to 0.
+- **Both freight fields default to zero.** Feeders are often quoted delivered
+  and fats often sold FOB the yard, so a non-zero default would silently
+  double-charge. There is no typical value worth guessing.
+- **Cost of gain is NOT reduced by shrink.** Those are real pounds, really fed.
+  Shrink is a term of sale.
+- **Backgrounding cost of gain defaults to $110, not something cheaper.** Iowa
+  State's 2026 budgets put backgrounding at $109-111/cwt against $107-111 for
+  finishing — it is not the cheaper gain it looks like, because every per-day
+  cost spreads over half as many pounds.
+
+## Tabs, and the hidden-tab rule
+
+The index, fed crush and backgrounding pages use `st.tabs`. A hidden Streamlit
+tab is hidden, not skipped: its widgets still execute every rerun, so a value
+computed in one tab is available in another. What decides correctness is SCRIPT
+order, not tab order — the fed crush's cost-of-gain build-up must still be
+written after the widgets it divides by, even though it displays elsewhere.
+
+## The index page's headline date
+
+`apps/cme_feeder_cattle/app.py` does NOT headline the newest row. It leads with
+the index date CME will print next — the first business day after CME's last
+published file — because the newest row is always the least complete, and on a
+Monday it can hold one Saturday auction and nothing else. The rule lives in
+`index_dates.py` with tests in the other repo. Do not "simplify" it back to
+`MAX(report_date)`.
+
+One consequence worth knowing: the headline follows CME's publication clock, so
+if the CME feed breaks the headline freezes while the rest of the page keeps
+moving. That happened 2026-09-14 through 09-17. If the headline stops advancing
+while the Daily line does not, suspect the CME ingest, not this page.
