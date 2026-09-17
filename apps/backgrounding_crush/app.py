@@ -283,7 +283,7 @@ def bracket_for(wt: float) -> int:
 c_t, c_d = st.columns([6, 2])
 with c_t:
     st.markdown("## JSA — Backgrounding Crush")
-    st.caption("Buy calves, sell feeders · cash calf market against the CME Feeder board")
+    st.caption("Buy calves, sell feeders · cash feeder market against the CME Feeder board")
 
 gf, err = load_gf(date.today().isoformat())
 calf_px, calf_asof = load_calf_prices()
@@ -307,7 +307,7 @@ if err or gf is None or gf.empty:
 # when you are pricing a pen, the other when you are deciding what to go look
 # at. Same pattern as the Fed Cattle Crush's build-up tab: a hidden tab still
 # executes, so nothing here is conditional on which one is showing.
-tab_crush, tab_cash = st.tabs(["Crush", "Cash Calf Prices"])
+tab_crush, tab_cash = st.tabs(["Crush", "Cash Feeder Prices"])
 
 with tab_crush:
     in_col, out_col = st.columns([1.05, 1])
@@ -538,19 +538,19 @@ with tab_crush:
     """)
 
 
-# ── Cash Calf Prices ────────────────────────────────────────────────
+# ── Cash Feeder Prices ──────────────────────────────────────────────
 # The same lookup appears on the CME Feeder Cattle Index page, so it lives in
 # cash_calves.py rather than here. Different question, same data: a
 # backgrounder asks what a calf is worth before bidding, an index reader asks
 # what the cattle behind today's print actually brought.
 with tab_cash:
-    st.markdown('<div class="sec-header">Cash Calf Prices</div>',
+    st.markdown('<div class="sec-header">Cash Feeder Prices</div>',
                 unsafe_allow_html=True)
     cash_calves.render(tile, MUTED, key_prefix="bg")
 
 st.markdown("<hr style='margin:18px 0 8px;'>", unsafe_allow_html=True)
 st.markdown(
     f'<div class="srcline">JSA · John Stewart &amp; Associates &nbsp;·&nbsp; '
-    f'Calf prices from USDA AMS barn reports · CME Feeder Cattle (GF) via '
+    f'Feeder prices from USDA AMS barn reports · CME Feeder Cattle (GF) via '
     f'Massive &nbsp;·&nbsp; {date.today().strftime("%b %d, %Y")}</div>',
     unsafe_allow_html=True)
