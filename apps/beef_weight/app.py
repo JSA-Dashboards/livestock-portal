@@ -1,4 +1,5 @@
 import sys
+import os
 from pathlib import Path
 
 import streamlit as st
@@ -8,6 +9,7 @@ import requests
 import io
 import re
 from datetime import datetime
+from urllib.parse import quote
 
 # st.Page runs this file via exec(), not as a standalone script, so its own
 # directory is never added to sys.path automatically -- without this, the
@@ -257,6 +259,112 @@ def _fetch_ams_raw() -> dict:
     return res
 
 
+# ── USDA AMS MARS — report 3658, Actual Slaughter Under Federal Inspection ────
+# Weekly FIS dressed weights by class, published THURSDAY, covering the week
+# that ended ~12 days earlier (published 09/17/2026 for w/e 09/05/2026).
+# NASS publishes the SAME series, but only inside its MONTHLY Livestock
+# Slaughter release -- which is why the NASS weight tiles sit ~3 weeks stale
+# between releases. That staleness is the pipeline working, not failing.
+# Verified equal to the pound on all 8 overlapping weeks 2026-07-11..2026-08-29
+# (NASS GE 500 LBS dressed == AMS class Cattle dressed).
+MARS_BASE     = "https://marsapi.ams.usda.gov/services/v1.2/reports"
+FIS_REPORT_ID = 3658
+# SECTION IS A PATH SEGMENT, NOT A QUERY PARAM. `?section=...` is accepted and
+# silently ignored -- you get the report header, zero rows, HTTP 200, no error,
+# which looks exactly like a report that publishes nothing.
+FIS_SECTION   = "Report FIS Meat Production"
+# AMS class -> NASS class_desc. Exact keys only: never endswith/substring, and
+# never loosen it -- calves live under commodity "Slaughter Calves" and a fuzzy
+# match would pull a different animal into a cattle tile.
+FIS_CLASS_MAP = {"Cattle": "GE 500 LBS", "Steers": "STEERS",
+                 "Heifers": "HEIFERS", "Cows": "COWS", "Bulls": "BULLS"}
+FIS_UNIT_DESC = "LB / HEAD, DRESSED BASIS"   # the NASS spelling, on purpose
+
+try:
+    MARS_KEY = st.secrets.get("MARS_API_KEY", "")
+except Exception:
+    # No secrets.toml locally -- st.secrets raises rather than returning {}.
+    MARS_KEY = ""
+MARS_KEY = (MARS_KEY or os.environ.get("MARS_API_KEY", "")).strip()
+
+
+def _mars_date(s):
+    """MM/DD/YYYY, sometimes with a trailing clock time, -> datetime.date."""
+    if not s:
+        return None
+    try:
+        m, d, y = str(s).split()[0].split("/")   # .split()[0] drops "10:00:01"
+        return datetime(int(y), int(m), int(d)).date()
+    except Exception:
+        return None
+
+
+def _mars_num(v):
+    """AMS sends numbers as strings — `volume` arrives as "973", not 973."""
+    if v is None:
+        return None
+    t = str(v).strip().replace(",", "").replace("$", "")
+    if not t or t.upper() in ("NA", "N/A", "NULL", "-"):
+        return None
+    try:
+        return float(t)
+    except ValueError:
+        return None
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _fetch_fis_weights() -> dict:
+    """AMS MARS report 3658 — weekly FIS dressed weights by cattle class."""
+    if not MARS_KEY:
+        return {"error": "MARS_API_KEY not configured"}
+    # No q= date filter on purpose. Guessing a date field name on a report
+    # family that has no report_date is the documented way to get zero rows and
+    # no error, and the full pull is what gives WoW/YoY/4-week their history.
+    try:
+        r = requests.get(f"{MARS_BASE}/{FIS_REPORT_ID}/{quote(FIS_SECTION)}",
+                         auth=(MARS_KEY, ""), timeout=(5, 120))
+        if r.status_code in (204, 404):
+            return {"error": f"AMS returned HTTP {r.status_code}"}
+        r.raise_for_status()
+        results = r.json().get("results", [])
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+
+    rows, bad_unit, published = [], 0, None
+    for x in results:
+        if str(x.get("commodity", "")).strip()   != "Slaughter Cattle": continue
+        if str(x.get("description", "")).strip() != "Dressed Weight":   continue
+        cls = FIS_CLASS_MAP.get(str(x.get("class", "")).strip())
+        if cls is None:
+            continue
+        # Unit guard: the tiles say "lb". A silent unit rename is exactly the
+        # kind of layout change that has bitten these AMS feeds before, and it
+        # would land as a plausible-looking wrong number, not an error.
+        if str(x.get("unit", "")).strip().lower() != "lbs":
+            bad_unit += 1
+            continue
+        # 3658 HAS NO report_date FIELD -- only report_begin_date /
+        # report_end_date / published_date. Asking for report_date returns None
+        # and skips every row with no error. The END date is the week ending.
+        wk  = _mars_date(x.get("report_end_date") or x.get("report_begin_date"))
+        val = _mars_num(x.get("volume"))
+        if wk is None or val is None:
+            continue
+        rows.append({"year": wk.year, "week_ending": wk.isoformat(),
+                     "class_desc": cls, "unit_desc": FIS_UNIT_DESC,
+                     "Value": val})
+        p = _mars_date(x.get("published_date"))
+        if p and (published is None or p > published):
+            published = p
+
+    if bad_unit:
+        return {"error": f"{bad_unit} rows carried a unit other than 'lbs' "
+                         f"— report 3658 layout may have changed"}
+    if not rows:
+        return {"error": "no Slaughter Cattle / Dressed Weight rows in report 3658"}
+    return {"rows": rows, "published": published, "n_results": len(results)}
+
+
 def _build_df(frames: list) -> pd.DataFrame:
     if not frames:
         return pd.DataFrame()
@@ -354,6 +462,92 @@ def trailing_4wk(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _fis_frame(raw: dict) -> pd.DataFrame:
+    """AMS rows -> the exact frame shape NASS produces (schema parity by reuse)."""
+    if raw.get("error") or not raw.get("rows"):
+        return pd.DataFrame()
+    # Routed through _build_df so week_ending is a pandas Timestamp like every
+    # other frame here. datetime.date objects would compare unequal to the NASS
+    # Timestamps, which would silently produce an empty overlap and duplicate
+    # class/week pairs instead of a splice.
+    return _build_df([pd.DataFrame(raw["rows"])])
+
+
+def _ams_nass_agree(nass_df: pd.DataFrame, ams_df: pd.DataFrame,
+                    tol: float = 5.0, weeks: int = 26):
+    """Prove AMS and NASS are the same measure on the overlap — never assume it.
+
+    This is the number-against-an-independently-derived-number check. On the
+    latest common week the two agree to the pound (w/e 2026-08-29 reads
+    891/969/877/640/930 from both feeds). If AMS ever redefines the series, or a
+    week-ending convention drifts by a day, this refuses the splice rather than
+    publishing two different measures under one heading.
+
+    Scoped to the RECENT overlap, and that is the load-bearing part. AMS prints
+    a preliminary figure and NASS confirms it weeks later, so individual old
+    weeks get revised by a pound or three. Across the full archive -- 990
+    class/week pairs back to 2022 -- the worst single gap is 3.0 lb, or 0.34%.
+    That is revision noise, not a different measure. The first version of this
+    check took a max over every pair ever published against a 2.0 lb tolerance,
+    so one historical revision refused the splice permanently and the page went
+    on quietly showing the stale NASS week this change exists to replace. A
+    check that fails closed forever is no more use than one that cannot fail.
+    """
+    j = (nass_df[["class_desc", "week_ending", "Value"]]
+         .merge(ams_df[["class_desc", "week_ending", "Value"]],
+                on=["class_desc", "week_ending"], suffixes=("_nass", "_ams")))
+    if j.empty:                      # also catches a week-ending convention drift
+        return False, float("nan"), 0
+    cutoff = j["week_ending"].max() - pd.Timedelta(weeks=weeks)
+    recent = j[j["week_ending"] >= cutoff]
+    if recent.empty:                 # archive shorter than the window
+        recent = j
+    d = (recent["Value_nass"] - recent["Value_ams"]).abs()
+    return bool(d.max() <= tol), float(d.max()), int(len(recent))
+
+
+def _ams_first(nass_df, ams_df, unit_filter, err):
+    """Lead with AMS where it is present and provably the same series.
+
+    Returns (frame, source, note, maxdiff, n_overlap). Every failure path
+    returns the NASS frame plus a note -- the page degrades to exactly what it
+    renders today, with a banner saying why.
+    """
+    nass_only = nass_df.assign(source="NASS")
+    if unit_filter != "DRESSED":
+        return (nass_only, "NASS",
+                "AMS report 3658 publishes DRESSED weight by class only — "
+                "live-basis tiles are NASS, which updates monthly.",
+                float("nan"), 0)
+    if ams_df.empty:
+        return (nass_only, "NASS",
+                f"AMS weekly weights unavailable ({err or 'no rows returned'}) — "
+                f"showing NASS, which publishes weights only in its MONTHLY "
+                f"Livestock Slaughter release.", float("nan"), 0)
+    ok, maxdiff, n_ovl = _ams_nass_agree(nass_df, ams_df)
+    if not ok:
+        why = ("no overlapping weeks" if n_ovl == 0
+               else f"they differ by up to {maxdiff:,.1f} lb over {n_ovl} weeks")
+        return (nass_only, "NASS",
+                f"AMS and NASS dressed weights no longer line up ({why}) — "
+                f"refusing to splice, showing NASS only.", maxdiff, n_ovl)
+    merged = pd.concat([ams_df.assign(source="AMS"), nass_only],
+                       ignore_index=True)
+    # AMS is concatenated first, so keep="first" makes AMS win every week it
+    # covers and NASS supply everything older.
+    merged = merged.drop_duplicates(subset=["class_desc", "week_ending"],
+                                    keep="first")
+    return trailing_4wk(merged), "AMS", None, maxdiff, n_ovl
+
+
+def _row_source(df: pd.DataFrame, cls: str, when) -> str:
+    """Which feed produced the value a card is about to show."""
+    if when is None or df.empty:
+        return "—"
+    m = df[(df["class_desc"] == cls) & (df["week_ending"] == when)]
+    return str(m["source"].iloc[0]) if not m.empty else "—"
+
+
 def week_kpis(wt: pd.DataFrame, cls: str) -> dict:
     """Compute all snapshot KPIs for one class."""
     nan = dict(current=float("nan"), wow=float("nan"), wow_pct=float("nan"),
@@ -413,11 +607,18 @@ def _snap_item(label: str, delta_html: str) -> str:
     return f'<div class="snap-item"><span class="snap-lbl">{label}</span>{delta_html}</div>'
 
 
-def _snap_card(cls: str, kpi: dict, unit_label: str) -> str:
+def _snap_card(cls: str, kpi: dict, unit_label: str, src: str = "NASS") -> str:
     val_str = f'{kpi["current"]:,.1f}' if not pd.isna(kpi["current"]) else "—"
     t4w_str = f'{kpi["t4w"]:,.1f}' if not pd.isna(kpi["t4w"]) else "—"
     prior_str = f'{kpi["prior_avg"]:,.1f}' if not pd.isna(kpi["prior_avg"]) else "—"
     color = CLASS_COLORS.get(cls, DM_MUTED)
+    # Every card names its own feed and its own week. A mixed row (four AMS
+    # tiles, one NASS) has to be self-describing -- a tile quietly holding last
+    # month's number under an AMS heading is the failure this change exists to
+    # fix, so it must never be possible to read one without its provenance.
+    wk_s    = kpi["latest_date"].strftime("%b %d, %Y") if kpi["latest_date"] is not None else "—"
+    src_col = "#6fa8c4" if src == "AMS" else JSA_GREEN_LT
+    src_txt = "AMS FIS weekly" if src == "AMS" else ("NASS monthly" if src == "NASS" else "no data")
     return f"""
     <div class="snap-card">
       <div class="snap-class" style="color:{color}">{CLASS_DISPLAY.get(cls, cls.title())}</div>
@@ -430,6 +631,9 @@ def _snap_card(cls: str, kpi: dict, unit_label: str) -> str:
       </div>
       <div style="margin-top:8px;font-size:0.7rem;color:{DM_MUTED}">
         5yr avg: {prior_str} lb &nbsp;·&nbsp; {unit_label}
+      </div>
+      <div style="margin-top:3px;font-size:0.68rem;color:{src_col};font-weight:600">
+        {src_txt} &nbsp;·&nbsp; w/e {wk_s}
       </div>
     </div>"""
 
@@ -527,13 +731,48 @@ with st.spinner("Loading USDA NASS data…"):
     raw_vol = fetch_vol_data(LOAD_YEARS)
 
 if raw.empty:
-    st.error("No data returned from USDA NASS. Check your API key in st.secrets.")
+    st.error("No data returned from the shared NASS cache (usda-nass-etl). "
+             "Weight history and 5-yr averages are unavailable.")
     st.stop()
 
 wt  = raw[raw["unit_desc"].str.contains(unit_filter, case=False, na=False)].copy()
 # Use dedicated volume fetch; fall back to weight dataset if empty
 vol = raw_vol if not raw_vol.empty else raw[raw["unit_desc"].str.upper() == "HEAD"].copy()
 wt  = trailing_4wk(wt)
+
+# ── AMS FIS weekly weights, spliced over NASS for the tiles only ─────────────
+# `wt` stays pure NASS below this point: every chart, the 5-yr seasonal, the
+# YoY overlays, all head counts, beef production and the Data tab read it and
+# their provenance labels stay honest. Only `wt_tiles` leads with AMS.
+with st.spinner("Loading USDA AMS weekly carcass weights…"):
+    _fis_raw = _fetch_fis_weights()
+_fis_df  = _fis_frame(_fis_raw)
+_fis_err = _fis_raw.get("error")
+_fis_pub = _fis_raw.get("published")
+
+wt_tiles, _tile_src, _tile_note, _agree_max, _agree_n = _ams_first(
+    wt, _fis_df, unit_filter, _fis_err)
+
+_ams_rows = wt_tiles[wt_tiles["source"] == "AMS"] if "source" in wt_tiles else wt_tiles.iloc[0:0]
+_fis_wk_date = _ams_rows["week_ending"].max() if not _ams_rows.empty else None
+# Every mapped class must be present in the newest AMS week. A class that goes
+# missing falls back to NASS and its own card says so -- it must never sit
+# there holding last month's number under an AMS heading.
+_fis_missing = []
+if _fis_wk_date is not None:
+    _have = set(_ams_rows.loc[_ams_rows["week_ending"] == _fis_wk_date, "class_desc"])
+    _fis_missing = [c for c in FIS_CLASS_MAP.values() if c not in _have]
+
+# Freshness. Report 3658 publishes on a Thursday covering the week that ended
+# about twelve days earlier, so the newest AMS week is normally 12-19 days old.
+# A fetch SUCCEEDING is not evidence the data moved: against a frozen report it
+# returns 200 with the same rows forever, and the tiles would sit under a
+# confident "USDA AMS" heading looking current. SJ_LS711 froze in exactly this
+# way and stayed frozen for years. Past four weeks, say so out loud.
+FIS_MAX_AGE_DAYS = 28
+_fis_age_days = ((datetime.now().date() - _fis_wk_date.date()).days
+                 if _fis_wk_date is not None else None)
+_fis_stale = _fis_age_days is not None and _fis_age_days > FIS_MAX_AGE_DAYS
 
 latest_date = wt["week_ending"].max()
 latest_year = int(wt.loc[wt["week_ending"] == latest_date, "year"].iloc[0])
@@ -565,6 +804,10 @@ _ams_wk_date    = _ams_dated_keys[0] if _ams_dated_keys else None
 _today      = datetime.now().date()
 _days_ahead = (4 - _today.weekday()) % 7   # 4 = Friday; 0 means today IS Friday
 _next_friday = _today + __import__("datetime").timedelta(days=_days_ahead)
+# Report 3658 publishes THURSDAY, not Friday like SJ_LS712 — three feeds on
+# this page, three different cadences, and only one of them is Fridays.
+_days_thu     = (3 - _today.weekday()) % 7   # 3 = Thursday
+_next_thursday = _today + __import__("datetime").timedelta(days=_days_thu)
 
 # ── Sidebar data info panel ────────────────────────────────────────────────────
 st.sidebar.divider()
@@ -573,13 +816,31 @@ _ams_rpt_str = _ams_rpt_date.strftime('%b %d, %Y') if _ams_rpt_date else "N/A"
 _vol_color   = '#fbbf24' if vol_latest_date is not None and vol_latest_date != latest_date else DM_TEXT
 _vol_date_s  = vol_latest_date.strftime('%b %d, %Y') if vol_latest_date is not None else 'N/A'
 _vol_iso_s   = f"Wk {int(vol_latest_date.isocalendar()[1])}, {vol_latest_date.year}" if vol_latest_date is not None else 'N/A'
+_fis_wk_s    = _fis_wk_date.strftime('%b %d, %Y') if _fis_wk_date is not None else 'N/A'
+_fis_pub_s   = _fis_pub.strftime('%b %d, %Y') if _fis_pub else 'N/A'
+_fis_stat    = 'Live' if _tile_src == 'AMS' else ('Unavailable — ' + (_fis_err or 'not used on live basis'))
+_fis_stat_c  = '#6fa8c4' if _tile_src == 'AMS' else '#fbbf24'
 st.sidebar.markdown(f"""
 <div style="background:{DM_SURFACE2};border:1px solid {DM_BORDER};
   border-left:3px solid {JSA_GREEN};border-radius:6px;padding:12px 14px;font-size:0.78rem">
   <div style="color:{DM_MUTED};font-size:0.65rem;text-transform:uppercase;
     letter-spacing:.08em;margin-bottom:8px">Data Status</div>
 
-  <div style="color:{JSA_GREEN_LT};font-size:0.62rem;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">📊 NASS — Weights</div>
+  <div style="color:#6fa8c4;font-size:0.62rem;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">🗓️ AMS FIS — Carcass Weights (tiles)</div>
+  <div style="display:flex;justify-content:space-between;margin-bottom:2px">
+    <span style="color:{DM_MUTED}">Week ending</span>
+    <span style="color:{DM_TEXT};font-weight:600">{_fis_wk_s}</span>
+  </div>
+  <div style="display:flex;justify-content:space-between;margin-bottom:2px">
+    <span style="color:{DM_MUTED}">Published</span>
+    <span style="color:{DM_TEXT};font-weight:600">{_fis_pub_s}</span>
+  </div>
+  <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+    <span style="color:{DM_MUTED}">Status</span>
+    <span style="color:{_fis_stat_c};font-weight:600">{_fis_stat}</span>
+  </div>
+
+  <div style="color:{JSA_GREEN_LT};font-size:0.62rem;text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">📊 NASS — Weights (history / 5-yr)</div>
   <div style="display:flex;justify-content:space-between;margin-bottom:2px">
     <span style="color:{DM_MUTED}">Report date</span>
     <span style="color:{DM_TEXT};font-weight:600">{latest_date.strftime('%b %d, %Y')}</span>
@@ -614,19 +875,25 @@ st.sidebar.markdown(f"""
   <div style="border-top:1px solid {DM_BORDER};margin:8px 0"></div>
 
   <div style="display:flex;justify-content:space-between;margin-bottom:6px">
-    <span style="color:{DM_MUTED}">Next update</span>
-    <span style="color:{DM_TEXT};font-weight:600">{_next_friday.strftime('%b %d, %Y')}</span>
+    <span style="color:{DM_MUTED}">AMS FIS (weights)</span>
+    <span style="color:{DM_TEXT};font-weight:600">Thursdays ({_next_thursday.strftime('%b %d')})</span>
   </div>
 
   <div style="display:flex;justify-content:space-between;margin-bottom:6px">
-    <span style="color:{DM_MUTED}">Update day</span>
-    <span style="color:{DM_TEXT};font-weight:600">Fridays</span>
+    <span style="color:{DM_MUTED}">AMS SJ_LS712 (slaughter)</span>
+    <span style="color:{DM_TEXT};font-weight:600">Fridays ({_next_friday.strftime('%b %d')})</span>
+  </div>
+
+  <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+    <span style="color:{DM_MUTED}">NASS Livestock Slaughter</span>
+    <span style="color:{DM_TEXT};font-weight:600">Monthly</span>
   </div>
 
   <div style="border-top:1px solid {DM_BORDER};margin:8px 0"></div>
 
   <div style="color:{DM_MUTED};font-size:0.68rem;line-height:1.5">
     NASS: USDA Livestock Slaughter report<br>
+    AMS: MARS report 3658 (FIS carcass weights)<br>
     AMS: LPGMN report SJ_LS712<br>
     Cache refreshes every hour
   </div>
@@ -646,7 +913,7 @@ with hdr_l:
           JSA - USDA Cattle Slaughter Weights
         </div>
         <div style="color:{DM_MUTED};font-size:0.88rem;margin-top:5px;letter-spacing:.02em">
-          Weekly snapshot &nbsp;·&nbsp; USDA NASS QuickStats &nbsp;·&nbsp; Federally Inspected &nbsp;·&nbsp; Commercial Slaughter
+          Weekly snapshot &nbsp;·&nbsp; USDA AMS FIS + NASS QuickStats &nbsp;·&nbsp; Federally Inspected &nbsp;·&nbsp; Commercial Slaughter
         </div>
       </div>
     </div>
@@ -656,11 +923,17 @@ with hdr_r:
     _wt_str      = latest_date.strftime('%b %d, %Y')
     _dates_match = vol_latest_date is not None and vol_latest_date == latest_date
     _ams_hdr_str = _ams_wk_date.strftime('%b %d, %Y') if _ams_wk_date else "N/A"
+    _fis_hdr_s   = _fis_wk_date.strftime('%b %d, %Y') if _fis_wk_date is not None else "N/A"
     st.markdown(f"""
     <div style="text-align:right;padding-top:6px;font-size:0.75rem">
+      <div style="color:#6fa8c4;font-size:0.6rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px">AMS FIS — CARCASS WEIGHTS</div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;align-items:baseline;margin-bottom:6px">
+        <span style="color:{DM_MUTED}">Week ending</span>
+        <span style="color:#6fa8c4;font-weight:700;font-size:0.9rem">{_fis_hdr_s}</span>
+      </div>
       <div style="color:{DM_MUTED};font-size:0.6rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px">NASS</div>
       <div style="display:flex;justify-content:flex-end;gap:8px;align-items:baseline;margin-bottom:2px">
-        <span style="color:{DM_MUTED}">Weights as of</span>
+        <span style="color:{DM_MUTED}">Weights (history) as of</span>
         <span style="color:{DM_TEXT};font-weight:700;font-size:0.9rem">{_wt_str}</span>
       </div>
       <div style="display:flex;justify-content:flex-end;gap:8px;align-items:baseline;margin-bottom:6px">
@@ -693,10 +966,19 @@ def _render_nass():
     """All NASS dashboard content — called inside the NASS tab."""
         # ── Weekly Snapshot cards ────────────────────────────────────────────────
 
+    # Deliberately `wt`, not `wt_tiles` — this tab stays single-source NASS so
+    # its charts and its headline can never disagree with each other.
     cols = st.columns(len(snap_classes))
     for col, cls in zip(cols, snap_classes):
         kpi = week_kpis(wt, cls)
-        col.markdown(_snap_card(cls, kpi, unit_label), unsafe_allow_html=True)
+        col.markdown(_snap_card(cls, kpi, unit_label, src="NASS"), unsafe_allow_html=True)
+
+    st.caption(
+        f"USDA NASS weekly weights, week ending {latest_date.strftime('%b %d, %Y')}. "
+        f"NASS accumulates weeks into a MONTHLY Livestock Slaughter release, so this "
+        f"page can sit several weeks behind. The Summary tab leads with the AMS FIS "
+        f"weekly figure (report 3658) for the same measure."
+    )
 
     st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 
@@ -1238,7 +1520,7 @@ def _render_ams_page():
         </div>
         <div style="color:{DM_MUTED};font-size:0.78rem;margin-top:3px">
           USDA Agricultural Marketing Service · Livestock, Poultry &amp; Grain Market News ·
-          More current than NASS (updates Fridays)
+          SJ_LS712 · More current than NASS (updates Fridays)
         </div>
       </div>
       <div style="text-align:right">
@@ -1455,18 +1737,53 @@ def _render_ams_page():
 # ── Summary tab ───────────────────────────────────────────────────────────────
 
 def _render_summary():
-    """Summary tab — NASS weight tiles + AMS slaughter tiles + seasonal chart."""
+    """Summary tab — AMS-led weight tiles + AMS slaughter tiles + seasonal chart."""
 
-    # ── NASS Weight tiles ────────────────────────────────────────────────────
+    # ── Headline carcass-weight tiles — AMS first, NASS underneath ───────────
+    _hdr_col = "#6fa8c4" if _tile_src == "AMS" else JSA_GREEN_LT
+    _hdr_wk  = wt_tiles["week_ending"].max()
+    _hdr_src = ("USDA AMS — Actual Slaughter Under Federal Inspection (report 3658)"
+                if _tile_src == "AMS" else "USDA NASS — Livestock Slaughter (monthly)")
+    _pub_s   = (f' &nbsp;·&nbsp; published {_fis_pub.strftime("%b %d, %Y")}'
+                if (_tile_src == "AMS" and _fis_pub) else "")
     st.markdown(
-        f'<div class="sec-hdr" style="font-size:0.8rem;color:{JSA_GREEN_LT}">'
-        f'📊 NASS Cattle Weights — Week Ending {latest_date.strftime("%b %d, %Y")}</div>',
+        f'<div class="sec-hdr" style="font-size:0.8rem;color:{_hdr_col}">'
+        f'🗓️ Cattle Carcass Weights — {_hdr_src} &nbsp;·&nbsp; '
+        f'Week Ending {_hdr_wk.strftime("%b %d, %Y")}{_pub_s}</div>',
         unsafe_allow_html=True,
     )
+    if _tile_note:
+        st.warning(_tile_note, icon="⚠️")
+    if _fis_missing:
+        st.warning(
+            "AMS returned no " + ", ".join(CLASS_DISPLAY.get(c, c) for c in _fis_missing)
+            + f" for week ending {_fis_wk_date.strftime('%b %d, %Y')} — "
+              "those tiles fall back to NASS and are labelled NASS.", icon="⚠️")
+    if _tile_src == "AMS" and _fis_stale:
+        st.warning(
+            f"These AMS figures are {_fis_age_days} days old (week ending "
+            f"{_fis_wk_date.strftime('%b %d, %Y')}). Report 3658 normally runs "
+            f"12–19 days behind, so it has probably stopped updating — the fetch "
+            f"still succeeds, which is why nothing else here would flag it.",
+            icon="⚠️")
     wt_cols = st.columns(len(snap_classes))
     for col, cls in zip(wt_cols, snap_classes):
-        kpi = week_kpis(wt, cls)
-        col.markdown(_snap_card(cls, kpi, unit_label), unsafe_allow_html=True)
+        kpi = week_kpis(wt_tiles, cls)
+        col.markdown(
+            _snap_card(cls, kpi, unit_label,
+                       src=_row_source(wt_tiles, cls, kpi["latest_date"])),
+            unsafe_allow_html=True,
+        )
+    _cap_src = ("Tiles: USDA AMS MARS report 3658, published Thursdays, ~12 days "
+                "after the week it covers." if _tile_src == "AMS" else
+                "Tiles: USDA NASS Livestock Slaughter — weekly figures are only "
+                "released monthly, so they can run ~3 weeks behind.")
+    _cap_chk = (f" AMS and NASS dressed weight are the same measure: verified equal "
+                f"within {_agree_max:,.1f} lb across {_agree_n} overlapping weeks "
+                f"before splicing." if _tile_src == "AMS" else "")
+    st.caption(_cap_src + " WoW / YoY / 4-week come from the same spliced series; "
+               "the 5-year average and every chart below come from NASS history."
+               + _cap_chk)
 
     st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
 
