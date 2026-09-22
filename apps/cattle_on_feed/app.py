@@ -459,73 +459,13 @@ st.sidebar.markdown(
     unsafe_allow_html=True,
 )
 
-# ── Load data ────────────────────────────────────────────────────────────────
-
-with st.spinner("Loading USDA NASS data…"):
-    inv, place, sales, other, heifer, steer, inv_full, place_full, sales_full = load_all(LOAD_YEARS, Q_YEARS)
-
-if inv.empty:
-    st.error("No data returned from USDA NASS. Check your API key in st.secrets.")
-    st.stop()
-
-inv_s    = series_for(inv, state)
-place_s  = series_for(place, state)
-sales_s  = series_for(sales, state)
-other_s  = series_for(other, state)
-hpct     = heifer_pct_frame(heifer, steer, inv_full, state)
-
-inv_kpi   = latest_kpi(inv, state)
-place_kpi = latest_kpi(place, state)
-sales_kpi = latest_kpi(sales, state)
-
-latest_date   = inv_kpi["date"]
-latest_h_row  = hpct.dropna(subset=["heifer_pct"]).iloc[-1] if not hpct.dropna(subset=["heifer_pct"]).empty else None
-prior_h_rows  = hpct.dropna(subset=["heifer_pct"])
-prior_h_row   = prior_h_rows.iloc[-2] if len(prior_h_rows) >= 2 else None
-yoy_h_row     = None
-if latest_h_row is not None:
-    yoy_match = prior_h_rows[
-        (prior_h_rows["date"].dt.year == latest_h_row["date"].year - 1) &
-        (prior_h_rows["date"].dt.month == latest_h_row["date"].month)
-    ]
-    if not yoy_match.empty:
-        yoy_h_row = yoy_match.iloc[0]
-
-# ── Header ───────────────────────────────────────────────────────────────────
-
-hdr_l, hdr_r = st.columns([4, 1])
-with hdr_l:
-    st.markdown(f"""
-    <div style="display:flex;align-items:center;gap:24px;padding:10px 0 8px">
-      <img src="{JSA_LOGO_FULL}" style="height:68px" />
-      <div>
-        <div style="font-size:2rem;font-weight:700;color:{DM_TEXT};line-height:1.1;letter-spacing:-0.01em">
-          JSA - USDA Cattle on Feed
-        </div>
-        <div style="color:{DM_MUTED};font-size:0.88rem;margin-top:5px;letter-spacing:.02em">
-          {STATE_NAMES.get(state, state)} &nbsp;·&nbsp; USDA NASS QuickStats &nbsp;·&nbsp; Feedlots with 1,000+ head capacity
-        </div>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
-with hdr_r:
-    _inv_str = latest_date.strftime('%b %d, %Y') if latest_date is not None else "N/A"
-    _h_str   = latest_h_row["date"].strftime('%b %Y') if latest_h_row is not None else "N/A"
-    st.markdown(f"""
-    <div style="text-align:right;padding-top:6px;font-size:0.75rem">
-      <div style="color:{DM_MUTED};font-size:0.6rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px">On-feed data</div>
-      <div style="display:flex;justify-content:flex-end;gap:8px;align-items:baseline;margin-bottom:6px">
-        <span style="color:{DM_MUTED}">As of</span>
-        <span style="color:{DM_TEXT};font-weight:700;font-size:0.9rem">{_inv_str}</span>
-      </div>
-      <div style="color:{HEIFER_COLOR};font-size:0.6rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px">Heifer/steer split</div>
-      <div style="display:flex;justify-content:flex-end;gap:8px;align-items:baseline;margin-bottom:6px">
-        <span style="color:{DM_MUTED}">As of</span>
-        <span style="color:{HEIFER_COLOR};font-weight:700;font-size:0.9rem">{_h_str}</span>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
-st.divider()
+# ── Header slot ────────────────────────────────────────────────────
+# The header is written into this container further down, once the QuickStats
+# data is in hand. Reserving its position here lets the tab bar and the COF
+# Recap tab render BEFORE the load, so a QuickStats failure cannot take down a
+# tab that never needed QuickStats. On a failure the container carries the
+# error message instead of the header.
+header_slot = st.container()
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
 
@@ -533,71 +473,12 @@ tab_summary, tab_recap, tab_flows, tab_season, tab_heifer, tab_state, tab_data =
     "⭐  Summary", "📄  COF Recap", "📊  On-Feed & Flows", "📅  Seasonality", "🐄  Heifers on Feed", "🗺️  State Comparison", "📋  Data",
 ])
 
-# ── Summary ────────────────────────────────────────────────────────────────────
-with tab_summary:
-    cols = st.columns(4)
-
-    with cols[0]:
-        st.markdown(_snap_card(
-            "On-Feed Inventory", f'{inv_kpi["current"]:,.0f}', "head",
-            _dc(inv_kpi["mom"], "+,.0f", " hd") + " " + _dc(inv_kpi["mom_pct"], "+.1f", "%"),
-            _dc(inv_kpi["yoy"], "+,.0f", " hd") + " " + _dc(inv_kpi["yoy_pct"], "+.1f", "%"),
-            foot=inv_kpi["date"].strftime("%b %Y") if inv_kpi["date"] is not None else "",
-        ), unsafe_allow_html=True)
-
-    with cols[1]:
-        st.markdown(_snap_card(
-            "Placements", f'{place_kpi["current"]:,.0f}', "head",
-            _dc(place_kpi["mom"], "+,.0f", " hd") + " " + _dc(place_kpi["mom_pct"], "+.1f", "%"),
-            _dc(place_kpi["yoy"], "+,.0f", " hd") + " " + _dc(place_kpi["yoy_pct"], "+.1f", "%"),
-            accent="#c98a56",
-            foot=place_kpi["date"].strftime("%b %Y") if place_kpi["date"] is not None else "",
-        ), unsafe_allow_html=True)
-
-    with cols[2]:
-        st.markdown(_snap_card(
-            "Marketings", f'{sales_kpi["current"]:,.0f}', "head",
-            _dc(sales_kpi["mom"], "+,.0f", " hd") + " " + _dc(sales_kpi["mom_pct"], "+.1f", "%"),
-            _dc(sales_kpi["yoy"], "+,.0f", " hd") + " " + _dc(sales_kpi["yoy_pct"], "+.1f", "%"),
-            accent="#9b89c4",
-            foot=sales_kpi["date"].strftime("%b %Y") if sales_kpi["date"] is not None else "",
-        ), unsafe_allow_html=True)
-
-    with cols[3]:
-        if latest_h_row is not None:
-            hp = float(latest_h_row["heifer_pct"])
-            qoq = hp - float(prior_h_row["heifer_pct"]) if prior_h_row is not None else float("nan")
-            yoy = hp - float(yoy_h_row["heifer_pct"]) if yoy_h_row is not None else float("nan")
-            st.markdown(_snap_card(
-                "Heifers on Feed", f'{hp:,.1f}', "% of on-feed",
-                _dc(qoq, "+.1f", " pts"), _dc(yoy, "+.1f", " pts"),
-                mom_lbl="QoQ", yoy_lbl="YoY", accent=HEIFER_COLOR,
-                foot=latest_h_row["date"].strftime("%b %Y"),
-            ), unsafe_allow_html=True)
-        else:
-            st.markdown(_snap_card("Heifers on Feed", "—", "% of on-feed", "—", "—",
-                                    accent=HEIFER_COLOR), unsafe_allow_html=True)
-
-    st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
-
-    st.markdown(f'<div class="sec-hdr">On-feed inventory — trend</div>', unsafe_allow_html=True)
-    cutoff = pd.Timestamp(latest_date) - pd.DateOffset(years=trend_years) if latest_date is not None else None
-    plot_df = inv_s[inv_s["date"] >= cutoff] if cutoff is not None else inv_s
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=plot_df["date"], y=plot_df["Value"], mode="lines",
-                              line=dict(color=JSA_GREEN, width=2.2), name="On-feed inventory"))
-    _apply(fig, height=340, y_title="Head")
-    st.plotly_chart(fig, width="stretch")
-
-    st.markdown(f'<div class="sec-hdr">Heifer share of on-feed inventory — the herd-cycle signal</div>', unsafe_allow_html=True)
-    st.caption("A rising heifer share means fewer heifers are being held back for breeding — a sign herd liquidation is "
-               "continuing. A falling share signals more heifers being retained, i.e. herd rebuilding. "
-               f"Heifers & heifer calves ÷ total on-feed inventory, both from feedlots with 1,000+ head capacity, "
-               f"quarterly (Jan/Apr/Jul/Oct) since 1996. State: {STATE_NAMES.get(state, state)}.")
-    st.plotly_chart(heifer_share_bar_chart(hpct), width="stretch")
-
 # ── COF Recap ─────────────────────────────────────────────────────────────────
-# The client one-pager. Deliberately NOT built off the QuickStats frames the
+# The client one-pager, drawn BEFORE the QuickStats load on purpose: it reads
+# USDA's released report text over plain HTTP and needs neither that API nor a
+# key, so an outage there must not take it down. Tab display order is set by
+# st.tabs, not by where these blocks sit, so it still shows up second.
+# Deliberately NOT built off the QuickStats frames the
 # rest of this page uses: it reads USDA's released report text so the state
 # percentages are USDA's own rounded figures rather than ours, and so the
 # weight-class breakdown (absent from the series above) comes along with them.
@@ -720,6 +601,145 @@ with tab_recap:
                                "renders — use the camera icon on its toolbar.")
             st.caption(f"Source: {cof_recap.report_url(recap['year'], recap['month'])}")
 
+
+# ── Load data ────────────────────────────────────────────────────────────────
+
+# Spinner goes in the reserved header slot, not here: this block now runs after
+# the tab bar has been drawn, so an un-slotted spinner would appear underneath
+# the tab content instead of at the top of the page where the header is landing.
+with header_slot:
+    with st.spinner("Loading USDA NASS data…"):
+        inv, place, sales, other, heifer, steer, inv_full, place_full, sales_full = load_all(LOAD_YEARS, Q_YEARS)
+
+if inv.empty:
+    with header_slot:
+        st.error("No data returned from USDA NASS QuickStats — check the API key "
+                 "in st.secrets. The COF Recap tab reads USDA's released report "
+                 "file directly and is unaffected; the tabs that need this data "
+                 "will be empty.")
+    st.stop()
+
+inv_s    = series_for(inv, state)
+place_s  = series_for(place, state)
+sales_s  = series_for(sales, state)
+other_s  = series_for(other, state)
+hpct     = heifer_pct_frame(heifer, steer, inv_full, state)
+
+inv_kpi   = latest_kpi(inv, state)
+place_kpi = latest_kpi(place, state)
+sales_kpi = latest_kpi(sales, state)
+
+latest_date   = inv_kpi["date"]
+latest_h_row  = hpct.dropna(subset=["heifer_pct"]).iloc[-1] if not hpct.dropna(subset=["heifer_pct"]).empty else None
+prior_h_rows  = hpct.dropna(subset=["heifer_pct"])
+prior_h_row   = prior_h_rows.iloc[-2] if len(prior_h_rows) >= 2 else None
+yoy_h_row     = None
+if latest_h_row is not None:
+    yoy_match = prior_h_rows[
+        (prior_h_rows["date"].dt.year == latest_h_row["date"].year - 1) &
+        (prior_h_rows["date"].dt.month == latest_h_row["date"].month)
+    ]
+    if not yoy_match.empty:
+        yoy_h_row = yoy_match.iloc[0]
+
+# ── Header ───────────────────────────────────────────────────────────────────
+
+hdr_l, hdr_r = header_slot.columns([4, 1])
+with hdr_l:
+    st.markdown(f"""
+    <div style="display:flex;align-items:center;gap:24px;padding:10px 0 8px">
+      <img src="{JSA_LOGO_FULL}" style="height:68px" />
+      <div>
+        <div style="font-size:2rem;font-weight:700;color:{DM_TEXT};line-height:1.1;letter-spacing:-0.01em">
+          JSA - USDA Cattle on Feed
+        </div>
+        <div style="color:{DM_MUTED};font-size:0.88rem;margin-top:5px;letter-spacing:.02em">
+          {STATE_NAMES.get(state, state)} &nbsp;·&nbsp; USDA NASS QuickStats &nbsp;·&nbsp; Feedlots with 1,000+ head capacity
+        </div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+with hdr_r:
+    _inv_str = latest_date.strftime('%b %d, %Y') if latest_date is not None else "N/A"
+    _h_str   = latest_h_row["date"].strftime('%b %Y') if latest_h_row is not None else "N/A"
+    st.markdown(f"""
+    <div style="text-align:right;padding-top:6px;font-size:0.75rem">
+      <div style="color:{DM_MUTED};font-size:0.6rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px">On-feed data</div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;align-items:baseline;margin-bottom:6px">
+        <span style="color:{DM_MUTED}">As of</span>
+        <span style="color:{DM_TEXT};font-weight:700;font-size:0.9rem">{_inv_str}</span>
+      </div>
+      <div style="color:{HEIFER_COLOR};font-size:0.6rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px">Heifer/steer split</div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;align-items:baseline;margin-bottom:6px">
+        <span style="color:{DM_MUTED}">As of</span>
+        <span style="color:{HEIFER_COLOR};font-weight:700;font-size:0.9rem">{_h_str}</span>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+header_slot.divider()
+
+# ── Summary ────────────────────────────────────────────────────────────────────
+with tab_summary:
+    cols = st.columns(4)
+
+    with cols[0]:
+        st.markdown(_snap_card(
+            "On-Feed Inventory", f'{inv_kpi["current"]:,.0f}', "head",
+            _dc(inv_kpi["mom"], "+,.0f", " hd") + " " + _dc(inv_kpi["mom_pct"], "+.1f", "%"),
+            _dc(inv_kpi["yoy"], "+,.0f", " hd") + " " + _dc(inv_kpi["yoy_pct"], "+.1f", "%"),
+            foot=inv_kpi["date"].strftime("%b %Y") if inv_kpi["date"] is not None else "",
+        ), unsafe_allow_html=True)
+
+    with cols[1]:
+        st.markdown(_snap_card(
+            "Placements", f'{place_kpi["current"]:,.0f}', "head",
+            _dc(place_kpi["mom"], "+,.0f", " hd") + " " + _dc(place_kpi["mom_pct"], "+.1f", "%"),
+            _dc(place_kpi["yoy"], "+,.0f", " hd") + " " + _dc(place_kpi["yoy_pct"], "+.1f", "%"),
+            accent="#c98a56",
+            foot=place_kpi["date"].strftime("%b %Y") if place_kpi["date"] is not None else "",
+        ), unsafe_allow_html=True)
+
+    with cols[2]:
+        st.markdown(_snap_card(
+            "Marketings", f'{sales_kpi["current"]:,.0f}', "head",
+            _dc(sales_kpi["mom"], "+,.0f", " hd") + " " + _dc(sales_kpi["mom_pct"], "+.1f", "%"),
+            _dc(sales_kpi["yoy"], "+,.0f", " hd") + " " + _dc(sales_kpi["yoy_pct"], "+.1f", "%"),
+            accent="#9b89c4",
+            foot=sales_kpi["date"].strftime("%b %Y") if sales_kpi["date"] is not None else "",
+        ), unsafe_allow_html=True)
+
+    with cols[3]:
+        if latest_h_row is not None:
+            hp = float(latest_h_row["heifer_pct"])
+            qoq = hp - float(prior_h_row["heifer_pct"]) if prior_h_row is not None else float("nan")
+            yoy = hp - float(yoy_h_row["heifer_pct"]) if yoy_h_row is not None else float("nan")
+            st.markdown(_snap_card(
+                "Heifers on Feed", f'{hp:,.1f}', "% of on-feed",
+                _dc(qoq, "+.1f", " pts"), _dc(yoy, "+.1f", " pts"),
+                mom_lbl="QoQ", yoy_lbl="YoY", accent=HEIFER_COLOR,
+                foot=latest_h_row["date"].strftime("%b %Y"),
+            ), unsafe_allow_html=True)
+        else:
+            st.markdown(_snap_card("Heifers on Feed", "—", "% of on-feed", "—", "—",
+                                    accent=HEIFER_COLOR), unsafe_allow_html=True)
+
+    st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+
+    st.markdown(f'<div class="sec-hdr">On-feed inventory — trend</div>', unsafe_allow_html=True)
+    cutoff = pd.Timestamp(latest_date) - pd.DateOffset(years=trend_years) if latest_date is not None else None
+    plot_df = inv_s[inv_s["date"] >= cutoff] if cutoff is not None else inv_s
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=plot_df["date"], y=plot_df["Value"], mode="lines",
+                              line=dict(color=JSA_GREEN, width=2.2), name="On-feed inventory"))
+    _apply(fig, height=340, y_title="Head")
+    st.plotly_chart(fig, width="stretch")
+
+    st.markdown(f'<div class="sec-hdr">Heifer share of on-feed inventory — the herd-cycle signal</div>', unsafe_allow_html=True)
+    st.caption("A rising heifer share means fewer heifers are being held back for breeding — a sign herd liquidation is "
+               "continuing. A falling share signals more heifers being retained, i.e. herd rebuilding. "
+               f"Heifers & heifer calves ÷ total on-feed inventory, both from feedlots with 1,000+ head capacity, "
+               f"quarterly (Jan/Apr/Jul/Oct) since 1996. State: {STATE_NAMES.get(state, state)}.")
+    st.plotly_chart(heifer_share_bar_chart(hpct), width="stretch")
 
 # ── On-Feed & Flows ───────────────────────────────────────────────────────────
 with tab_flows:
