@@ -9,12 +9,20 @@ Data source: USDA NASS QuickStats API (https://quickstats.nass.usda.gov)
 
 import io
 import os
+import sys
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
 import requests
 import streamlit as st
+
+# Sibling module for the COF Recap tab. Safe under the portal's shared
+# sys.modules despite the usual by-name collision trap — "cof_recap" exists
+# exactly once in the repo, unlike snowflake_db.py and friends.
+sys.path.insert(0, str(Path(__file__).parent))
+import cof_recap  # noqa: E402
 
 # ── JSA brand ────────────────────────────────────────────────────────────────
 JSA_GREEN    = "#5e7164"
@@ -521,8 +529,8 @@ st.divider()
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
 
-tab_summary, tab_flows, tab_season, tab_heifer, tab_state, tab_data = st.tabs([
-    "⭐  Summary", "📊  On-Feed & Flows", "📅  Seasonality", "🐄  Heifers on Feed", "🗺️  State Comparison", "📋  Data",
+tab_summary, tab_recap, tab_flows, tab_season, tab_heifer, tab_state, tab_data = st.tabs([
+    "⭐  Summary", "📄  COF Recap", "📊  On-Feed & Flows", "📅  Seasonality", "🐄  Heifers on Feed", "🗺️  State Comparison", "📋  Data",
 ])
 
 # ── Summary ────────────────────────────────────────────────────────────────────
@@ -587,6 +595,92 @@ with tab_summary:
                f"Heifers & heifer calves ÷ total on-feed inventory, both from feedlots with 1,000+ head capacity, "
                f"quarterly (Jan/Apr/Jul/Oct) since 1996. State: {STATE_NAMES.get(state, state)}.")
     st.plotly_chart(heifer_share_bar_chart(hpct), width="stretch")
+
+# ── COF Recap ─────────────────────────────────────────────────────────────────
+# The client one-pager. Deliberately NOT built off the QuickStats frames the
+# rest of this page uses: it reads USDA's released report text so the state
+# percentages are USDA's own rounded figures rather than ours, and so the
+# weight-class breakdown (absent from the series above) comes along with them.
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _latest_recap():
+    """(recap dict, error string). Cached so the tab does not refetch per rerun."""
+    year, month, text = cof_recap.latest_report()
+    if not text:
+        return None, "Could not reach the USDA report file at nass.usda.gov."
+    prior = cof_recap.fetch_report(year - 1, month)
+    return cof_recap.build_recap(year, month, text, prior), ""
+
+
+@st.cache_data(show_spinner=False, max_entries=8)
+def _recap_image(fig_json: str, fmt: str) -> bytes | None:
+    try:
+        import plotly.io as pio
+        kw = {"scale": 2} if fmt == "png" else {}
+        return pio.from_json(fig_json).to_image(format=fmt, **kw)
+    except Exception:
+        return None
+
+
+with tab_recap:
+    recap, err = _latest_recap()
+    if err:
+        st.error(err)
+    else:
+        st.markdown('<div class="sec-hdr">Pre-report analyst estimates</div>',
+                    unsafe_allow_html=True)
+        st.caption("The only figures USDA does not publish — type in whatever survey "
+                   "you quote to clients. Everything else is read from the release.")
+        g1, g2, g3, g4 = st.columns([1, 1, 1, 2])
+        guesses = {
+            "on_feed":  g1.number_input("On-Feed guess",  value=None, step=0.1,
+                                        format="%.1f", placeholder="101.8"),
+            "placed":   g2.number_input("Placed guess",   value=None, step=0.1,
+                                        format="%.1f", placeholder="96.8"),
+            "marketed": g3.number_input("Marketed guess", value=None, step=0.1,
+                                        format="%.1f", placeholder="96.1"),
+        }
+        guess_source = g4.text_input("Source label (footer)", value="",
+                                     placeholder="Reuters analyst avg")
+        show_footer = st.checkbox("Show source footer on the page", value=True)
+
+        st.divider()
+        fig = cof_recap.build_figure(recap, guesses=guesses, footer=show_footer,
+                                     guess_source=guess_source)
+        left, right = st.columns([3, 2])
+        with left:
+            st.plotly_chart(fig, config={"displayModeBar": False})
+        with right:
+            released = recap["release_date"]
+            st.markdown(
+                f'<div class="sec-hdr">{recap["title"]}</div>'
+                f'<p style="color:{DM_MUTED};font-size:.82rem;line-height:1.5">'
+                f'Released {released:%B %d, %Y}.<br>'
+                f'On-feed as of the 1st; placements and marketings for '
+                f'{recap["placement_month"]}.</p>', unsafe_allow_html=True)
+            stem = f"{cof_recap.MONTH_ABBR[recap['month'] - 1]}_{recap['year']}_COF_Report"
+            # Gated behind a button, like livestock_seasonal's export_row: a
+            # hidden tab still runs every rerun, and to_image spins up Chromium,
+            # so rendering eagerly would tax every widget on the whole page.
+            if st.button("Prepare download", width="stretch",
+                         help="Renders the page above as PNG and PDF."):
+                st.session_state["recap_export_ready"] = True
+            if st.session_state.get("recap_export_ready"):
+                fig_json = fig.to_json()
+                with st.spinner("Rendering…"):
+                    png, pdf = _recap_image(fig_json, "png"), _recap_image(fig_json, "pdf")
+                if png:
+                    st.download_button("Download PNG", png, file_name=f"{stem}.png",
+                                       mime="image/png", width="stretch")
+                if pdf:
+                    st.download_button("Download PDF", pdf, file_name=f"{stem}.pdf",
+                                       mime="application/pdf", width="stretch")
+                if not png and not pdf:
+                    st.warning("Image export failed on the host. The table above still "
+                               "renders — use the camera icon on its toolbar.")
+            st.caption(f"Source: {cof_recap.report_url(recap['year'], recap['month'])}")
+
 
 # ── On-Feed & Flows ───────────────────────────────────────────────────────────
 with tab_flows:
