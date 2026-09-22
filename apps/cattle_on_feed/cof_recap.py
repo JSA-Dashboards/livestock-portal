@@ -176,6 +176,19 @@ def parse_weight_classes(text: str) -> list:
 
 
 def pct(curr, prev):
+    """Percent of previous year, to the nearest tenth of the head counts.
+
+    Deliberately NOT USDA's rounded whole-number percent column, and
+    deliberately not matched to the legacy Excel sheet. For September 2026 that
+    sheet read On-Feed 100.8 and 99 where 11,163/11,080 and 11,080/11,198 give
+    100.7 and 98.9; its Placed and Marketed cells agree with this calculation to
+    the decimal, so only the two On-Feed cells ever differed. Confirmed
+    2026-09-22 that the computed figure is the one to show. Do not round these
+    back to match the old sheet.
+
+    The state block is a different matter — those percentages are read straight
+    from USDA's published whole-number column and are not recomputed here.
+    """
     return round(curr / prev * 100, 1) if prev else None
 
 

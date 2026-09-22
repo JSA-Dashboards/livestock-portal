@@ -153,3 +153,30 @@ One consequence worth knowing: the headline follows CME's publication clock, so
 if the CME feed breaks the headline freezes while the rest of the page keeps
 moving. That happened 2026-09-14 through 09-17. If the headline stops advancing
 while the Daily line does not, suspect the CME ingest, not this page.
+
+## The COF Recap tab
+
+The client one-pager, added 2026-09-22. It does not read QuickStats like the
+rest of that page — `cof_recap.py` parses USDA's released report text at
+`nass.usda.gov/.../cofd{MM}{YY}.txt`, which needs no API key and is the only
+source that carries the placement weight-class breakdown, USDA's own rounded
+state percentages, and the year-ago basis as USDA restated it, in one fetch.
+The Year-Ago column is those same three ratios recomputed from last year's file
+for the same month.
+
+Two things in it look wrong and are not:
+
+- **The US percentages round to the nearest tenth and will not match the old
+  Excel sheet.** For September 2026 the sheet read On-Feed 100.8 and 99 against
+  a computed 100.7 and 98.9 (11,163/11,080 and 11,080/11,198). Placed and
+  Marketed agree to the decimal, so only those two cells ever differed, and the
+  computed figure is the one to show — confirmed 2026-09-22. The state block is
+  separate: it is USDA's published whole-number column, read as-is.
+- **The marketing windows are a fixed per-class offset from the placement
+  month**, not USDA data — Under 600# is +10/+11 months out through 1,000+# at
+  +4/+5, with a deliberate two-month step between the first two classes. Those
+  offsets were derived from one example sheet, so a wrong window is a wrong
+  offset in `WEIGHT_CLASSES`, not a parsing bug.
+
+The tab sits behind the page's `st.stop()` guard, so a QuickStats outage takes
+it down even though it needs no API key. Known, not yet changed.
