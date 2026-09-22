@@ -641,8 +641,7 @@ with tab_recap:
             "marketed": g3.number_input("Marketed guess", value=None, step=0.1,
                                         format="%.1f", placeholder="96.1"),
         }
-        guess_source = g4.text_input("Source label (footer)", value="",
-                                     placeholder="Reuters analyst avg")
+        guess_source = g4.text_input("Source label (footer)", value="")
         show_footer = st.checkbox("Show source footer on the page", value=True)
 
         st.divider()
