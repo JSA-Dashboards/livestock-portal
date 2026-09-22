@@ -613,6 +613,30 @@ def _latest_recap():
     return cof_recap.build_recap(year, month, text, prior), ""
 
 
+# The guesses are the one thing on the recap that cannot be re-derived, so they
+# live in the URL rather than in widget state alone: a reload, a session
+# timeout or an app reboot would otherwise mean retyping them, and the filled-in
+# link can be bookmarked or handed to someone else.
+_QP_GUESS = {"on_feed": "g_onfeed", "placed": "g_placed", "marketed": "g_mkt"}
+
+
+def _qp_float(key: str):
+    try:
+        return float(st.query_params[key])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _qp_write(key: str, text: str):
+    """Set or clear one query param, only when it actually changes."""
+    current = st.query_params.get(key)
+    if not text:
+        if current is not None:
+            del st.query_params[key]
+    elif current != text:
+        st.query_params[key] = text
+
+
 @st.cache_data(show_spinner=False, max_entries=8)
 def _recap_image(fig_json: str, fmt: str) -> bytes | None:
     try:
@@ -633,16 +657,32 @@ with tab_recap:
         st.caption("The only figures USDA does not publish — type in whatever survey "
                    "you quote to clients. Everything else is read from the release.")
         g1, g2, g3, g4 = st.columns([1, 1, 1, 2])
+        # value= seeds the widget from the URL on first render only; after that
+        # the explicit key owns the state and the write-back below keeps the URL
+        # in step.
         guesses = {
-            "on_feed":  g1.number_input("On-Feed guess",  value=None, step=0.1,
-                                        format="%.1f", placeholder="101.8"),
-            "placed":   g2.number_input("Placed guess",   value=None, step=0.1,
-                                        format="%.1f", placeholder="96.8"),
-            "marketed": g3.number_input("Marketed guess", value=None, step=0.1,
-                                        format="%.1f", placeholder="96.1"),
+            "on_feed":  g1.number_input("On-Feed guess",  value=_qp_float("g_onfeed"),
+                                        step=0.1, format="%.1f", placeholder="101.8",
+                                        key="cof_g_onfeed"),
+            "placed":   g2.number_input("Placed guess",   value=_qp_float("g_placed"),
+                                        step=0.1, format="%.1f", placeholder="96.8",
+                                        key="cof_g_placed"),
+            "marketed": g3.number_input("Marketed guess", value=_qp_float("g_mkt"),
+                                        step=0.1, format="%.1f", placeholder="96.1",
+                                        key="cof_g_mkt"),
         }
-        guess_source = g4.text_input("Source label (footer)", value="")
+        guess_source = g4.text_input("Source label (footer)",
+                                     value=st.query_params.get("g_src", ""),
+                                     key="cof_g_src")
         show_footer = st.checkbox("Show source footer on the page", value=True)
+
+        for _key, _param in _QP_GUESS.items():
+            _val = guesses[_key]
+            _qp_write(_param, "" if _val is None else f"{_val:.1f}")
+        _qp_write("g_src", guess_source.strip())
+        if any(v is not None for v in guesses.values()):
+            st.caption("Your guesses are in the page URL — bookmark it, or send it on, "
+                       "and it reopens filled in.")
 
         st.divider()
         fig = cof_recap.build_figure(recap, guesses=guesses, footer=show_footer,
