@@ -279,7 +279,7 @@ with st.expander("Figures pulled", expanded=False):
 if kind == "am":
     with st.expander("Headline candidates", expanded=False):
         if st.button("Fetch headlines", use_container_width=False):
-            with st.spinner("Reading Beef Magazine and the USDA narratives…"):
+            with st.spinner("Reading Beef Magazine, the USDA narratives and packer news…"):
                 st.session_state["wcr_heads"] = headlines.candidates(issue)
 
         # Mailbox sign-in, only when it is actually needed. Device-code flow:
@@ -308,9 +308,10 @@ if kind == "am":
 
         found = st.session_state.get("wcr_heads")
         if not found:
-            st.caption("Beef Magazine plus USDA's own cash-trade and border narratives, "
-                       "last 48 hours. Pick what matters and rewrite it in your words — "
-                       "nothing here goes into the letter on its own.")
+            st.caption("Beef Magazine, USDA's own cash-trade and border narratives, and a "
+                       "news search for Tyson/JBS/Cargill/National Beef and plant "
+                       "disruption — last 48 hours. Pick what matters and rewrite it in "
+                       "your words — nothing here goes into the letter on its own.")
         else:
             for err in found.get("errors", []):
                 st.caption(f"⚠ {err}")
