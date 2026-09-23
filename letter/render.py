@@ -632,9 +632,11 @@ def build_html(ctx: dict) -> str:
     # Returning early rather than opting out section by section means a section
     # added to the PM letter later cannot silently appear in the AM one.
     #
-    # PROVISIONAL: the real morning format is not known yet. What is here is the
-    # prior settles, the morning feeder index call the 07:30 run freezes into
-    # fci_snapshots, and one commentary slot. Nothing is invented.
+    # SETTLED 2026-09-23, after Ross reviewed it section by section: the index
+    # and its basis, the cattle board, his Headlines, the overnight grain and
+    # macro quotes, week-to-date cash by state, and the month's USDA reports.
+    # One page, under three minutes, and that budget is the product -- a section
+    # added here has to earn its place against the reading time, not just fit.
     if kind == "am":
         body = [body[0], body[1]]          # masthead and intro only
         body.extend(am_blocks(ctx, c))

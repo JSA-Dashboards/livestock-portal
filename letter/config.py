@@ -46,9 +46,10 @@ SIGNATURE = {
 }
 
 SIGN_OFF_TUESDAY = "Have a good evening,"
-# PLACEHOLDERS -- the morning report's own wording is not known yet. "Have a
-# good evening" on a 07:30 report is plainly wrong, so these are neutral rather
-# than correct. One edit each when the real wording is settled.
+# The morning report's own wording. Never explicitly chosen -- they were neutral
+# stand-ins for "Have a good evening", which is plainly wrong on a 07:30 report
+# -- but they have survived several rounds of review without comment, so treat
+# them as accepted rather than pending. One edit each to change.
 SIGN_OFF_AM = "Have a good day,"
 INTRO_AM = "Morning report for {stamp}:"
 SIGN_OFF_FRIDAY = "Have a good weekend,"
@@ -125,14 +126,22 @@ LIVE_CATTLE_CODE = "LE"
 FEEDER_CATTLE_CODE = "GF"
 N_CONTRACTS = 3
 
-# WHICH NET CHANGE THE LETTER QUOTES -- UNCONFIRMED, PLEASE VERIFY.
+# WHICH NET CHANGE THE EVENING LETTER QUOTES -- CONFIRMED 2026-09-23.
 #
-# Tuesday's letter is headed "for the week through the close on 9/15/26", which
-# reads as a week-to-date change (prior Friday's settle to the latest settle)
-# rather than a one-session change. That is the assumption here, but it was
-# inferred from the heading, never confirmed. build.py writes BOTH figures into
-# out/data_<date>.json under "change_week" and "change_day" so the first run can
-# be checked against a letter you already sent; flip this if "day" is right.
+# Checked against the letter Ross sent for 9/22/26. Every one of the six
+# contracts is the settle minus the PRIOR FRIDAY'S settle, exact to the
+# thousandth:
+#
+#   Oct LC  218.775 - 215.925 = +2.85     Sep FC  337.275 - 333.575 = +3.70
+#   Dec LC  219.450 - 216.625 = +2.825    Oct FC  328.025 - 323.500 = +4.525
+#   Feb LC  220.550 - 217.350 = +3.20     Nov FC  323.200 - 318.000 = +5.20
+#
+# So "week", not "day". build.py still writes BOTH into the data cache, which is
+# what made the check possible and is worth keeping.
+#
+# THE MORNING BRIEF IS DIFFERENT and does not read this: it quotes the prior
+# session's move, because CME livestock does not open until 08:30 Central and a
+# week-to-date figure is not what a reader wants before the bell.
 CHANGE_BASIS = "week"      # "week" | "day"
 
 # Moving averages the Technicals section quotes.
