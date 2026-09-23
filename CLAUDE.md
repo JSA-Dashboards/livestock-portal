@@ -180,3 +180,43 @@ Two things in it look wrong and are not:
 
 The tab sits behind the page's `st.stop()` guard, so a QuickStats outage takes
 it down even though it needs no API key. Known, not yet changed.
+
+## The daily letter generator (`letter/`)
+
+`python -m letter.build [--session am|pm] [--day monday..friday]`, or the
+**JSA Daily Cattle Reports** page. Two reports a day, five weekdays; AM is one
+format all week, PM switches to the week-in-review on Friday. Read the module
+docstrings before changing a source — every one records the way that feed
+fails *quietly*, which is the only failure mode that matters here.
+
+Validated against the letters actually sent on 9/15, 9/18 and 9/22: every
+automated figure reproduces exactly.
+
+### In flight as of 2026-09-23
+
+- **Massive's futures history has no bars for 2026-09-14..09-18.** Not a fetch
+  bug — the week is absent upstream. It leaves the PM moving averages marked
+  `[[?]]`, because an average over a gapped series is wrong rather than
+  approximate. `letter/settle_log.py` now records the front-month settles on
+  every build, so the weekly change stops depending on their history once a
+  letter has been built on a Friday. Delete `letter/data/` and that restarts.
+- **Azure admin consent is pending** for the app registration "JSA Letter -
+  email read" (delegated `Mail.Read`). Until it is granted, the headline
+  candidate panel runs on the AMS narratives and Beef Magazine, and the four
+  subscription digests show one line saying the mailbox is not connected.
+  Nothing else is blocked and no code change is needed when it lands.
+- **The Sterling Profit Tracker carries the packer margin** the evening letter
+  quotes by hand ("Sterling packer margins ... +138.80/hd versus +177.16/hd week
+  before"). It arrives from `jnalivka@fmtc.com` and is already fetched for
+  headlines — worth parsing as a FIGURE once a real one can be seen.
+
+### Two things not to undo
+
+- **The morning brief is one page and under three minutes.** That budget is the
+  product. `render.build_html` returns early for AM rather than opting out
+  section by section, so a section added to the evening letter cannot leak into
+  the morning one; keep it that way.
+- **Nothing fetched writes itself into a letter.** Headlines are a pick list on
+  the authoring page; `render.py` has no import path to the fetchers and a test
+  asserts it. Every other figure is a USDA or CME number that is either right or
+  marked `[[?]]` — a headline has no `[[?]]`, so it gets a human instead.
