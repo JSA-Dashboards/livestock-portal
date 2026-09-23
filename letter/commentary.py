@@ -30,6 +30,16 @@ SECTIONS_BY_KIND = {
         ("technicals_fc", "Technicals: Feeder Cattle"),
         ("fundamental", "Fundamental Rundown"),
     ],
+    # The morning brief has ONE written section. Everything else on the page is
+    # fetched, and the whole thing is meant to be read in under three minutes --
+    # a second commentary slot is the easiest way to lose that.
+    #
+    # Border status lives HERE by choice, not automation: a line that says the
+    # same thing for three weeks stops being read, so it appears when it is news
+    # and not otherwise.
+    "am": [
+        ("headlines", "Headlines"),
+    ],
     "friday": [
         ("key_headlines", "Key Headlines"),
         ("technicals_lc", "Technicals: Live Cattle"),

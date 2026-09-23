@@ -581,6 +581,73 @@ def _cash_rows(slug: int, on: date) -> list:
     return []
 
 
+# The same daily reports, kept flat and abbreviated the way the morning brief
+# names them -- "NE 221.00-222.50 live, 350 dressed" rather than a North/South
+# rollup. The evening letter still wants the rollup; this is a different read of
+# the same four slugs.
+# THE SUMMARY REPORTS, NOT THE AFTERNOON ONES -- and the difference is not
+# cosmetic. Nebraska on Monday 2026-09-21: the Afternoon report carried ZERO
+# priced rows while the Summary carried nine, so a week-to-date built on
+# Afternoon silently dropped Nebraska from a week it had traded.
+#
+# The evening letter still uses the Afternoon reports, deliberately. Written on
+# a Friday evening, that is the latest print available, and it is what Ross
+# quoted: 9/18 Afternoon gives the letter's 220-222.50, while the Summary for
+# the same day runs to 224.00 because it includes trade confirmed later. Same
+# day, two honest answers to two different questions -- "what is out now" and
+# "what did the day finally do".
+CASH_STATES = [(2668, "NE"), (2672, "IA/MN"), (2664, "TX/OK/NM"), (2666, "KS")]
+
+
+def fetch_regional_cash_wtd(as_of: date) -> dict:
+    """
+    Week-to-date negotiated cash by state, Monday through as_of.
+
+    A single day is the wrong window for a morning brief: Monday is routinely
+    untested, so a Tuesday brief built from Monday alone says "no established
+    test" while the week has in fact traded. Ranges span every priced day of the
+    week so far, and `days` records how many actually carried a price.
+
+    Same class filter as the evening letter -- STEER and HEIFER only. Adding
+    MIXED or the ALL BEEF TYPE rollup widens the range, and DAIRYBRED drags
+    dressed down.
+    """
+    monday = as_of - timedelta(days=as_of.weekday())
+    span = [monday + timedelta(days=i) for i in range((as_of - monday).days + 1)
+            if (monday + timedelta(days=i)).weekday() < 5]
+
+    out = {"from": monday.isoformat(), "to": as_of.isoformat(), "regions": {}}
+    for slug, label in CASH_STATES:
+        live_lo, live_hi, dr_lo, dr_hi, head, days = [], [], [], [], 0.0, set()
+        for day in span:
+            for row in _cash_rows(slug, day):
+                if str(row.get("purchase_type_code", "")).strip() != "NEGOTIATED CASH":
+                    continue
+                if str(row.get("class_desc", "")).strip() not in CASH_CLASSES:
+                    continue
+                lo, hi = _num(row.get("price_range_low")), _num(row.get("price_range_high"))
+                if lo is None or hi is None:
+                    continue
+                basis = str(row.get("selling_basis_desc", "")).strip()
+                if basis == "LIVE FOB":
+                    live_lo.append(lo); live_hi.append(hi)
+                    head += _num(row.get("head_count")) or 0
+                    days.add(day)
+                elif basis.startswith("DRESSED"):
+                    dr_lo.append(lo); dr_hi.append(hi)
+                    days.add(day)
+        out["regions"][label] = {
+            "live_low": min(live_lo) if live_lo else None,
+            "live_high": max(live_hi) if live_hi else None,
+            "dressed_low": min(dr_lo) if dr_lo else None,
+            "dressed_high": max(dr_hi) if dr_hi else None,
+            "head": int(head) or None,
+            "days": len(days),
+            "undefined": not live_lo and not dr_lo,
+        }
+    return out
+
+
 def fetch_regional_cash(on: date) -> dict:
     """
     North and South negotiated ranges for one trading day.
@@ -617,6 +684,186 @@ def fetch_regional_cash(on: date) -> dict:
             "undefined": not live_lows and not dressed_lows,
         }
     return out
+
+
+# -- Outside markets, for the morning brief ----------------------------------
+# Corn is feed cost, equities are risk appetite, crude moves both. Fetched
+# through the same Massive client the Seasonal dashboard uses.
+#
+# THESE ARE THE ONLY ONES WITH A REAL OVERNIGHT MOVE AT 8:30am CENTRAL. CME
+# livestock futures do not open until 08:30 CT, so there is no overnight cattle
+# print to report -- grain and equities have traded through the night and are
+# where the morning signal actually is. Dollar Index is deliberately absent:
+# Massive returns no contracts for DX.
+# "eighths" quotes in whole cents and eighths -- 531.25 prints as 531'2, the way
+# the grain trade writes it and the way Ross writes it ("5'4 lower at 531'2").
+# Corn, wheat, oats and soybeans trade in eighths; meal, equities and crude are
+# plain decimals.
+OUTSIDE_MARKETS = [
+    ("ZC", "Corn", "eighths"),
+    ("ES", "S&P", "decimal"),
+    ("CL", "Crude", "decimal"),
+]
+
+
+def fetch_outside_markets(api_key: str, as_of: date) -> list:
+    """
+    Front-month price and overnight change for each outside market.
+
+    THE CHANGE COMES FROM THE SNAPSHOT'S OWN session.previous_settlement, not
+    from differencing the settlement history. The history's newest bar is TODAY'S
+    own in-progress session, so subtracting it gave corn -0.25 where the real
+    overnight move was -9.00 against a 536.75 prior settle. Massive already
+    carries both the base and the change; computing it again only adds a way to
+    get it wrong, and it sidesteps the gaps that history has had.
+    """
+    api = _massive()
+    out = []
+    for code, label, style in OUTSIDE_MARKETS:
+        row = {"code": code, "label": label, "style": style,
+               "price": None, "change": None, "month": None, "ticker": None}
+        try:
+            contracts = api.get_active_contract_tickers(code, api_key, as_of, limit=600)
+            if contracts:
+                front = contracts[0]["ticker"]
+                snap = api.get_snapshots([front], api_key).get(front, {})
+                session = snap.get("session") or {}
+                price = (session.get("settlement_price")
+                         or (snap.get("last_trade") or {}).get("price")
+                         or session.get("close"))
+                prior = session.get("previous_settlement")
+                change = session.get("change")
+                if change is None and price is not None and prior:
+                    change = float(price) - float(prior)
+                row.update({
+                    "ticker": front, "month": contract_month(front),
+                    "price": round(float(price), 4) if price else None,
+                    "prior_settle": round(float(prior), 4) if prior else None,
+                    "change": round(float(change), 4) if change is not None else None,
+                })
+        except Exception:
+            pass
+        out.append(row)
+    return out
+
+
+# -- USDA release calendar ----------------------------------------------------
+# What prints today. The highest value-per-second line in a morning brief: it
+# says what to be ready for. Same ESMIS endpoint and publication ids the
+# Seasonal dashboard uses for its report vlines.
+ESMIS_BASE = "https://esmis.nal.usda.gov/api/v1"
+
+# THE MONTHLY REPORTS ONLY. Weekly rhythms -- carcass weights, CFTC, weekly
+# meat production -- are deliberately absent: they recur on the same weekday
+# every week, so listing them is a line the reader already knows and skips, and
+# in a three-minute brief that costs more than it gives.
+#
+# IDS, NOT SLUGS, AND CHECKED. Several near-misses exist: "Cold Storage Annual
+# Summary" (1190) and "Weekly Cold Storage Holdings" (1867) are not "Cold
+# Storage" (2111), and "Historical Track Record - Grain Stocks" (58) is not
+# "Grain Stocks" (1480). The web slugs are not guessable either -- Cattle on
+# Feed lives at /publication/cattle-feed, not /cattle-on-feed.
+ESMIS_PUBLICATIONS = {
+    "WASDE": 1659,
+    "Cattle on Feed": 2270,
+    "Cold Storage": 2111,
+    "Grain Stocks": 1480,
+    "Crop Production": 1632,
+}
+
+# The window is the REST OF THIS MONTH, not a rolling number of days. A week is
+# wrong for monthly reports -- most weeks show nothing and the section reads as
+# broken -- and a fixed 45 days makes "this month" mean something different
+# every morning.
+#
+# Late in a month that leaves little or nothing, so it rolls into the following
+# month when fewer than MIN_ITEMS remain. The heading says Upcoming rather than
+# naming a month, so extending it is not a contradiction.
+CALENDAR_MIN_ITEMS = 2
+
+_WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def fetch_report_calendar(as_of: date) -> dict:
+    """
+    The monthly USDA reports due between today and roughly six weeks out.
+
+    READS upcoming_releases FROM /publication/findById. The obvious endpoint,
+    /release/findByPubId, is an ARCHIVE -- it returns only releases that have
+    already happened, newest first, so a forward calendar built on it comes back
+    empty and looks like a bug rather than a wrong source. The publication
+    record carries the scheduled dates directly, as ISO timestamps.
+
+    Forward-looking on purpose: a WASDE or a Cattle on Feed a fortnight out
+    changes how the month is traded, and a reader who first hears about it on
+    the morning is hearing too late.
+    """
+    # End of the current month, then the end of the next, as a fallback.
+    def _month_end(d):
+        return (d.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+
+    this_month_end = _month_end(as_of)
+    horizon = _month_end(this_month_end + timedelta(days=1))
+    sess = _session()
+    scheduled = []
+
+    for name, pub_id in ESMIS_PUBLICATIONS.items():
+        try:
+            r = sess.get(f"{ESMIS_BASE}/publication/findById/{pub_id}", timeout=25)
+            r.raise_for_status()
+            payload = r.json()
+        except (requests.RequestException, ValueError):
+            continue
+        rows = payload.get("results", [payload]) if isinstance(payload, dict) else payload
+        for rec in (rows if isinstance(rows, list) else [rows]):
+            if not isinstance(rec, dict):
+                continue
+            for stamp in rec.get("upcoming_releases") or []:
+                try:
+                    when = pd.to_datetime(stamp)
+                except (ValueError, TypeError):
+                    continue
+                d = when.date()
+                if not (as_of <= d <= horizon):
+                    continue
+                # Built by hand: "%-I" is a POSIX extension and raises
+                # ValueError on Windows, which is where this runs.
+                hour = when.hour % 12 or 12
+                ampm = "am" if when.hour < 12 else "pm"
+                scheduled.append({"date": d, "name": name,
+                                  "time": f"{hour}:{when.minute:02d}{ampm}"})
+
+    # WASDE: ESMIS lists it as an active monthly publication but returns
+    # upcoming_releases: [] for it -- WAOB publishes it, not NASS, and the
+    # forward schedule is simply not in this feed. Rather than drop a report
+    # that was explicitly asked for, it is paired with Crop Production, which
+    # USDA releases in the SAME noon-ET slot.
+    #
+    # THE LIMIT, AND IT IS ABSENCE NOT ERROR: a paired date is right whenever it
+    # appears, but WASDE also prints in months with no Crop Production release
+    # (roughly December through April), and those will not show. Flagged with
+    # "inferred" so the build can say so.
+    if not any(r["name"] == "WASDE" for r in scheduled):
+        for r in [x for x in scheduled if x["name"] == "Crop Production"]:
+            scheduled.append({"date": r["date"], "name": "WASDE",
+                              "time": r["time"], "inferred": True})
+
+    scheduled.sort(key=lambda r: (r["date"], r["name"]))
+
+    # Prefer this month alone; roll into next only when this month is thin.
+    this_month = [r for r in scheduled if r["date"] <= this_month_end]
+    if len(this_month) >= CALENDAR_MIN_ITEMS:
+        scheduled = this_month
+
+    return {
+        "inferred": [f"{r['name']} {r['date'].isoformat()}"
+                     for r in scheduled if r.get("inferred")],
+        "items": [{"date": r["date"].isoformat(),
+                   "when": f"{_WD[r['date'].weekday()]} {r['date'].month}/{r['date'].day}",
+                   "label": f"{r['name']}, {r['time']}",
+                   "is_today": r["date"] == as_of}
+                  for r in scheduled],
+    }
 
 
 def _ls712_section(text: str, heading: str) -> list:

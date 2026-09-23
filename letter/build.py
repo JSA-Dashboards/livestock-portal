@@ -129,6 +129,9 @@ def gather(issue: date, errors: list, kind: str = "tuesday", cof_guesses: dict =
         "cftc": {},
         "regional_cash": {},
         "cof": {},
+        "outside": [],
+        "calendar": [],
+        "regional_cash": {},
     }
 
     if api_key:
@@ -159,6 +162,21 @@ def gather(issue: date, errors: list, kind: str = "tuesday", cof_guesses: dict =
         ctx["fci"] = _try("feeder cattle index (Snowflake)", sources.fetch_feeder_index, errors) or {}
     ctx["douglas"] = _try("Douglas imports (Snowflake)",
                           lambda: sources.fetch_douglas_ytd(issue.year), errors) or {}
+
+    if kind == "am":
+        # The morning brief's own sources. Cattle futures do not open until
+        # 08:30 CT, so grain and equities are the only real overnight signal.
+        if api_key:
+            ctx["outside"] = _try("outside markets", lambda: sources.fetch_outside_markets(
+                api_key, issue), errors) or []
+        ctx["calendar"] = _try("USDA release calendar",
+                               lambda: sources.fetch_report_calendar(issue), errors) or []
+        # WEEK TO DATE, not yesterday. AMS publishes its daily summary around
+        # 11am so today's has not printed, and Monday is routinely untested --
+        # a Tuesday brief built from Monday alone reads "no established test"
+        # while the week has in fact traded.
+        ctx["regional_cash"] = _try("cash week-to-date (AMS daily)",
+                                    lambda: sources.fetch_regional_cash_wtd(issue), errors) or {}
 
     if kind == "friday":
         ctx["cftc"] = _try("CFTC managed money", sources.fetch_cftc, errors) or {}
@@ -326,30 +344,41 @@ def hints(ctx: dict, kind: str = "tuesday") -> dict:
     read while writing the market read.
     """
     out: dict = {key: [] for key, _ in commentary.sections_for(kind)}
-    lead = "key_headlines" if kind == "friday" else "market_action"
-    tail = "cash_recap" if kind == "friday" else "fundamental"
+    keys = set(out)
+
+    # Derived from the format's OWN sections rather than hardcoded, so a format
+    # that lacks them cannot KeyError. The AM report has only a Morning Note,
+    # and assuming "market_action" existed killed the build before it wrote
+    # anything -- after a full fetch, which is the expensive half.
+    lead = next((k for k in ("morning_note", "key_headlines", "market_action") if k in keys), None)
+    tail = next((k for k in ("cash_recap", "fundamental", "morning_note") if k in keys), None)
+
+    def add(slot, text):
+        """Append only to a slot this format actually has."""
+        if slot in keys:
+            out[slot].append(text)
 
     basis = "week to date" if ctx["change_basis"] == "week" else "session"
     key = "change_week" if ctx["change_basis"] == "week" else "change_day"
     for label, rows in (("Live Cattle", ctx["live_cattle"]), ("Feeders", ctx["feeder_cattle"])):
         for r in rows:
-            out[lead].append(
-                f"{label} {r['month']}: {r.get(key)} ({basis}) at {r.get('settle')}")
+            add(lead, f"{label} {r['month']}: {r.get(key)} ({basis}) at {r.get('settle')}")
 
+    # Through add() as well: the AM format has no technicals sections at all.
     for slot, tech, label in (("technicals_lc", ctx.get("tech_lc"), "Live Cattle"),
                               ("technicals_fc", ctx.get("tech_fc"), "Feeders")):
         if not tech or tech.get("error"):
-            out[slot].append(f"{label}: no bars available")
+            add(slot, f"{label}: no bars available")
             continue
         ma = tech.get("ma", {})
-        out[slot].append(f"{tech.get('month','')} {label} close {tech.get('last_close')}"
-                         f" on {tech.get('last_date')}")
+        add(slot, f"{tech.get('month','')} {label} close {tech.get('last_close')}"
+                  f" on {tech.get('last_date')}")
         for w in config.MA_WINDOWS:
-            out[slot].append(f"{w}-day MA {ma.get(w)}  (printed automatically)")
-        out[slot].append(f"prior session high/low {tech.get('prior_high')} / {tech.get('prior_low')}")
-        out[slot].append(f"{tech.get('swing_days')}-day swing high/low "
-                         f"{tech.get('swing_high')} / {tech.get('swing_low')}")
-        out[slot].append("support/resistance below are YOUR call -- nothing is printed unless you write it")
+            add(slot, f"{w}-day MA {ma.get(w)}  (printed automatically)")
+        add(slot, f"prior session high/low {tech.get('prior_high')} / {tech.get('prior_low')}")
+        add(slot, f"{tech.get('swing_days')}-day swing high/low "
+                  f"{tech.get('swing_high')} / {tech.get('swing_low')}")
+        add(slot, "support/resistance below are YOUR call -- nothing is printed unless you write it")
 
     # Figures SJ_LS712 does publish but the Tuesday letter does not print. They
     # are quoted here because they are the completed-week context you would
@@ -357,38 +386,38 @@ def hints(ctx: dict, kind: str = "tuesday") -> dict:
     sl = ctx.get("slaughter") or {}
     wk = sl.get("weekly") or {}
     if wk.get("value") is not None:
-        out[tail].append(
+        add(tail, 
             f"week ending {wk.get('week_ending')}: {wk['value']:,.0f} head "
             f"vs {wk.get('last_week'):,.0f} LW and {wk.get('year_ago'):,.0f} LY"
             if wk.get("last_week") and wk.get("year_ago")
             else f"week ending {wk.get('week_ending')}: {wk['value']:,.0f} head")
     if wk.get("ytd_chg_pct") is not None:
-        out[tail].append(f"YTD slaughter {wk['ytd_chg_pct']}% YoY")
+        add(tail, f"YTD slaughter {wk['ytd_chg_pct']}% YoY")
     bp = sl.get("beef_production") or {}
     if bp.get("ytd_chg_pct") is not None:
-        out[tail].append(f"YTD beef production {bp['ytd_chg_pct']}% YoY")
+        add(tail, f"YTD beef production {bp['ytd_chg_pct']}% YoY")
 
     if kind == "friday":
         rc = (ctx.get("regional_cash") or {}).get("regions") or {}
         for name, r in rc.items():
             if r.get("undefined"):
-                out[tail].append(f"{name}: no adequate market test (prints as Undefined)")
+                add(tail, f"{name}: no adequate market test (prints as Undefined)")
             else:
-                out[tail].append(
+                add(tail, 
                     f"{name}: live {r.get('live_low')}-{r.get('live_high')}, "
                     f"dressed {r.get('dressed_low')}-{r.get('dressed_high')}, {r.get('head')} hd")
         cf = ctx.get("cof") or {}
         if cf.get("include"):
-            out["cof_note"].append(
+            add("cof_note", 
                 f"actual {cf.get('actual')} | guesses {cf.get('guesses') or 'none entered'} "
                 f"| year-ago {cf.get('year_ago')}")
 
     d = ctx.get("douglas") or {}
     if d.get("head") is not None:
-        out[tail].append(f"YTD Douglas feeder imports {d['head']:,} head ({d.get('year')})")
+        add(tail, f"YTD Douglas feeder imports {d['head']:,} head ({d.get('year')})")
     cash = (ctx.get("cash") or {}).get("live", {})
     if cash.get("this_week") is not None and cash.get("last_week") is not None:
-        out[tail].append(
+        add(tail, 
             f"live cash {cash['this_week']} vs {cash['last_week']} "
             f"({cash['this_week'] - cash['last_week']:+.2f} week on week)")
     return out
@@ -407,6 +436,9 @@ def main(argv=None) -> int:
                     help="re-render from the last fetch -- use after editing commentary")
     ap.add_argument("--html-only", action="store_true", help="skip the PDF step")
     ap.add_argument("--out", default=str(OUT), help="output directory")
+    ap.add_argument("--session", choices=[x.lower() for x in config.SESSIONS],
+                    default=config.DEFAULT_SESSION.lower(),
+                    help="which of the day's two reports (default: pm)")
     ap.add_argument("--day", choices=[d.lower() for d in config.DAYS], default=None,
                     help="which weekday's letter (default: today, or Monday at a weekend). "
                          "Friday uses the week-in-review format; every other day uses "
@@ -437,8 +469,13 @@ def main(argv=None) -> int:
         day = args.kind          # legacy --kind tuesday|friday
     else:
         day = config.day_for_date(issue)
-    fmt = config.format_for(day)
+    fmt = config.format_for(day, args.session)
     kind = fmt                   # render/commentary still switch on the format
+    session = args.session
+    # AM and PM are separate letters on the same day, so every artefact is
+    # keyed by both -- a shared name would have the morning letter overwrite
+    # the evening one and neither would say so.
+    slug = f"{session}_{day}"
 
     week_base_cli = {}
     for pair in args.week_base.split(","):
@@ -460,7 +497,7 @@ def main(argv=None) -> int:
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    data_path = out_dir / f"data_{day}_{issue}.json"
+    data_path = out_dir / f"data_{slug}_{issue}.json"
 
     load_env()
     errors: list = []
@@ -472,10 +509,12 @@ def main(argv=None) -> int:
         ctx = json.loads(data_path.read_text(encoding="utf-8"))
         ctx["issue_date"] = issue
         ctx["kind"] = kind
+        ctx["session"] = session
         print(f"reusing {data_path.name}")
     else:
-        print(f"fetching {day} letter for {issue} ({fmt} format) ...")
+        print(f"fetching {session.upper()} {day} letter for {issue} ({fmt} format) ...")
         ctx = gather(issue, errors, kind, cof_guesses)
+        ctx["session"] = session
         # Chain to the previous letter before caching, so the recovered change
         # is what --no-fetch re-renders from too.
         settle_log.record(ctx)
@@ -498,18 +537,18 @@ def main(argv=None) -> int:
         print(f"  weekly change from entered prior-Friday settles: {', '.join(filled)}")
 
     # The commentary file is created once and never overwritten -- it holds your draft.
-    cpath = commentary.path_for(out_dir, issue, day)
+    cpath = commentary.path_for(out_dir, issue, slug)
     existed = cpath.exists()
     commentary.write_template(cpath, hints(ctx, kind), kind)
     ctx["commentary"] = commentary.read(cpath, kind)
 
     html = render.build_html(ctx)
-    html_path = out_dir / f"{config.TITLE} {day.title()} {issue}.html"
+    html_path = out_dir / f"{config.title_for(session)} {day.title()} {issue}.html"
     html_path.write_text(html, encoding="utf-8")
 
     pdf_msg = ""
     if not args.html_only:
-        pdf_path = out_dir / f"{config.TITLE} {day.title()} {issue}.pdf"
+        pdf_path = out_dir / f"{config.title_for(session)} {day.title()} {issue}.pdf"
         ok, msg = topdf.html_to_pdf(html_path, pdf_path)
         pdf_msg = f"PDF: {msg}" if ok else f"PDF NOT written -- {msg}"
 
@@ -531,6 +570,14 @@ def main(argv=None) -> int:
         print(f"\n{missing} value(s) could not be filled and are marked [[?]] in the letter.")
     for e in errors:
         print(f"  ! {e}")
+
+    inferred = (ctx.get("calendar") or {}).get("inferred") or []
+    if inferred:
+        print(f"\n  ! WASDE dates are INFERRED from Crop Production's release slot: "
+              f"{', '.join(inferred)}.")
+        print("    ESMIS returns no upcoming_releases for WASDE. The paired date is right")
+        print("    when it appears, but WASDE months with no Crop Production (roughly")
+        print("    Dec-Apr) will not show at all.")
 
     ds = ctx.get("daily_slaughter") or {}
     if ds.get("status") and ds["status"].lower() != "final":

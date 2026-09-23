@@ -71,6 +71,22 @@ def test_cftc_block_prints_the_date_from_the_data():
 
 # -- Regional cash ------------------------------------------------------------
 
+def test_am_uses_the_summary_reports_not_the_afternoon_ones():
+    """
+    Nebraska on Monday 2026-09-21: the Afternoon report carried zero priced
+    rows, the Summary carried nine. A week-to-date built on Afternoon silently
+    dropped a state that had traded.
+
+    The evening letter keeps the Afternoon slugs on purpose -- 9/18 Afternoon
+    gives the letter's own 220-222.50, where the Summary runs to 224.00.
+    """
+    am = {slug for slug, _ in sources.CASH_STATES}
+    pm = {slug for group in sources.CASH_REGIONS.values() for slug in group}
+    assert am == {2668, 2672, 2664, 2666}
+    assert pm == {2667, 2671, 2663, 2665}
+    assert not (am & pm)
+
+
 def test_cash_regions_and_class_filter():
     """
     North is Nebraska plus the Western Cornbelt; South is TX/OK/NM plus Kansas.
@@ -352,3 +368,160 @@ def test_bare_build_resolves_the_issue_date_before_deriving_the_day():
     src = inspect.getsource(B.main)
     assert src.index("issue = date.fromisoformat") < src.index("config.day_for_date(issue)")
     assert src.count("issue = date.fromisoformat") == 1
+
+
+# -- The AM morning brief -----------------------------------------------------
+
+def test_am_is_one_format_every_weekday():
+    """
+    The morning brief does not switch to the week-in-review on a Friday the way
+    the evening letter does -- there is no week to review at 07:30.
+    """
+    from letter import config
+    for d in ("monday", "tuesday", "wednesday", "thursday", "friday"):
+        assert config.format_for(d, "am") == "am", d
+    assert config.format_for("friday", "pm") == "friday"
+
+
+@pytest.mark.parametrize("value, expected", [
+    (531.25, "531'2"),      # how Ross writes it: "-8'6 at 528", "at 531'2"
+    (5.5, "5'4"),
+    (-8.75, "-8'6"),
+    # A whole cent drops the eighths: "528", not "528'0".
+    (528.0, "528"),
+    (-9.0, "-9"),
+    # Rounds UP into the whole cent rather than producing 530'8, which is not a
+    # price anyone would recognise.
+    (530.9999, "531"),
+])
+def test_grain_quotes_in_eighths(value, expected):
+    assert render.eighths(value) == expected
+
+
+def test_overnight_quote_shape():
+    """
+    "Dec Corn -8'6 at 528" -- month before the commodity, change before the
+    price, joined by "at". The same shape the evening letter uses for cattle.
+    """
+    html = render.am_blocks(
+        {"outside": [{"label": "Corn", "month": "Dec", "style": "eighths",
+                      "price": 528.0, "change": -8.75}]}, {})
+    assert "Dec Corn -8'6 at 528" in "".join(html).replace("&nbsp;", " ")
+
+
+def test_fci_heading_and_no_second_date():
+    """The heading says Estimate and the brief is dated at the top; a date on
+    the value line is one more thing to read past."""
+    html = "".join(render.am_blocks(
+        {"fci": {"value": 336.98, "date": "2026-09-22", "change": -1.76}}, {}))
+    assert "JSA FCI Estimate" in html
+    assert "2026-09-22" not in html
+    # Same "change at price" shape as the overnight quotes.
+    assert "-1.76 at 336.98" in html.replace("&nbsp;", " ")
+
+
+def test_am_collapses_two_undefined_cash_regions_into_one_line():
+    """Two lines saying "Undefined" is two lines saying nothing."""
+    ctx = {"regional_cash": {"regions": {
+        "North": {"undefined": True}, "South": {"undefined": True}}}}
+    joined = "".join(render.am_blocks(ctx, {}))
+    assert "Cash: no established test" in joined
+    assert "Cash North" not in joined
+
+
+def test_am_never_carries_the_evening_rundown():
+    """
+    The brief is the product. A section added to the PM letter must not be able
+    to appear here -- build_html returns early for AM rather than opting out
+    block by block.
+    """
+    ctx = {"kind": "am", "session": "am", "issue_date": date(2026, 9, 23),
+           "change_basis": "week", "live_cattle": [], "feeder_cattle": [],
+           "cash": {}, "cutout": {}, "slaughter": {}, "commentary": {}}
+    html = render.build_html(ctx)
+    for absent in ("Technicals", "Cattle market rundown", "Fundamental Rundown",
+                   "Last week", "CFTC"):
+        assert absent not in html, absent
+    assert "Upcoming USDA Reports" in html
+
+
+# -- Headline candidates ------------------------------------------------------
+
+def test_headlines_never_reach_the_letter():
+    """
+    The candidate panel is a pick list on the authoring page. Nothing it fetches
+    can render into the brief on its own -- the only headline text in the letter
+    comes from the commentary the user typed.
+    """
+    from letter import headlines
+    ctx = {"kind": "am", "session": "am", "issue_date": date(2026, 9, 23),
+           "change_basis": "week", "live_cattle": [], "feeder_cattle": [],
+           "cash": {}, "cutout": {}, "slaughter": {},
+           "commentary": {}}          # nothing typed
+    html = render.build_html(ctx)
+    assert "Headlines" not in html
+
+    # The renderer must have no way to reach the fetcher: it renders what was
+    # typed, and cannot go and get something to print on its own.
+    src = (sources.REPO / "letter" / "render.py").read_text(encoding="utf-8")
+    assert "import headlines" not in src
+    assert "headlines." not in src
+
+
+def test_headline_relevance_filter():
+    """
+    The feeds are general agriculture. Without a cattle filter the panel fills
+    with corn agronomy and stops being worth opening.
+    """
+    from letter import headlines
+    assert headlines._RELEVANT.search("Cattle futures drop on export rumors")
+    assert headlines._RELEVANT.search("Tracking path of New World screwworm")
+    assert not headlines._RELEVANT.search("Wind and wet conditions delay Ohio soybean harvest")
+
+
+def test_digest_parser_keeps_headlines_and_drops_chrome():
+    """
+    A digest is a list of linked headlines wrapped in marketing furniture. The
+    furniture is the same in every one of them; the headlines are not.
+    """
+    from letter import mailbox
+    html = """
+      <a href="#">View this in your browser</a>
+      <a href="#">Cattle futures drop on export rumors as packers stay sidelined</a>
+      <a href="#">Cargill Fort Morgan ramps second shift, sources say</a>
+      <a href="#">Read more</a><a href="#">Unsubscribe</a>
+      <a href="#">Manage your preferences</a>
+      <a href="#">ok</a>
+    """
+    got = mailbox.parse_headlines(html, "html")
+    assert "Cattle futures drop on export rumors as packers stay sidelined" in got
+    assert "Cargill Fort Morgan ramps second shift, sources say" in got
+    assert len(got) == 2          # every piece of chrome dropped
+
+
+def test_mailbox_never_blocks_the_build():
+    """
+    An unconfigured or signed-out mailbox is one line in the panel, not a failed
+    morning -- and never an interactive prompt during a scheduled run.
+    """
+    from letter import mailbox
+    import os
+    saved = {k: os.environ.pop(k, None) for k in ("GRAPH_CLIENT_ID", "GRAPH_TENANT_ID")}
+    try:
+        assert mailbox.configured() is False
+        access, problem = mailbox.token(interactive=False)
+        assert access is None and "error" in problem
+        got = mailbox.fetch_digests()
+        assert got["items"] == [] and got["errors"] and got["needs_sign_in"] is True
+    finally:
+        for k, v in saved.items():
+            if v is not None:
+                os.environ[k] = v
+
+
+def test_digests_are_configured_as_data_not_code():
+    """Adding a third publication should be one line."""
+    from letter import mailbox
+    labels = {d["label"] for d in mailbox.DIGESTS}
+    assert labels == {"Meatingplace", "eMeat", "Global AgriTrends", "Sterling"}
+    assert all("match" in d for d in mailbox.DIGESTS)

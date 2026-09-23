@@ -17,3 +17,4 @@ cryptography>=42  # imported directly by snowflake_db to convert a PEM key to DE
 psycopg2-binary>=2.9.0  # beef_weight/livestock_inventory read the shared NASS cache (usda-nass-etl)
 
 pypdf>=5.0  # letter/sources.py parses AMS report 3208, which is published only as a PDF
+msal>=1.30  # letter/mailbox.py reads the subscription digests from Ross's own inbox via Graph

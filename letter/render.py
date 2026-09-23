@@ -75,6 +75,49 @@ def _esc(s) -> str:
     return html.escape(str(s))
 
 
+def eighths(v) -> str:
+    """
+    531.25 -> "531'2". How the grain trade writes a corn quote, and how Ross
+    writes it: "5'4 lower at 531'2".
+
+    Rounded to the nearest eighth rather than truncated, and a value that rounds
+    up to a full cent carries into the whole number -- 530.9999 is 531'0, never
+    530'8, which is not a price anyone would recognise.
+    """
+    if v is None:
+        return MISSING
+    f = float(v)
+    sign = "-" if f < 0 else ""
+    f = abs(f)
+    whole, frac = int(f), round((f - int(f)) * 8)
+    if frac == 8:
+        whole, frac = whole + 1, 0
+    # A whole cent drops the eighths entirely -- "528", not "528'0", which is
+    # how Ross writes it: "-8'6 at 528".
+    return f"{sign}{whole}" if frac == 0 else f"{sign}{whole}'{frac}"
+
+
+def trim(v) -> str:
+    """
+    220.0 -> "220", 222.5 -> "222.50", 350.0 -> "350".
+
+    How the letter writes a cash price: no trailing ".00", but a real decimal
+    keeps both places. "220-222.50 FOB live. 350 Dressed." is verbatim from the
+    9/18 letter.
+    """
+    if v is None:
+        return MISSING
+    f = float(v)
+    return f"{f:,.0f}" if abs(f - round(f)) < 1e-9 else f"{f:,.2f}"
+
+
+def trim_range(lo, hi) -> str:
+    """A range, collapsed to one number when both ends agree."""
+    if lo is None:
+        return MISSING
+    return trim(lo) if hi is None or abs(float(hi) - float(lo)) < 1e-9 else f"{trim(lo)}-{trim(hi)}"
+
+
 _PM_DAYS = {0: "Mon", 1: "Tues", 2: "Wed", 3: "Thurs", 4: "Fri", 5: "Sat", 6: "Sun"}
 
 
@@ -375,6 +418,133 @@ table.cof td:first-child { font-weight: 600; }
 """
 
 
+# -- The morning brief --------------------------------------------------------
+#
+# Built to be read in under three minutes, which is the whole product. Every
+# block earns its place or it comes out: a section that says the same thing for
+# three weeks stops being read, and takes the ones around it with it.
+
+def am_blocks(ctx: dict, c: dict) -> list:
+    """The AM report's sections, in reading order."""
+    out = []
+
+    # 1. The index first -- it is JSA's own number and the reason to open this.
+    fci = ctx.get("fci") or {}
+    if config.INCLUDE_FEEDER_INDEX and fci.get("value") is not None:
+        # Same shape as the overnight quotes -- change first, then "at", then
+        # the price. One reading pattern for every number on the page.
+        #
+        # No date on the line: the heading says Estimate, the brief is dated at
+        # the top, and a second date here is one more thing to read past.
+        rows = [(f"{signed(fci['change'], 2)} at {money(fci['value'])}"
+                 if fci.get("change") is not None else money(fci["value"]))]
+        # Basis against the front feeder contract: one number that frames the
+        # whole feeder complex before the open. Cash minus futures, the usual
+        # convention, so a negative basis means the board is over the index.
+        front = (ctx.get("feeder_cattle") or [None])[0]
+        if front and front.get("settle") is not None:
+            basis = float(fci["value"]) - float(front["settle"])
+            rows.append(f"{_esc(front['month'])} feeders {price(front['settle'])} "
+                        f"&nbsp;basis {signed(basis, 2)}")
+        out.append("<h2>JSA FCI Estimate</h2>" + _bullets(rows))
+
+    # 2. Headlines -- written, and where border status lives.
+    if c.get("headlines"):
+        out.append("<h2>Headlines</h2>" + _commentary(c["headlines"]))
+
+    # 3. Overnight. Cattle do not trade overnight, so this is grain and macro.
+    #    Month BEFORE the commodity: "Dec Corn", not "Corn Dec".
+    markets = [m for m in (ctx.get("outside") or []) if m.get("price") is not None]
+    if markets:
+        rows = []
+        for m in markets:
+            fmt = eighths if m.get("style") == "eighths" else money
+            chg = m.get("change")
+            chg_txt = (("+" if chg >= 0 else "") + fmt(chg)) if chg is not None else MISSING
+            # Change BEFORE the price, joined by "at" -- the same shape the
+            # evening letter uses for cattle ("Oct: +1.025 at 220.70") and the
+            # shape Ross asked for: "Dec Corn -8'6 at 528".
+            rows.append(f"{_esc(m.get('month') or '')} {_esc(m['label'])} "
+                        f"{chg_txt} at {fmt(m['price'])}")
+        out.append("<h2>Overnight</h2>" + _bullets(rows))
+
+    # 4. Yesterday, for anyone who did not read the evening letter. One line
+    #    each, no LW/LY triples -- that density belongs in the PM report.
+    rows = []
+    # Week to date by state, in the letter's own shorthand:
+    #   "Cash  NE 221.00-222.50 live, 350 dressed"
+    # Only states that actually traded are listed -- naming four every morning
+    # so three can say "Undefined" is three wasted lines.
+    regions = (ctx.get("regional_cash") or {}).get("regions") or {}
+    traded = [(n, r) for n, r in regions.items() if not r.get("undefined")]
+    if traded:
+        for name, r in traded:
+            bits = []
+            if r.get("live_low") is not None:
+                bits.append(f"{trim_range(r['live_low'], r['live_high'])} live")
+            if r.get("dressed_low") is not None:
+                bits.append(f"{trim_range(r['dressed_low'], r['dressed_high'])} dressed")
+            rows.append(f"Cash &nbsp;{_esc(name)} {', '.join(bits)}")
+    elif regions:
+        rows.append("Cash: no established test this week")
+
+    # NO WEEKLY WEIGHTED AVERAGE HERE. LM_CT150's "this week" is the last
+    # COMPLETED week, published after it ends -- so on a Wednesday morning it is
+    # the previous week's average sitting next to this week's daily trade, which
+    # is two different weeks on adjacent lines. The state ranges above are the
+    # current week. The weighted average still leads the evening letter, where
+    # "Last week's cash trade" says plainly which week it means.
+
+    cut = ctx.get("cutout") or {}
+    ch, se = cut.get("choice", {}), cut.get("select", {})
+    if ch.get("value") is not None:
+        rows.append(f"Cutout: Ch {money(ch['value'])} {signed(ch.get('change'), 2)} "
+                    f"&middot; Se {money(se.get('value'))} {signed(se.get('change'), 2)}")
+    dsl = ctx.get("daily_slaughter") or {}
+    if dsl.get("current_day") is not None:
+        rows.append(f"Slaughter: {head_k(dsl['current_day'])} &middot; "
+                    f"WTD {head_k(dsl.get('wtd'))} "
+                    f"({head_k(dsl.get('wtd_week_ago'))} LW, {head_k(dsl.get('wtd_year_ago'))} LY)")
+    if rows:
+        out.append("<h2>Cash Trade</h2>" + _bullets(rows))
+
+    # 5. The week's releases as ONE list, each with its date -- rather than a
+    #    "Today" block and a "This Week" block. A reader scanning for whether
+    #    anything prints today finds it in the same place either way, and one
+    #    list is a shorter read than two headings.
+    items = (ctx.get("calendar") or {}).get("items") or []
+    rows = [f"{_esc(i['label'])} &mdash; {_esc(i['when'])}"
+            + (" <strong>(today)</strong>" if i.get("is_today") else "")
+            for i in items]
+    out.append("<h2>Upcoming USDA Reports</h2>"
+               + _bullets(rows or ["None scheduled"]))
+    return out
+
+
+def _signature_html(issue) -> str:
+    """Page 3 of the printed letter. Identical in every session and format."""
+    s = config.SIGNATURE
+    return (
+        '<div class="sig">'
+        f'<div>{_esc(s["name"])}</div>'
+        f'<div>{_esc(s["company"])}</div>'
+        f'<div>{_esc(s["city"])}</div>'
+        f'<div>{_esc(s["web"])}</div>'
+        f'<div>Office: {_esc(s["office"])}</div>'
+        f'<div>Cell: {_esc(s["cell"])}</div>'
+        f'<div class="disclaimer">{_esc(config.DISCLAIMER.format(year=issue.year))}</div>'
+        '</div>'
+    )
+
+
+def _page(title: str, stamp: str, body: list) -> str:
+    return (
+        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        f"<title>{_esc(title)} {stamp}</title>"
+        f"<style>{CSS}</style></head><body>" + "".join(body) + "</body></html>"
+    )
+
+
 def build_html(ctx: dict) -> str:
     """ctx carries the fetched data plus the commentary sections."""
     issue: date = ctx["issue_date"]
@@ -387,16 +557,42 @@ def build_html(ctx: dict) -> str:
     # The two letters open differently: Tuesday reports the week so far, Friday
     # the week just closed.
     kind = ctx.get("kind", "tuesday")
-    intro = (f"For the week of {stamp}:" if kind == "friday"
-             else f"For the week through the close on {stamp}:")
-    sign_off = (config.SIGN_OFF_FRIDAY if kind == "friday" else config.SIGN_OFF_TUESDAY)
+    # The masthead names the SESSION -- "JSA AM Daily Cattle Report" against
+    # "JSA PM Daily Cattle Report". Two reports a day, two names.
+    title = config.title_for(ctx.get("session", config.DEFAULT_SESSION))
+    # There is no close to report at 07:30, so the AM letter cannot use either
+    # evening opening.
+    if kind == "am":
+        intro = config.INTRO_AM.format(stamp=stamp)
+        sign_off = config.SIGN_OFF_AM
+    elif kind == "friday":
+        intro, sign_off = f"For the week of {stamp}:", config.SIGN_OFF_FRIDAY
+    else:
+        intro = f"For the week through the close on {stamp}:"
+        sign_off = config.SIGN_OFF_TUESDAY
 
     body = [
-        f'<div class="masthead">{_esc(config.TITLE)} {stamp}</div>',
+        f'<div class="masthead">{_esc(title)} {stamp}</div>',
         f'<p class="intro">{_esc(intro)}</p>',
         futures_block("Live Cattle", ctx["live_cattle"], ctx["change_basis"]),
         futures_block("Feeder Cattle", ctx["feeder_cattle"], ctx["change_basis"]),
     ]
+
+    # THE MORNING REPORT ENDS HERE. It is described as much simpler and shorter
+    # than any evening letter, and most of what follows does not exist at 07:30
+    # anyway -- no completed session to recap, no PM cutout, no settle for today.
+    # Returning early rather than opting out section by section means a section
+    # added to the PM letter later cannot silently appear in the AM one.
+    #
+    # PROVISIONAL: the real morning format is not known yet. What is here is the
+    # prior settles, the morning feeder index call the 07:30 run freezes into
+    # fci_snapshots, and one commentary slot. Nothing is invented.
+    if kind == "am":
+        body = [body[0], body[1]]          # masthead and intro only
+        body.extend(am_blocks(ctx, c))
+        body.append(f'<p class="signoff">{_esc(sign_off)}</p>')
+        body.append(_signature_html(issue))
+        return _page(title, stamp, body)
 
     if kind == "friday" and c.get("key_headlines"):
         body.append("<h2>Key Headlines</h2>" + _commentary(c["key_headlines"]))
@@ -430,22 +626,5 @@ def build_html(ctx: dict) -> str:
             body.append("<h2>Fundamental Rundown</h2>" + _commentary(c["fundamental"]))
 
     body.append(f'<p class="signoff">{_esc(sign_off)}</p>')
-
-    s = config.SIGNATURE
-    body.append(
-        '<div class="sig">'
-        f'<div>{_esc(s["name"])}</div>'
-        f'<div>{_esc(s["company"])}</div>'
-        f'<div>{_esc(s["city"])}</div>'
-        f'<div>{_esc(s["web"])}</div>'
-        f'<div>Office: {_esc(s["office"])}</div>'
-        f'<div>Cell: {_esc(s["cell"])}</div>'
-        f'<div class="disclaimer">{_esc(config.DISCLAIMER.format(year=issue.year))}</div>'
-        '</div>'
-    )
-
-    return (
-        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
-        f"<title>{_esc(config.TITLE)} {stamp}</title>"
-        f"<style>{CSS}</style></head><body>" + "".join(body) + "</body></html>"
-    )
+    body.append(_signature_html(issue))
+    return _page(title, stamp, body)

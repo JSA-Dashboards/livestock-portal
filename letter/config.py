@@ -6,11 +6,34 @@ Everything a human would want to change without reading code lives here.
 from __future__ import annotations
 
 # ── Masthead ─────────────────────────────────────────────────────────────────
-# The 9/18/26 PDF went out as "AgMarket.Net Cattle Report". Ross is renaming it
-# to "JSA Livestock Update"; both spellings are kept so the switch is one edit
-# and the old name is recoverable if the rename is deferred.
+# The 9/18/26 PDF went out as "AgMarket.Net Cattle Report", which became
+# "JSA Livestock Update". Both spellings are kept so a revert is one edit.
 TITLE = "JSA Livestock Update"
 TITLE_PREVIOUS = "AgMarket.Net Cattle Report"
+
+# ── AM and PM ────────────────────────────────────────────────────────────────
+# Two reports a day, not one. PM is everything built so far: written after the
+# close, and the rundown is a recap of a session that has finished.
+#
+# AM is a different animal, and the difference is imposed by the clock rather
+# than by choice. At 07:30 there is no settle, no PM cutout, and no completed
+# session to recap -- what IS fresh is the morning feeder index call that the
+# daily run freezes into fci_snapshots, which CLAUDE.md records as "the number
+# that goes out, and the one comparable to CIH's and Compass's morning sheets".
+#
+# AM_SECTIONS is therefore NOT yet the real thing: it mirrors PM until the
+# actual morning format is known. Do not assume it is right.
+SESSIONS = ["AM", "PM"]
+DEFAULT_SESSION = "PM"
+
+TITLE_BY_SESSION = {
+    "am": "JSA AM Daily Cattle Report",
+    "pm": "JSA PM Daily Cattle Report",
+}
+
+
+def title_for(session: str = DEFAULT_SESSION) -> str:
+    return TITLE_BY_SESSION.get(str(session).strip().lower(), TITLE)
 
 # ── Signature block (page 3 of the printed letter) ───────────────────────────
 SIGNATURE = {
@@ -23,6 +46,11 @@ SIGNATURE = {
 }
 
 SIGN_OFF_TUESDAY = "Have a good evening,"
+# PLACEHOLDERS -- the morning report's own wording is not known yet. "Have a
+# good evening" on a 07:30 report is plainly wrong, so these are neutral rather
+# than correct. One edit each when the real wording is settled.
+SIGN_OFF_AM = "Have a good day,"
+INTRO_AM = "Morning report for {stamp}:"
 SIGN_OFF_FRIDAY = "Have a good weekend,"
 
 # Verbatim from the 9/18/26 PDF. Reproduced exactly -- this is the compliance
@@ -66,8 +94,17 @@ FORMAT_FOR_DAY = {
 }
 
 
-def format_for(day: str) -> str:
-    """'wednesday' -> 'tuesday' (the standard format). Unknown days fall back."""
+def format_for(day: str, session: str = "pm") -> str:
+    """
+    Which layout a (day, session) pair produces.
+
+    THE AM REPORT HAS ONE FORMAT, ALL FIVE DAYS. It does not switch to the
+    week-in-review on a Friday the way the PM report does -- there is no week to
+    review at 07:30, and the morning note is deliberately shorter than any of
+    the evening ones. So the day only selects a format in the PM session.
+    """
+    if str(session).strip().lower() == "am":
+        return "am"
     return FORMAT_FOR_DAY.get(str(day).strip().lower(), "tuesday")
 
 

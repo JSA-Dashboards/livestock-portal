@@ -60,7 +60,7 @@ for _name in _ALLOWED_SECRETS:
         os.environ[_name] = str(_value)
 
 from letter import build as letter_build  # noqa: E402
-from letter import commentary, config, render, settle_log, topdf  # noqa: E402
+from letter import commentary, config, headlines, mailbox, render, settle_log, topdf  # noqa: E402
 
 # ...then .env, for anything the secrets did not supply.
 #
@@ -83,7 +83,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<div class="wcr-head">PM Weekly Cattle Reports</div>'
+st.markdown('<div class="wcr-head">JSA Daily Cattle Reports</div>'
             '<div class="wcr-sub">Pull the numbers, write the read, print the letter.</div>',
             unsafe_allow_html=True)
 
@@ -100,7 +100,13 @@ if not os.environ.get("USE_SNOWFLAKE", "").strip().lower() in ("1", "true", "yes
 
 # -- Controls -----------------------------------------------------------------
 
-c1, c2 = st.columns([2, 5])
+c0, c1, c2 = st.columns([1.4, 1.8, 4])
+with c0:
+    # Two reports a day, each with its own five weekdays. Independent of the
+    # day: AM Monday and PM Monday are different letters.
+    session = st.radio("Report", config.SESSIONS,
+                       index=config.SESSIONS.index(config.DEFAULT_SESSION),
+                       horizontal=True).lower()
 with c1:
     issue = st.date_input("Issue date", value=date.today(), format="YYYY-MM-DD")
 with c2:
@@ -114,7 +120,7 @@ with c2:
         help="Defaults to the weekday of the issue date. Friday is the "
              "week-in-review format; the rest share the standard one.",
     ).lower()
-kind = config.format_for(day)
+kind = config.format_for(day, session)
 
 if kind == "friday":
     st.caption("**Week-in-review format** — adds regional cash, CFTC, and a Cattle on "
@@ -139,8 +145,9 @@ if kind == "friday":
                 if v:
                     cof_guesses[key] = v
 
-data_path = OUT / f"data_{day}_{issue}.json"
-cpath = commentary.path_for(OUT, issue, day)
+slug = f"{session}_{day}"
+data_path = OUT / f"data_{slug}_{issue}.json"
+cpath = commentary.path_for(OUT, issue, slug)
 
 b1, b2 = st.columns([1, 3])
 with b1:
@@ -161,6 +168,7 @@ def _load_ctx():
         ctx = json.loads(data_path.read_text(encoding="utf-8"))
         ctx["issue_date"] = issue
         ctx["kind"] = kind
+        ctx["session"] = session
         return ctx, []
     return None, []
 
@@ -170,6 +178,7 @@ if fetch:
         import json
         errors = []
         ctx = letter_build.gather(issue, errors, kind, cof_guesses)
+        ctx["session"] = session
         # Log today's settles and chain the weekly change, same as the CLI.
         settle_log.record(ctx)
         letter_build.backfill_week_base(ctx, OUT, issue)
@@ -260,6 +269,73 @@ with st.expander("Figures pulled", expanded=False):
 
 # -- Commentary ---------------------------------------------------------------
 
+# -- Headline candidates (AM only) --------------------------------------------
+# Rendered BEFORE the text areas below, because adding a headline writes into
+# the Headlines box's session_state -- and Streamlit refuses that once the
+# widget has been instantiated.
+#
+# NOTHING HERE IS AUTO-INSERTED. It is a pick list. Every other figure in the
+# brief is a USDA or CME number that is either right or marked [[?]]; a headline
+# is editorial, and there is no [[?]] for a feed surfacing something misleading
+# under JSA's name.
+if kind == "am":
+    with st.expander("Headline candidates", expanded=False):
+        if st.button("Fetch headlines", use_container_width=False):
+            with st.spinner("Reading Beef Magazine and the USDA narratives…"):
+                st.session_state["wcr_heads"] = headlines.candidates(issue)
+
+        # Mailbox sign-in, only when it is actually needed. Device-code flow:
+        # no password is typed here or stored anywhere by this app.
+        if not mailbox.configured():
+            st.caption("To include the Meatingplace and eMeat digests, set "
+                       "`GRAPH_CLIENT_ID` and `GRAPH_TENANT_ID` in `.env`.")
+        elif (st.session_state.get("wcr_heads") or {}).get("needs_sign_in"):
+            flow = st.session_state.get("wcr_graph_flow")
+            if not flow:
+                if st.button("Connect mailbox"):
+                    _, f = mailbox.token(interactive=True)
+                    st.session_state["wcr_graph_flow"] = f
+                    st.rerun()
+            elif flow.get("error"):
+                st.warning(flow["error"])
+            else:
+                st.info(flow.get("message", "Sign in with the code shown."))
+                if st.button("I've signed in"):
+                    with st.spinner("Completing sign-in…"):
+                        ok = mailbox.complete_sign_in(flow)
+                    st.session_state.pop("wcr_graph_flow", None)
+                    if ok:
+                        st.session_state["wcr_heads"] = headlines.candidates(issue)
+                    st.rerun()
+
+        found = st.session_state.get("wcr_heads")
+        if not found:
+            st.caption("Beef Magazine plus USDA's own cash-trade and border narratives, "
+                       "last 48 hours. Pick what matters and rewrite it in your words — "
+                       "nothing here goes into the letter on its own.")
+        else:
+            for err in found.get("errors", []):
+                st.caption(f"⚠ {err}")
+            picked = []
+            for n, item in enumerate(found.get("items", [])):
+                age = (f"{item['age_h']}h ago" if item.get("age_h") is not None
+                       else str(item.get("when") or "")[:16])
+                label = item["title"]
+                if len(label) > 150:
+                    label = label[:150] + "…"
+                if st.checkbox(label, key=f"head_{n}"):
+                    picked.append(item["title"])
+                st.caption(f"{item['source']} · {age}"
+                           + (f" · [open]({item['link']})" if item.get("link") else ""))
+            if picked and st.button(f"Add {len(picked)} to Headlines", type="primary"):
+                existing = st.session_state.get("wcr_headlines", "")
+                lines = [ln for ln in existing.splitlines() if ln.strip()]
+                lines.extend(picked)
+                st.session_state["wcr_headlines"] = "\n".join(lines)
+                for n in range(len(found.get("items", []))):
+                    st.session_state[f"head_{n}"] = False
+                st.rerun()
+
 st.subheader("Your read")
 st.caption("One bullet per line. Blank sections are left out of the letter entirely.")
 
@@ -300,6 +376,7 @@ st.subheader("Letter")
 ctx_for_render = dict(ctx)
 ctx_for_render["issue_date"] = issue
 ctx_for_render["kind"] = kind
+ctx_for_render["session"] = session
 ctx_for_render["commentary"] = sections
 html = render.build_html(ctx_for_render)
 
@@ -313,15 +390,15 @@ st.components.v1.html(html, height=680, scrolling=True)
 d1, d2 = st.columns(2)
 with d1:
     st.download_button("Download HTML", data=html.encode("utf-8"),
-                       file_name=f"{config.TITLE} {day.title()} {issue}.html",
+                       file_name=f"{config.title_for(session)} {day.title()} {issue}.html",
                        mime="text/html", use_container_width=True)
 with d2:
     browser = topdf.find_browser()
     if browser:
         if st.button("Build PDF", type="primary", use_container_width=True):
             OUT.mkdir(parents=True, exist_ok=True)
-            html_path = OUT / f"{config.TITLE} {day.title()} {issue}.html"
-            pdf_path = OUT / f"{config.TITLE} {day.title()} {issue}.pdf"
+            html_path = OUT / f"{config.title_for(session)} {day.title()} {issue}.html"
+            pdf_path = OUT / f"{config.title_for(session)} {day.title()} {issue}.pdf"
             html_path.write_text(html, encoding="utf-8")
             ok, msg = topdf.html_to_pdf(html_path, pdf_path)
             if ok:
@@ -336,5 +413,5 @@ with d2:
 
 if st.session_state.get("wcr_pdf"):
     st.download_button("Download PDF", data=st.session_state["wcr_pdf"],
-                       file_name=f"{config.TITLE} {day.title()} {issue}.pdf",
+                       file_name=f"{config.title_for(session)} {day.title()} {issue}.pdf",
                        mime="application/pdf", use_container_width=True)
