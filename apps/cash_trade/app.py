@@ -150,7 +150,12 @@ st.markdown(f"""
   .tile-d14   {{ border-top-color:{D14_COLOR}; }}
   .tile-d30   {{ border-top-color:{D30_COLOR}; }}
   .tile-neu   {{ border-top-color:{MUTED}; }}
-  .tile-label {{ color:{MUTED}; font-size:0.66rem; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:6px; }}
+  /* Same reasoning as .tile-value: a label that breaks as "IOWA/MI/NNESOT/A"
+     is worse than a small one. The letter-spacing shrinks with the font,
+     because at 0.08em it is what pushes the longest label over the edge. */
+  .tile-label {{ color:{MUTED}; font-size:clamp(0.5rem, 0.85vw, 0.66rem);
+                 text-transform:uppercase; letter-spacing:clamp(0.02em, 0.1vw, 0.08em);
+                 margin-bottom:6px; white-space:nowrap; }}
   /* Tile values must never break mid-token. Streamlit's default overflow-wrap
      splits them once four tiles share a narrow row -- "Undefined" rendered as
      "Undefin/ed" and "$222.00" as "$222./00". nowrap stops the break and the
@@ -159,9 +164,9 @@ st.markdown(f"""
      and the weekly tiles, which use the same class, are untouched in practice. */
   .tile-value {{ color:{JPSI_DARK}; font-size:clamp(1rem, 2vw, 1.55rem);
                  font-weight:700; line-height:1.1; white-space:nowrap; }}
-  .tile-delta-pos {{ color:{POS}; font-size:0.8rem; font-weight:600; margin-top:4px; }}
-  .tile-delta-neg {{ color:{NEG}; font-size:0.8rem; font-weight:600; margin-top:4px; }}
-  .tile-delta-neu {{ color:{MUTED}; font-size:0.8rem; font-weight:600; margin-top:4px; }}
+  .tile-delta-pos {{ color:{POS}; font-size:clamp(0.62rem, 1.05vw, 0.8rem); font-weight:600; margin-top:4px; white-space:nowrap; }}
+  .tile-delta-neg {{ color:{NEG}; font-size:clamp(0.62rem, 1.05vw, 0.8rem); font-weight:600; margin-top:4px; white-space:nowrap; }}
+  .tile-delta-neu {{ color:{MUTED}; font-size:clamp(0.62rem, 1.05vw, 0.8rem); font-weight:600; margin-top:4px; white-space:nowrap; }}
 
   .narrative {{
     background:#f6f8fa; border:1px solid {BORDER}; border-left:4px solid {JPSI_BLUE};
