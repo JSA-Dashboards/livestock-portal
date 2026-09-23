@@ -5,6 +5,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from datetime import datetime, timedelta
+import html
 import time
 
 # ── JPSI Brand ───────────────────────────────────────────────────────────────
@@ -43,9 +44,9 @@ CT154_ID = 2481
 # Daily negotiated purchases by region. USDA publishes each region TWICE a day,
 # and THE TWO FILES DO NOT DESCRIBE THE SAME TRADING DAY:
 #
-#   "Afternoon" (out ~2:55 pm CT) is dated the trading day and carries that
+#   "Afternoon" (median 15:08 CT) is dated the trading day and carries that
 #   day's trade as of the 1:30 pm cut -- a PARTIAL count, still moving.
-#   "Summary" (out ~11:00 am CT) is dated the day it is PUBLISHED and carries
+#   "Summary" (median 11:17 CT) is dated the day it is PUBLISHED and carries
 #   the PREVIOUS business day's COMPLETE trade.
 #
 # So the morning file dated D finalises trading day D-1. Taking its report_date
@@ -220,8 +221,32 @@ def _session(backoff=3) -> requests.Session:
     return s
 
 
-@st.cache_data(ttl=3600, persist="disk", show_spinner=False)
-def fetch_price_history() -> pd.DataFrame:
+def _probe_session() -> requests.Session:
+    """
+    A deliberately impatient session, used ONLY by publication_stamps().
+
+    _session() retries three times with a backoff_factor of 3, so against an
+    unresponsive USDA it blocks for roughly a minute and a half before giving
+    up. That is the right trade for the data fetches, which have nothing to
+    show without it. It is the wrong trade here: the probe runs at module scope
+    above st.tabs, so during an outage EVERY visitor would pay that wait on
+    every rerun, on whichever tab they are looking at, to learn something the
+    page already has a fallback for. One attempt, split connect/read timeout,
+    worst case about eleven seconds.
+    """
+    s = requests.Session()
+    s.mount("https://", HTTPAdapter(max_retries=Retry(
+        total=0, status_forcelist=[], allowed_methods=["GET"])))
+    return s
+
+
+# `stamps` is unused in the body and must stay: it is USDA's published_date for
+# LM_CT150, taken as an argument so st.cache_data keys on it. This used to read
+# ttl=3600, persist="disk", which NEVER EXPIRED -- Streamlit ignores ttl when
+# persist is set, so the sidebar's "Cache: 1 hr" was not true and a weekly
+# release was only picked up by "Refresh now" or a restart. See publication_stamps.
+@st.cache_data(persist="disk", max_entries=8, show_spinner=False)
+def fetch_price_history(stamps: str) -> pd.DataFrame:
     """Full-history weekly Live FOB / Dressed Delivered weighted averages by
     class (Steer/Heifer), for all three USDA-aligned periods, from LM_CT150."""
     url = f"{LMR_BASE}/{CT150_ID}/History"
@@ -243,8 +268,9 @@ def fetch_price_history() -> pd.DataFrame:
     return df[keep].sort_values("report_date").reset_index(drop=True)
 
 
-@st.cache_data(ttl=3600, persist="disk", show_spinner=False)
-def fetch_volume_history() -> pd.DataFrame:
+# `stamps` as above, for LM_CT154. Same never-expiring ttl bug, same fix.
+@st.cache_data(persist="disk", max_entries=8, show_spinner=False)
+def fetch_volume_history(stamps: str) -> pd.DataFrame:
     """Full-history weekly negotiated cash trade volumes (confirmed, 1-14 day,
     15-30 day) plus the weekly market narrative, from LM_CT154."""
     url = f"{LMR_BASE}/{CT154_ID}"
@@ -320,12 +346,120 @@ def _daily_rows(payload) -> list:
     return []
 
 
-@st.cache_data(ttl=3600, persist="disk", show_spinner=False)
-def fetch_daily_cash(start: str, end: str) -> pd.DataFrame:
+PROBE_FAILED = "probe-unavailable"
+# NO persist="disk" HERE, AND THAT IS THE WHOLE POINT. Streamlit documents that
+# "ttl will be ignored if persist='disk' or persist=True" -- so a probe written
+# @st.cache_data(ttl=300, persist="disk") never expires and the freshness check
+# freezes at whatever it first saw. Verified against streamlit 1.63's own source.
+# This cache is process-wide and in-memory, which is what a 5-minute freshness
+# probe wants anyway.
+@st.cache_data(ttl=300, show_spinner=False)
+def publication_stamps() -> str:
+    """
+    When USDA last published each of our eight reports, as one opaque string.
+    It is passed to fetch_daily_cash() purely as a cache key, so the expensive
+    fetch re-runs exactly when USDA publishes and not on a timer.
+
+    WHY NOT REFRESH ON A SCHEDULE, which is the obvious thing to do: AMS DOES
+    NOT PUBLISH ONE. Its 30 Apr 2020 LMR notice says that from 4 May 2020 report
+    data is released "in real time", replacing the old top-of-the-hour release,
+    and there is no livestock equivalent of the dairy release-times page. The
+    measured spread says the same -- over 180 days (n=506 AM, 497 PM):
+
+        AM  min 10:52  median 11:17  p90 11:39  p95 11:55  p99 13:17  max 16:18
+        PM  min 14:49  median 15:08  p90 15:23  p95 15:28  p99 16:14  max 16:49
+
+    4.9% of AM files land after noon and the tail runs past 16:00, so a refresh
+    pinned to the median would miss them outright. The only clock AMS commits to
+    is a 5:00 pm Central cutoff, past which a delayed report is held to the next
+    business day. Keying on the stamp USDA itself publishes needs no schedule.
+
+    The stamps are US CENTRAL with daylight saving -- AMS LMPR API User Guide
+    V3.3 (Nov 2024) section 2.2: "The LMPR API is set to Central Standard Time
+    (CST) time zone. Standard and daylight time rules apply." Confirmed live on
+    2026-09-23: the Nebraska AM stamp read 11:10:32 and appeared at 11:11:22
+    CDT. Nothing here depends on that -- this compares stamps to stamps, never
+    to our own clock -- but it is what the displayed time means.
+
+    The reports LIST endpoint carries published_date for every slug in a single
+    request (~67KB, ~3.7s measured), which is far cheaper than the eight Detail
+    calls it guards, and it matters that it is cheap: this page is behind a tab,
+    and a hidden Streamlit tab still executes on every rerun.
+
+    On failure this returns a STABLE sentinel rather than "" or a timestamp. A
+    key that varies on failure would turn every probe outage into a full
+    eight-request refetch -- the opposite of the point. A constant means the
+    first failure refetches once and every failure after it is a cache hit.
+    """
+    try:
+        resp = _probe_session().get(LMR_BASE, timeout=(3, 8))
+        resp.raise_for_status()
+        rows = resp.json()
+    except Exception:
+        return PROBE_FAILED
+    if not isinstance(rows, list):
+        return PROBE_FAILED
+    wanted = {CT150_ID, CT154_ID}
+    wanted |= {slug for cuts in DAILY_REGIONS.values() for slug in cuts.values()}
+    stamps = {x.get("slug_id"): x.get("published_date") for x in rows
+              if isinstance(x, dict) and x.get("slug_id") in wanted}
+    if not stamps:
+        return PROBE_FAILED
+    return "|".join(f"{k}={stamps[k]}" for k in sorted(stamps))
+
+
+def stamps_for(stamps: str, slugs) -> str:
+    """
+    The publication stamps for just `slugs`, as a cache key.
+
+    One probe covers every report on the page, but each consumer must key on
+    only its OWN reports -- otherwise the weekly fetch, whose data changes on
+    Mondays, would re-run every time a daily file published.
+    """
+    if not stamps or stamps == PROBE_FAILED:
+        return PROBE_FAILED
+    want = {str(s) for s in slugs}
+    keep = [p for p in stamps.split("|")
+            if "=" in p and p.split("=", 1)[0] in want]
+    return "|".join(keep) if keep else PROBE_FAILED
+
+
+def daily_last_published(stamps: str) -> str:
+    """The newest publication stamp in the probe string, for display."""
+    if not stamps or stamps == PROBE_FAILED:
+        return ""
+    seen = [s.split("=", 1)[1] for s in stamps.split("|") if "=" in s]
+    seen = [s for s in seen if s]
+    if not seen:
+        return ""
+    # Stamps are "MM/DD/YYYY HH:MM:SS"; sort on a comparable key, not the string.
+    def _key(s):
+        try:
+            d, t = s.split(" ", 1)
+            m, dd, y = d.split("/")
+            return (y, m, dd, t)
+        except Exception:
+            return ("", "", "", "")
+    return max(seen, key=_key)
+
+
+# NO ttl, deliberately: persist="disk" would ignore it anyway (see
+# publication_stamps), and stating one would only mislead the next reader into
+# thinking time drives this. The `stamps` argument drives it. max_entries bounds
+# what disk collects, since the key changes roughly twice a day.
+@st.cache_data(persist="disk", max_entries=64, show_spinner=False)
+def fetch_daily_cash(start: str, end: str, stamps: str) -> pd.DataFrame:
     """
     Daily negotiated Steer/Heifer prices for the four regions USDA still
     publishes daily, both cuts, keyed on the TRADING day rather than the file
     date.
+
+    `stamps` IS DELIBERATELY UNUSED IN THIS BODY. It is USDA's own publication
+    timestamps from publication_stamps(), taken as an argument solely so
+    that st.cache_data includes it in the cache key: when USDA publishes, the
+    string changes, the key changes, and this re-runs. Deleting it as a dead
+    parameter would silently restore pure time-based expiry and put the page
+    back to serving data up to six hours stale.
 
     Eight requests in all -- one per region per cut -- because the datamart
     accepts a report_date RANGE (report_date=MM/DD/YYYY:MM/DD/YYYY). A day at a
@@ -373,9 +507,17 @@ def fetch_daily_cash(start: str, end: str) -> pd.DataFrame:
                 basis = str(x.get("selling_basis_desc", "")).strip()
                 if basis not in DAILY_BASES:
                     continue
+                # UNPRICED ROWS ARE KEPT, and that is load-bearing. USDA
+                # publishes a file for a day with no confirmed trade, every
+                # price null -- that is its "Undefined" market test, a real
+                # answer. Dropping those rows made a published no-trade day
+                # indistinguishable from a day USDA never published, so the
+                # headline silently fell back to an older day: measured over the
+                # last year the headline was behind the newest published day for
+                # 15% of wall-clock. daily_combined() still drops them, so no
+                # unpriced row reaches an average; they exist only so the page
+                # can tell "nothing traded" from "nothing published".
                 price = _dnum(x.get("wtd_avg_price"))
-                if price is None:
-                    continue
                 out.append({
                     "region": region, "cut": cut,
                     "file_date": x.get("report_date"),
@@ -454,10 +596,13 @@ def daily_combined(df: pd.DataFrame) -> pd.DataFrame:
 
 with st.spinner("Loading full USDA cash cattle trade history…"):
     try:
-        price_df = fetch_price_history()
-        vol_df = fetch_volume_history()
+        # One probe for the whole page; each fetch keys on only its own reports.
+        _probe = publication_stamps()
+        price_df = fetch_price_history(stamps_for(_probe, [CT150_ID]))
+        vol_df = fetch_volume_history(stamps_for(_probe, [CT154_ID]))
         load_ok, err_msg = True, ""
     except Exception as e:
+        _probe = PROBE_FAILED
         load_ok, err_msg = False, str(e)
         price_df, vol_df = pd.DataFrame(), pd.DataFrame()
 
@@ -825,11 +970,31 @@ with tab_daily:
 
     with st.spinner("Loading USDA daily regional cash trade…"):
         try:
+            _daily_slugs = [s for cuts in DAILY_REGIONS.values() for s in cuts.values()]
+            _stamps = stamps_for(_probe, _daily_slugs)
             daily_df = fetch_daily_cash(_start_d.strftime("%m/%d/%Y"),
-                                        _end_d.strftime("%m/%d/%Y"))
+                                        _end_d.strftime("%m/%d/%Y"), _stamps)
             daily_err = ""
         except Exception as e:
+            _stamps = PROBE_FAILED
             daily_df, daily_err = pd.DataFrame(), str(e)
+
+    # Show the publication stamp rather than a "last refreshed" clock. Our
+    # refresh time says nothing useful -- USDA's does, and it is the number that
+    # tells you whether a quiet page is quiet because nothing traded or because
+    # the feed stopped.
+    _pub = daily_last_published(_stamps)
+    if _pub:
+        st.markdown(
+            f'<div class="note" style="margin:-4px 0 10px;">USDA last published '
+            f'these reports <b>{html.escape(_pub)}</b>. This page follows that stamp, '
+            f'so it picks up a release as soon as one lands rather than on a timer.'
+            f'</div>', unsafe_allow_html=True)
+    elif _stamps == PROBE_FAILED:
+        st.markdown(
+            '<div class="note" style="margin:-4px 0 10px;">Could not reach USDA\'s '
+            'report index, so the figures below are whatever was last cached and '
+            'may be behind a release.</div>', unsafe_allow_html=True)
 
     dcombo = daily_combined(daily_df)
 
@@ -840,40 +1005,74 @@ with tab_daily:
         )
         with st.expander("Technical details"):
             st.code(daily_err)
-    elif dcombo.empty:
-        st.info("No negotiated cash trade published in this window.")
+    elif daily_df.empty:
+        st.info("USDA published no daily reports for these regions in this window.")
     else:
-        last_trade = dcombo["trade_date"].max()
-        day = dcombo[dcombo["trade_date"] == last_trade]
+        # The newest day USDA PUBLISHED, which is not the same as the newest day
+        # that PRICED -- see the unpriced-rows note in fetch_daily_cash. Taking
+        # it from dcombo instead would skip every no-trade day and head this
+        # section with an older date, which is what made a Wednesday page read
+        # "Monday" with nothing saying Tuesday had been published and was quiet.
+        last_trade = daily_df["trade_date"].max()
+        day = (dcombo[dcombo["trade_date"] == last_trade] if not dcombo.empty
+               else pd.DataFrame(columns=["region", "basis", "cut", "head", "price"]))
+
+        _priced = dcombo["trade_date"].max() if not dcombo.empty else None
+        _quiet = _priced is not None and _priced < last_trade
 
         st.markdown(
             f'<div class="sec-header" style="border-left-color:{FOB_COLOR};margin-top:6px;">'
             f'Latest trading day &mdash; {last_trade.strftime("%A, %b %d, %Y")} '
-            f'&middot; Live FOB ($/cwt)</div>',
+            f'($/cwt)</div>',
             unsafe_allow_html=True)
+
+        if _quiet:
+            st.markdown(
+                f'<div class="note" style="margin:-6px 0 12px;">USDA published this '
+                f'day with no confirmed negotiated trade in any region. The last day '
+                f'that priced was <b>{_priced.strftime("%A, %b %d, %Y")}</b>.</div>',
+                unsafe_allow_html=True)
+
+        def _headline(reg_rows):
+            """
+            The print to headline for one region: Live FOB if it traded, else
+            Dressed; final cut preferred over the 1:30 pm cut.
+
+            IT MUST FALL BACK TO DRESSED. Some days trade dressed only --
+            Tuesday 09/22/2026 was one, its entire national print being Nebraska
+            2,349 steers and 550 heifers at 350.00 dressed with no live FOB
+            anywhere. Headlining Live FOB alone put "Undefined" on all four
+            tiles under that day's own heading, which reads as "nothing traded"
+            when nearly 2,900 head did. The tile names the basis for that
+            reason: on a mixed day the four tiles are not all the same quote.
+            """
+            for basis in ("Live FOB", "Dressed Delivered"):
+                b = reg_rows[reg_rows["basis"] == basis]
+                for cut in ("morning", "afternoon"):
+                    hit = b[b["cut"] == cut]
+                    if not hit.empty:
+                        return hit.iloc[0]
+            return None
 
         # One tile per region: the final print where USDA has closed the day out,
         # otherwise the 1:30 pm cut, labelled so the two are never confused.
         cols = st.columns(len(DAILY_REGIONS))
         for col, region in zip(cols, DAILY_REGIONS):
-            r_fob = day[(day["region"] == region) & (day["basis"] == "Live FOB")]
-            fin = r_fob[r_fob["cut"] == "morning"]
-            par = r_fob[r_fob["cut"] == "afternoon"]
-            use = fin if not fin.empty else par
+            row = _headline(day[day["region"] == region])
             with col:
-                if use.empty:
+                if row is None:
                     st.markdown(
                         tile(region, "Undefined",
                              '<div class="tile-delta-neu">no confirmed trade</div>',
                              "tile-neu"),
                         unsafe_allow_html=True)
                 else:
-                    row = use.iloc[0]
+                    basis_short = "Live FOB" if row["basis"] == "Live FOB" else "Dressed"
                     st.markdown(
                         tile(region, fmt_price(row["price"]),
                              f'<div class="tile-delta-neu">{fmt_hd(row["head"])} '
-                             f'&middot; {DAILY_CUT_LABEL[row["cut"]]}</div>',
-                             "tile-fob"),
+                             f'&middot; {basis_short}, {DAILY_CUT_LABEL[row["cut"]]}</div>',
+                             "tile-fob" if row["basis"] == "Live FOB" else "tile-del"),
                         unsafe_allow_html=True)
 
         # ── Both cuts, side by side ──────────────────────────────────────────
@@ -891,9 +1090,12 @@ with tab_daily:
                     m = reg[(reg["basis"] == basis) & (reg["cut"] == cut)]
                     entry[f"{short} {DAILY_CUT_LABEL[cut]}"] = (
                         fmt_price(m.iloc[0]["price"]) if not m.empty else "—")
-            fin_fob = reg[(reg["basis"] == "Live FOB") & (reg["cut"] == "morning")]
+            # Head across BOTH bases, not Live FOB alone -- on a dressed-only
+            # day (see _headline) a live-only count reads "—" for a region that
+            # actually traded thousands of head.
+            fin = reg[reg["cut"] == "morning"]
             entry["Head (final)"] = (
-                fmt_hd(fin_fob.iloc[0]["head"]) if not fin_fob.empty else "—")
+                fmt_hd(fin["head"].sum()) if not fin.empty else "—")
             grid.append(entry)
         st.dataframe(pd.DataFrame(grid), width="stretch", hide_index=True)
 
@@ -908,7 +1110,8 @@ with tab_daily:
                      tickfont=dict(color=MUTED, size=11),
                      title_font=dict(color=MUTED, size=11), zeroline=False)
 
-        line = dcombo[(dcombo["basis"] == "Live FOB") & (dcombo["cut"] == "morning")]
+        line = (dcombo[(dcombo["basis"] == "Live FOB") & (dcombo["cut"] == "morning")]
+                if not dcombo.empty else dcombo)
         if line.empty:
             st.info("No final Live FOB prints in this window.")
         else:
@@ -942,22 +1145,26 @@ with tab_daily:
 
         # ── Detail ───────────────────────────────────────────────────────────
         with st.expander("\U0001f4cb  Daily detail — every print in the window, both cuts"):
-            det = dcombo.copy()
-            det["Trading Day"] = det["trade_date"].dt.strftime("%Y-%m-%d")
-            det["Cut"] = det["cut"].map(DAILY_CUT_LABEL)
-            det = det.rename(columns={"region": "Region", "basis": "Basis",
-                                      "head": "Head", "weight": "Avg Weight",
-                                      "price": "Wtd Avg Price"})
-            det = det[["Trading Day", "Region", "Basis", "Cut",
-                       "Head", "Avg Weight", "Wtd Avg Price"]]
-            st.dataframe(det.sort_values(["Trading Day", "Region"], ascending=[False, True]),
-                         width="stretch", hide_index=True)
+            if dcombo.empty:
+                st.info("USDA published in this window but nothing priced.")
+            else:
+                det = dcombo.copy()
+                det["Trading Day"] = det["trade_date"].dt.strftime("%Y-%m-%d")
+                det["Cut"] = det["cut"].map(DAILY_CUT_LABEL)
+                det = det.rename(columns={"region": "Region", "basis": "Basis",
+                                          "head": "Head", "weight": "Avg Weight",
+                                          "price": "Wtd Avg Price"})
+                det = det[["Trading Day", "Region", "Basis", "Cut",
+                           "Head", "Avg Weight", "Wtd Avg Price"]]
+                st.dataframe(
+                    det.sort_values(["Trading Day", "Region"], ascending=[False, True]),
+                    width="stretch", hide_index=True)
 
     st.markdown(
         '<div class="note" style="margin-top:10px;">'
         '<b>Two files a day, one trading day apart.</b> USDA publishes each region twice: an '
         'afternoon file (~2:55 pm CT) carrying that day\'s trade as of the 1:30 pm cut, and a '
-        'morning file (~11:00 am CT) that finalises the <i>previous</i> business day. The morning '
+        'morning file (median 11:17 CT) that finalises the <i>previous</i> business day. The morning '
         'file is dated the day it is published, so this page shifts it back one business day &mdash; '
         '&ldquo;Final&rdquo; and &ldquo;1:30 pm cut&rdquo; above are the same trading day, not the '
         'same file.<br><br>'
@@ -970,7 +1177,7 @@ with tab_daily:
         'TX/OK/NM are routinely undefined early in the week.<br><br>'
         'Negotiated cash only, Steer and Heifer combined head-count-weighted, &ldquo;Total all '
         'grades&rdquo;. Sources: <b>LM_CT117/118</b> (TX/OK/NM), <b>LM_CT120/121</b> (Kansas), '
-        '<b>LM_CT123/124</b> (Nebraska), <b>LM_CT136/137</b> (Iowa/Minnesota). Cache: 1 hr.'
+        '<b>LM_CT123/124</b> (Nebraska), <b>LM_CT136/137</b> (Iowa/Minnesota). Cached until USDA republishes, checked every 5 minutes.'
         '</div>',
         unsafe_allow_html=True)
 
@@ -997,8 +1204,8 @@ with st.sidebar:
         '<b>Negotiated Cash Trade Volume</b> — USDA AMS LMR, National Weekly Direct Slaughter Cattle - '
         'Negotiated Purchases (<b>LM_CT154</b>). USDA does not publish a year-ago figure for the 1-14 day '
         'or 15-30 day delivery windows, only for total confirmed trade.<br><br>'
-        '<b>Daily Cash Trade</b> — USDA AMS LMR daily negotiated purchases by region: <b>LM_CT117/118</b> (TX/OK/NM), <b>LM_CT120/121</b> (Kansas), <b>LM_CT123/124</b> (Nebraska), <b>LM_CT136/137</b> (Iowa/Minnesota). Each region publishes twice daily; the morning file finalises the PREVIOUS business day and is shifted back one day so both cuts line up on the trading day. Colorado no longer publishes a daily report (ended 2023/2024) and is weekly-only.<br><br>'
-        'Full available history is always loaded — LM_CT150 back to 2004, LM_CT154 back to 2001. Cache: 1 hr.'
+        '<b>Daily Cash Trade</b> — USDA AMS LMR daily negotiated purchases by region: <b>LM_CT117/118</b> (TX/OK/NM), <b>LM_CT120/121</b> (Kansas), <b>LM_CT123/124</b> (Nebraska), <b>LM_CT136/137</b> (Iowa/Minnesota). Each region publishes twice daily; the morning file finalises the PREVIOUS business day and is shifted back one day so both cuts line up on the trading day. Colorado no longer publishes a daily report (ended 2023/2024) and is weekly-only. The daily figures refresh on USDA\'s own <i>published_date</i> stamp rather than on a timer, because AMS publishes no release schedule — it has released LMR data in real time since May 2020. Over 180 days the morning file has landed between 10:52 and 16:18 Central (median 11:17) and the afternoon between 14:49 and 16:49 (median 15:08), so no fixed refresh time would do.<br><br>'
+        'Full available history is always loaded — LM_CT150 back to 2004, LM_CT154 back to 2001. Weekly cache: 1 hr.'
         '</div>',
         unsafe_allow_html=True,
     )
