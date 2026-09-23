@@ -706,6 +706,46 @@ OUTSIDE_MARKETS = [
 ]
 
 
+def front_contracts(product_code: str, api_key: str, as_of: date, n: int = 1) -> list:
+    """
+    The n nearest outright contracts, following /contracts pagination.
+
+    massive_api.get_active_contract_tickers() reads ONE page. That is fine for
+    cattle and corn, whose listings are mostly outrights, and silently wrong for
+    crude: CL's page is dominated by spread and butterfly combos, the response
+    caps at 1000 rows, and the near months fall off the end. On 2026-09-23 it
+    returned six CL outrights, all January and February, so the brief quoted
+    CLF7 at 86.85 while the actual front month CLX6 was 91.94 -- five dollars
+    away, with nothing to show anything was wrong.
+
+    Following next_url fixes it without touching the shared dashboard module.
+    """
+    api = _massive()
+    seen, url, params = {}, "/contracts", {
+        "product_code": product_code, "active": "true",
+        "date": as_of.isoformat(), "limit": 1000,
+    }
+    for _ in range(12):                      # bounded: a runaway feed cannot hang a build
+        data = api._get(url, api_key, params=params) if params else api._get(url, api_key)
+        for r in data.get("results", []):
+            ticker = r.get("ticker", "")
+            if not api._is_outright_ticker(ticker, product_code):
+                continue
+            when = r.get("settlement_date") or r.get("last_trade_date")
+            if when:
+                seen.setdefault(ticker, when)
+        nxt = data.get("next_url")
+        if not nxt:
+            break
+        # next_url is absolute; strip the base so _get can prepend it again.
+        url, params = nxt.replace(api.BASE_URL, ""), None
+
+    rows = [{"ticker": t, "expiration": w} for t, w in seen.items()]
+    rows.sort(key=lambda r: r["expiration"])
+    live = [r for r in rows if str(r["expiration"])[:10] >= as_of.isoformat()]
+    return (live or rows)[:n]
+
+
 def fetch_outside_markets(api_key: str, as_of: date) -> list:
     """
     Front-month price and overnight change for each outside market.
@@ -723,7 +763,7 @@ def fetch_outside_markets(api_key: str, as_of: date) -> list:
         row = {"code": code, "label": label, "style": style,
                "price": None, "change": None, "month": None, "ticker": None}
         try:
-            contracts = api.get_active_contract_tickers(code, api_key, as_of, limit=600)
+            contracts = front_contracts(code, api_key, as_of, n=1)
             if contracts:
                 front = contracts[0]["ticker"]
                 snap = api.get_snapshots([front], api_key).get(front, {})

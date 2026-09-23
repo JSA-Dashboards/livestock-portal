@@ -396,6 +396,10 @@ body {
   -webkit-print-color-adjust: exact; print-color-adjust: exact;
 }
 .masthead { font-weight: 700; font-size: 13pt; margin: 0 0 14px; }
+table.band { width: 100%; border-collapse: collapse; margin: 0 0 -10px; }
+table.band > tr > td, table.band td { vertical-align: top; width: 50%; padding: 0; }
+table.band h2:first-child { margin-top: 0; }
+table.band ul { margin-bottom: 0; }
 .intro { margin: 0 0 14px; }
 h2 { font-size: 11.5pt; font-weight: 700; margin: 16px 0 4px; }
 h3 { font-size: 11.5pt; font-weight: 400; margin: 10px 0 3px; }
@@ -410,6 +414,13 @@ table.cof th, table.cof td { padding: 1px 16px 1px 0; text-align: left; }
 table.cof th { font-weight: 700; }
 table.cof td:first-child { font-weight: 600; }
 .signoff { margin: 18px 0 26px; }
+/* One page is the product: a three-minute brief that spills its
+   disclaimer onto a second sheet has stopped being one. Tightened for
+   the morning only -- the evening letter keeps its roomier spacing. */
+body.am h2 { margin: 12px 0 3px; }
+body.am .intro { margin: 0 0 10px; }
+body.am .signoff { margin: 14px 0 18px; }
+body.am .sig .disclaimer { margin-top: 22px; }
 /* The evening letter keeps its own page for the signature and the
    disclaimer, matching the printed letter clients already receive. The
    morning brief does not: it is one page, and pushing six lines of
@@ -433,6 +444,24 @@ table.cof td:first-child { font-weight: 600; }
 # block earns its place or it comes out: a section that says the same thing for
 # three weeks stops being read, and takes the ones around it with it.
 
+def am_cattle_rows(ctx: dict, per_product: int = 2) -> list:
+    """
+    The two nearby Live Cattle and Feeder Cattle contracts.
+
+    YESTERDAY'S SETTLE AND ITS MOVE, not a week-to-date change: CME livestock
+    does not open until 08:30 Central, so at the hour this goes out there is no
+    session of its own to report and the prior close is the number the day is
+    measured from. The evening letter quotes the week instead, which is why this
+    reads change_day where that reads change_week.
+    """
+    rows = []
+    for key, tag in (("live_cattle", "LC"), ("feeder_cattle", "FC")):
+        for con in (ctx.get(key) or [])[:per_product]:
+            rows.append(f"{_esc(con['month'])} {tag}: "
+                        f"{signed(con.get('change_day'))} at {price(con.get('settle'))}")
+    return rows
+
+
 def am_blocks(ctx: dict, c: dict) -> list:
     """The AM report's sections, in reading order."""
     out = []
@@ -455,7 +484,16 @@ def am_blocks(ctx: dict, c: dict) -> list:
             basis = float(fci["value"]) - float(front["settle"])
             rows.append(f"{_esc(front['month'])} feeders: {price(front['settle'])}")
             rows.append(f"Basis: {signed(basis, 2)}")
-        out.append("<h2>JSA FCI Estimate</h2>" + _bullets(rows))
+        cattle = am_cattle_rows(ctx)
+        left = "<h2>JSA FCI Estimate</h2>" + _bullets(rows)
+        if cattle:
+            out.append(
+                '<table class="band"><tr>'
+                f'<td>{left}</td>'
+                f'<td><h2>Cattle Futures</h2>{_bullets(cattle)}</td>'
+                "</tr></table>")
+        else:
+            out.append(left)
 
     # 2. Headlines -- written, and where border status lives.
     if c.get("headlines"):
@@ -475,7 +513,7 @@ def am_blocks(ctx: dict, c: dict) -> list:
             # shape Ross asked for: "Dec Corn -8'6 at 528".
             rows.append(f"{_esc(m.get('month') or '')} {_esc(m['label'])}: "
                         f"{chg_txt} at {fmt(m['price'])}")
-        out.append("<h2>Overnight</h2>" + _bullets(rows))
+        out.append("<h2>Overnight Markets</h2>" + _bullets(rows))
 
     # 4. Yesterday, for anyone who did not read the evening letter. One line
     #    each, no LW/LY triples -- that density belongs in the PM report.
@@ -546,11 +584,12 @@ def _signature_html(issue, own_page: bool = True) -> str:
     )
 
 
-def _page(title: str, stamp: str, body: list) -> str:
+def _page(title: str, stamp: str, body: list, body_class: str = "") -> str:
+    cls = f' class="{body_class}"' if body_class else ""
     return (
         "<!DOCTYPE html><html><head><meta charset='utf-8'>"
         f"<title>{_esc(title)} {stamp}</title>"
-        f"<style>{CSS}</style></head><body>" + "".join(body) + "</body></html>"
+        f"<style>{CSS}</style></head><body{cls}>" + "".join(body) + "</body></html>"
     )
 
 
@@ -601,7 +640,7 @@ def build_html(ctx: dict) -> str:
         body.extend(am_blocks(ctx, c))
         body.append(f'<p class="signoff">{_esc(sign_off)}</p>')
         body.append(_signature_html(issue, own_page=False))
-        return _page(title, stamp, body)
+        return _page(title, stamp, body, body_class="am")
 
     if kind == "friday" and c.get("key_headlines"):
         body.append("<h2>Key Headlines</h2>" + _commentary(c["key_headlines"]))
