@@ -62,6 +62,21 @@ DASHBOARDS = [
 # rather than a dashboard, and a thirteenth tile would give the grid 4/4/4/1 --
 # the stranded last-row tile the TILES_PER_ROW comment below exists to avoid.
 # It gets its own section above the grid instead.
+# UNLISTED, NOT JUST LOCKED. The page is passphrase-gated, which stops a client
+# getting IN -- but a registered page still shows a tile on the home grid and an
+# entry in the top nav, and clients should not see that the letter tool exists
+# at all.
+#
+# So it is registered only when asked for: open the portal with ?tools=1 once,
+# and the tile and nav entry appear for that browser session. Without the
+# parameter the page is not registered, so there is no tile, no nav entry, and
+# /weekly-cattle-reports does not route.
+#
+# The parameter is UNLISTING, not security -- anyone who guessed it would still
+# face the passphrase, which is the actual control. Two different jobs.
+TOOLS_PARAM = "tools"
+TOOLS_SESSION_KEY = "_tools_visible"
+
 TOOLS = [
     {"title": "JSA Daily Cattle Reports", "page": "apps/weekly_reports/app.py",
      # url_path deliberately unchanged by the rename, the way Cattle Weights
@@ -128,6 +143,26 @@ div[class*="st-key-tile_"] a[data-testid="stPageLink-NavLink"]:hover p {
 """
 
 
+def tools_visible() -> bool:
+    """
+    True once ?tools=1 has been seen in this session.
+
+    Sticky on purpose: Streamlit drops query parameters as you navigate between
+    pages, so without remembering it the tile would vanish the moment you
+    clicked it. Cleared when the browser session ends.
+    """
+    if st.session_state.get(TOOLS_SESSION_KEY):
+        return True
+    try:
+        asked = st.query_params.get(TOOLS_PARAM)
+    except Exception:
+        asked = None
+    if str(asked or "").strip().lower() in ("1", "true", "yes", "on"):
+        st.session_state[TOOLS_SESSION_KEY] = True
+        return True
+    return False
+
+
 def render_home():
     st.markdown(_TILE_CSS, unsafe_allow_html=True)
     col_logo, col_title = st.columns([1, 6])
@@ -149,7 +184,7 @@ def render_home():
     # styling. Asking for TILES_PER_ROW columns and filling only the first keeps
     # this tile the same width as every tile below it -- a lone st.columns(1)
     # tile would stretch the full page and stop matching.
-    if TOOLS:
+    if TOOLS and tools_visible():
         tool_cols = st.columns(4)
         for offset, t in enumerate(TOOLS):
             with tool_cols[offset]:
@@ -185,10 +220,14 @@ def render_home():
 
 home_page = st.Page(render_home, title="Home", url_path="home", default=True)
 
+# TOOLS are registered only when asked for -- see the note above TOOLS. An
+# unregistered page has no nav entry and its url_path does not route.
+_pages = list(DASHBOARDS) + (list(TOOLS) if tools_visible() else [])
+
 pg = st.navigation(
     [home_page] + [
         st.Page(d["page"], title=d["title"], url_path=d["url_path"])
-        for d in DASHBOARDS + TOOLS
+        for d in _pages
     ],
     position="top",
 )
