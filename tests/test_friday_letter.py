@@ -338,3 +338,17 @@ def test_cof_block_punctuation_matches_the_sent_letter():
     # Year-Ago basis differ, and that difference is the documented rounding one.
     for v in ("90.8", "96.8", "90.1", "96.7", "96.1", "86.4", "101.8"):
         assert v in html
+
+
+def test_bare_build_resolves_the_issue_date_before_deriving_the_day():
+    """
+    With no --date and no --day the weekday is derived from the issue date, so
+    the date has to be resolved first. It was not: `python -m letter.build` with
+    no arguments -- the most ordinary invocation there is -- died with
+    UnboundLocalError on `issue`.
+    """
+    import inspect
+    from letter import build as B
+    src = inspect.getsource(B.main)
+    assert src.index("issue = date.fromisoformat") < src.index("config.day_for_date(issue)")
+    assert src.count("issue = date.fromisoformat") == 1

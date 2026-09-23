@@ -424,6 +424,10 @@ def main(argv=None) -> int:
                          "publish these and nothing can derive them.")
     args = ap.parse_args(argv)
 
+    # The issue date has to be resolved FIRST: with no --day, the weekday is
+    # derived from it.
+    issue = date.fromisoformat(args.date) if args.date else date.today()
+
     # day = what you picked; fmt = which of the two layouts it produces.
     if args.friday:
         day = "friday"
@@ -454,7 +458,6 @@ def main(argv=None) -> int:
             except ValueError:
                 pass
 
-    issue = date.fromisoformat(args.date) if args.date else date.today()
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     data_path = out_dir / f"data_{day}_{issue}.json"
