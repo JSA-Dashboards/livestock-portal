@@ -1,5 +1,5 @@
 """
-PM Weekly Cattle Reports — build the client letter from live data.
+JSA Daily Cattle Reports — build the client letter from live data.
 
 The authoring surface for the daily letter. Everything it does is a thin
 shell over the letter/ package, which is also driven from the command line by
@@ -33,7 +33,7 @@ import portal_auth  # noqa: E402
 
 portal_auth.require_passphrase(
     "REPORTS_PASSPHRASE",
-    title="PM Weekly Cattle Reports",
+    title="JSA Daily Cattle Reports",
     subtitle="This section is restricted. Enter the passphrase to continue.",
 )
 

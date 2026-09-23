@@ -409,8 +409,13 @@ table.cof { border-collapse: collapse; margin: 6px 0 4px; font-size: 11pt; }
 table.cof th, table.cof td { padding: 1px 16px 1px 0; text-align: left; }
 table.cof th { font-weight: 700; }
 table.cof td:first-child { font-weight: 600; }
-.signoff { margin: 18px 0 0; }
-.sig { page-break-before: always; margin-top: 4px; }
+.signoff { margin: 18px 0 26px; }
+/* The evening letter keeps its own page for the signature and the
+   disclaimer, matching the printed letter clients already receive. The
+   morning brief does not: it is one page, and pushing six lines of
+   signature onto a second doubles a three-minute read. */
+.sig { margin-top: 4px; }
+.sig.own-page { page-break-before: always; }
 .sig div { margin: 0; }
 .disclaimer {
   margin-top: 26px; font-size: 8pt; line-height: 1.35; color: #222; text-align: justify;
@@ -436,16 +441,16 @@ def am_blocks(ctx: dict, c: dict) -> list:
         #
         # No date on the line: the heading says Estimate, the brief is dated at
         # the top, and a second date here is one more thing to read past.
-        rows = [(f"{signed(fci['change'], 2)} at {money(fci['value'])}"
-                 if fci.get("change") is not None else money(fci["value"]))]
+        rows = [("Estimate: " + (f"{signed(fci['change'], 2)} at {money(fci['value'])}"
+                                 if fci.get("change") is not None else money(fci["value"])))]
         # Basis against the front feeder contract: one number that frames the
         # whole feeder complex before the open. Cash minus futures, the usual
         # convention, so a negative basis means the board is over the index.
         front = (ctx.get("feeder_cattle") or [None])[0]
         if front and front.get("settle") is not None:
             basis = float(fci["value"]) - float(front["settle"])
-            rows.append(f"{_esc(front['month'])} feeders {price(front['settle'])} "
-                        f"&nbsp;basis {signed(basis, 2)}")
+            rows.append(f"{_esc(front['month'])} feeders: {price(front['settle'])}")
+            rows.append(f"Basis: {signed(basis, 2)}")
         out.append("<h2>JSA FCI Estimate</h2>" + _bullets(rows))
 
     # 2. Headlines -- written, and where border status lives.
@@ -464,7 +469,7 @@ def am_blocks(ctx: dict, c: dict) -> list:
             # Change BEFORE the price, joined by "at" -- the same shape the
             # evening letter uses for cattle ("Oct: +1.025 at 220.70") and the
             # shape Ross asked for: "Dec Corn -8'6 at 528".
-            rows.append(f"{_esc(m.get('month') or '')} {_esc(m['label'])} "
+            rows.append(f"{_esc(m.get('month') or '')} {_esc(m['label'])}: "
                         f"{chg_txt} at {fmt(m['price'])}")
         out.append("<h2>Overnight</h2>" + _bullets(rows))
 
@@ -484,9 +489,9 @@ def am_blocks(ctx: dict, c: dict) -> list:
                 bits.append(f"{trim_range(r['live_low'], r['live_high'])} live")
             if r.get("dressed_low") is not None:
                 bits.append(f"{trim_range(r['dressed_low'], r['dressed_high'])} dressed")
-            rows.append(f"Cash &nbsp;{_esc(name)} {', '.join(bits)}")
+            rows.append(f"{_esc(name)}: {' &middot; '.join(bits)}")
     elif regions:
-        rows.append("Cash: no established test this week")
+        rows.append("No established test this week")
 
     # NO WEEKLY WEIGHTED AVERAGE HERE. LM_CT150's "this week" is the last
     # COMPLETED week, published after it ends -- so on a Wednesday morning it is
@@ -498,11 +503,11 @@ def am_blocks(ctx: dict, c: dict) -> list:
     cut = ctx.get("cutout") or {}
     ch, se = cut.get("choice", {}), cut.get("select", {})
     if ch.get("value") is not None:
-        rows.append(f"Cutout: Ch {money(ch['value'])} {signed(ch.get('change'), 2)} "
-                    f"&middot; Se {money(se.get('value'))} {signed(se.get('change'), 2)}")
+        rows.append(f"Cutout: Choice {money(ch['value'])} {signed(ch.get('change'), 2)} "
+                    f"&middot; Select {money(se.get('value'))} {signed(se.get('change'), 2)}")
     dsl = ctx.get("daily_slaughter") or {}
     if dsl.get("current_day") is not None:
-        rows.append(f"Slaughter: {head_k(dsl['current_day'])} &middot; "
+        rows.append(f"Slaughter: Daily {head_k(dsl['current_day'])} &middot; "
                     f"WTD {head_k(dsl.get('wtd'))} "
                     f"({head_k(dsl.get('wtd_week_ago'))} LW, {head_k(dsl.get('wtd_year_ago'))} LY)")
     if rows:
@@ -513,7 +518,7 @@ def am_blocks(ctx: dict, c: dict) -> list:
     #    anything prints today finds it in the same place either way, and one
     #    list is a shorter read than two headings.
     items = (ctx.get("calendar") or {}).get("items") or []
-    rows = [f"{_esc(i['label'])} &mdash; {_esc(i['when'])}"
+    rows = [f"{_esc(i['label'])}: {_esc(i['when'])}"
             + (" <strong>(today)</strong>" if i.get("is_today") else "")
             for i in items]
     out.append("<h2>Upcoming USDA Reports</h2>"
@@ -521,11 +526,11 @@ def am_blocks(ctx: dict, c: dict) -> list:
     return out
 
 
-def _signature_html(issue) -> str:
-    """Page 3 of the printed letter. Identical in every session and format."""
+def _signature_html(issue, own_page: bool = True) -> str:
+    """The signature and disclaimer. Identical in every session and format."""
     s = config.SIGNATURE
     return (
-        '<div class="sig">'
+        f'<div class="sig{" own-page" if own_page else ""}">'
         f'<div>{_esc(s["name"])}</div>'
         f'<div>{_esc(s["company"])}</div>'
         f'<div>{_esc(s["city"])}</div>'
@@ -591,7 +596,7 @@ def build_html(ctx: dict) -> str:
         body = [body[0], body[1]]          # masthead and intro only
         body.extend(am_blocks(ctx, c))
         body.append(f'<p class="signoff">{_esc(sign_off)}</p>')
-        body.append(_signature_html(issue))
+        body.append(_signature_html(issue, own_page=False))
         return _page(title, stamp, body)
 
     if kind == "friday" and c.get("key_headlines"):

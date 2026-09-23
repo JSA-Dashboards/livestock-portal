@@ -400,13 +400,13 @@ def test_grain_quotes_in_eighths(value, expected):
 
 def test_overnight_quote_shape():
     """
-    "Dec Corn -8'6 at 528" -- month before the commodity, change before the
-    price, joined by "at". The same shape the evening letter uses for cattle.
+    "Dec Corn: -8'6 at 528" -- month before the commodity, change before the
+    price, joined by "at". Every line in the brief is "Label: value".
     """
     html = render.am_blocks(
         {"outside": [{"label": "Corn", "month": "Dec", "style": "eighths",
                       "price": 528.0, "change": -8.75}]}, {})
-    assert "Dec Corn -8'6 at 528" in "".join(html).replace("&nbsp;", " ")
+    assert "Dec Corn: -8'6 at 528" in "".join(html).replace("&nbsp;", " ")
 
 
 def test_fci_heading_and_no_second_date():
@@ -417,7 +417,7 @@ def test_fci_heading_and_no_second_date():
     assert "JSA FCI Estimate" in html
     assert "2026-09-22" not in html
     # Same "change at price" shape as the overnight quotes.
-    assert "-1.76 at 336.98" in html.replace("&nbsp;", " ")
+    assert "Estimate: -1.76 at 336.98" in html.replace("&nbsp;", " ")
 
 
 def test_am_collapses_two_undefined_cash_regions_into_one_line():
@@ -425,8 +425,8 @@ def test_am_collapses_two_undefined_cash_regions_into_one_line():
     ctx = {"regional_cash": {"regions": {
         "North": {"undefined": True}, "South": {"undefined": True}}}}
     joined = "".join(render.am_blocks(ctx, {}))
-    assert "Cash: no established test" in joined
-    assert "Cash North" not in joined
+    assert "No established test" in joined
+    assert "North:" not in joined
 
 
 def test_am_never_carries_the_evening_rundown():
@@ -520,8 +520,41 @@ def test_mailbox_never_blocks_the_build():
 
 
 def test_digests_are_configured_as_data_not_code():
-    """Adding a third publication should be one line."""
+    """Adding a publication should be one line, and each needs a way to find it."""
     from letter import mailbox
     labels = {d["label"] for d in mailbox.DIGESTS}
     assert labels == {"Meatingplace", "eMeat", "Global AgriTrends", "Sterling"}
-    assert all("match" in d for d in mailbox.DIGESTS)
+    assert all(d.get("sender") or d.get("sender_name") or d.get("subject")
+               or d.get("match") for d in mailbox.DIGESTS)
+
+
+def test_a_sender_address_is_an_exact_filter_not_a_body_search():
+    """
+    $search reads the BODY as well as the sender, so "sterling" would also match
+    a client email about sterling silver and surface its text in the panel. A
+    known From address must produce an exact $filter instead.
+    """
+    from letter import mailbox
+    src = (sources.REPO / "letter" / "mailbox.py").read_text(encoding="utf-8")
+    assert "from/emailAddress/address eq" in src
+
+    assert "startswith(from/emailAddress/name," in src  # prefix, also body-free
+
+    by_label = {d["label"]: d for d in mailbox.DIGESTS}
+    # Meatingplace's address is not visible in the client; the display name is.
+    assert by_label["Meatingplace"]["sender_name"] == "Meatingplace Editorial"
+    assert "match" not in by_label["Meatingplace"]
+    # The Bulletin, not "The EMEAT Team" -- that one is the publisher's
+    # marketing, and a prefix match keeps it out.
+    assert by_label["eMeat"]["sender_name"] == "The EMEAT Daily Bulletin"
+    assert "match" not in by_label["eMeat"]
+    assert by_label["Global AgriTrends"]["sender"] == "no-reply@globalagritrends.com"
+    assert "match" not in by_label["Global AgriTrends"]
+    # "sterling" alone is far too common a word to search bodies for.
+    assert by_label["Sterling"]["sender"] == "jnalivka@fmtc.com"
+    assert "match" not in by_label["Sterling"]
+
+    # Not every digest is a daily. Sterling's newest on 2026-09-23 was Monday
+    # afternoon, ~45h old; a 30-hour window dropped it silently.
+    import inspect
+    assert "max_age_h: int = 72" in inspect.getsource(mailbox.fetch_digests)

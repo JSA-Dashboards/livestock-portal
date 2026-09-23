@@ -173,7 +173,7 @@ def candidates(as_of: date = None, limit_per_feed: int = 12,
     # The paid digests, read from Ross's own mailbox -- see letter/mailbox.py
     # for why that is the right door rather than the publishers' websites.
     if include_mailbox:
-        got = mailbox.fetch_digests(max_age_h=max(max_age_h, 30))
+        got = mailbox.fetch_digests(max_age_h=max(max_age_h, 72))
         items.extend(got.get("items", []))
         errors.extend({"source": "", "error": e} for e in got.get("errors", []))
         needs_sign_in = bool(got.get("needs_sign_in"))

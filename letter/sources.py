@@ -859,8 +859,8 @@ def fetch_report_calendar(as_of: date) -> dict:
         "inferred": [f"{r['name']} {r['date'].isoformat()}"
                      for r in scheduled if r.get("inferred")],
         "items": [{"date": r["date"].isoformat(),
-                   "when": f"{_WD[r['date'].weekday()]} {r['date'].month}/{r['date'].day}",
-                   "label": f"{r['name']}, {r['time']}",
+                   "label": r["name"],
+                   "when": f"{_WD[r['date'].weekday()]} {r['date'].month}/{r['date'].day}, {r['time']}",
                    "is_today": r["date"] == as_of}
                   for r in scheduled],
     }

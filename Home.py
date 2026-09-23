@@ -63,7 +63,7 @@ DASHBOARDS = [
 # the stranded last-row tile the TILES_PER_ROW comment below exists to avoid.
 # It gets its own section above the grid instead.
 TOOLS = [
-    {"title": "PM Weekly Cattle Reports", "page": "apps/weekly_reports/app.py",
+    {"title": "JSA Daily Cattle Reports", "page": "apps/weekly_reports/app.py",
      # url_path deliberately unchanged by the rename, the way Cattle Weights
      # kept "beef-weight" -- any bookmark already handed out keeps working.
      "url_path": "weekly-cattle-reports",

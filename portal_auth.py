@@ -16,7 +16,7 @@ and per CLAUDE.md a fix means a manual reboot rather than a push.
 TWO WAYS TO USE IT:
 
   # one page -- call at the very top of the page script, before anything renders
-  portal_auth.require_passphrase("REPORTS_PASSPHRASE", title="Weekly Cattle Reports")
+  portal_auth.require_passphrase("REPORTS_PASSPHRASE", title="JSA Daily Cattle Reports")
 
   # the whole portal -- call in Home.py immediately after set_page_config, and
   # ABOVE st.navigation. Streamlit runs Home.py on every request including a

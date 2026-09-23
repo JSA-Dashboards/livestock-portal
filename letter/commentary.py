@@ -143,7 +143,7 @@ def write_sections(path: Path, sections: dict, kind: str = "tuesday") -> None:
     """
     Write {key: [bullet, ...]} back out in the same format read() parses.
 
-    The Weekly Cattle Reports page edits in text areas; the CLI edits the file.
+    The JSA Daily Cattle Reports page edits in text areas; the CLI edits the file.
     Both must leave the file in one format or a letter half-written in one place
     cannot be finished in the other.
     """
