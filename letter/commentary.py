@@ -25,6 +25,16 @@ from pathlib import Path
 # meaning in the other.
 SECTIONS_BY_KIND = {
     "tuesday": [
+        # Added 2026-09-23. Headlines LEAD the evening letter, the way Key
+        # Headlines lead Friday's and Headlines lead the morning brief -- all
+        # three now open on what happened before they explain it.
+        #
+        # THE KEY IS "headlines", the same one the AM brief uses, on the same
+        # reasoning as the shared technicals keys below: the section means the
+        # same thing in both letters, so a headline typed into the morning box
+        # reads correctly if it is carried into the evening one. The drafts are
+        # still separate files per kind, so nothing is shared by accident.
+        ("headlines", "Headlines"),
         ("market_action", "Market Action"),
         ("technicals_lc", "Technicals: Live Cattle"),
         ("technicals_fc", "Technicals: Feeder Cattle"),

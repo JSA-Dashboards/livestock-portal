@@ -157,6 +157,22 @@ def test_cof_block_renders_computed_figures_and_dashes_missing_guesses():
 
 # -- Section wiring -----------------------------------------------------------
 
+def _pm_ctx(commentary_sections: dict, kind: str = "tuesday") -> dict:
+    """
+    The thinnest evening-letter context build_html will render.
+
+    Deliberately empty of figures: these tests are about which sections appear
+    and in what order, and a fixture full of prices would make them fail for
+    reasons that have nothing to do with that.
+    """
+    return {
+        "kind": kind, "session": "pm", "issue_date": date(2026, 9, 23),
+        "change_basis": "week", "live_cattle": [], "feeder_cattle": [],
+        "cash": {}, "cutout": {}, "slaughter": {},
+        "commentary": commentary_sections,
+    }
+
+
 def test_the_two_letters_have_different_sections():
     tue = dict(commentary.sections_for("tuesday"))
     fri = dict(commentary.sections_for("friday"))
@@ -165,6 +181,45 @@ def test_the_two_letters_have_different_sections():
     assert "key_headlines" in fri and "cash_recap" in fri and "cof_note" in fri
     # Shared on purpose: a technical read means the same thing in both.
     assert "technicals_lc" in tue and "technicals_lc" in fri
+
+
+def test_the_evening_letter_leads_with_headlines():
+    """
+    Added 2026-09-23. The standard PM letter gained a Headlines section, placed
+    ahead of Market Action the way Friday leads with Key Headlines and the
+    morning brief leads with Headlines.
+    """
+    tue = dict(commentary.sections_for("tuesday"))
+    assert "headlines" in tue
+
+    # Order in SECTIONS_BY_KIND is the order they appear in the letter.
+    keys = [k for k, _ in commentary.sections_for("tuesday")]
+    assert keys.index("headlines") < keys.index("market_action")
+
+    html = render.build_html(_pm_ctx({
+        "headlines": ["Kansas ICE sweep has packers delaying shifts"],
+        "market_action": ["Board closed higher across the front."],
+    }))
+    assert html.index("<h2>Headlines</h2>") < html.index("<h2>Market Action</h2>")
+
+
+def test_friday_still_replaces_market_action_rather_than_adding_to_it():
+    """
+    Friday's Key Headlines took Market Action's place; it did not join it. The
+    PM change must not turn Friday into both.
+    """
+    html = render.build_html(_pm_ctx(
+        {"key_headlines": ["Week in review"], "market_action": ["must not appear"]},
+        kind="friday"))
+    assert "<h2>Key Headlines</h2>" in html
+    assert "Market Action" not in html
+    assert "must not appear" not in html
+
+
+def test_a_pm_letter_with_nothing_typed_prints_no_headline_heading():
+    """Same rule as every other section: blank means absent, not empty."""
+    html = render.build_html(_pm_ctx({}))
+    assert "Headlines" not in html
 
 
 def test_draft_filenames_are_per_letter(tmp_path):

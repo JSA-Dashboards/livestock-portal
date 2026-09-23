@@ -276,7 +276,20 @@ with st.expander("Figures pulled", expanded=False):
 # brief is a USDA or CME number that is either right or marked [[?]]; a headline
 # is editorial, and there is no [[?]] for a feed surfacing something misleading
 # under JSA's name.
-if kind == "am":
+#
+# WHICH FORMATS GET IT IS DERIVED, NOT HARDCODED. This was `kind == "am"` until
+# 2026-09-23, when the evening letter gained a Headlines section and the pick
+# list silently did not follow -- a box to type headlines into and no list to
+# pick them from. Asking the format which section it has means adding one to a
+# third format is a one-line change in commentary.py and nothing here.
+#
+# Friday picks up the panel for its Key Headlines as a side effect, which it
+# should have had all along: same editorial job, same pick-then-rewrite rule.
+_head_key, _head_title = next(
+    ((k, t) for k, t in commentary.sections_for(kind)
+     if k in ("headlines", "key_headlines")), (None, None))
+
+if _head_key:
     with st.expander("Headline candidates", expanded=False):
         if st.button("Fetch headlines", use_container_width=False):
             with st.spinner("Reading Beef Magazine, the USDA narratives and packer news…"):
@@ -326,11 +339,16 @@ if kind == "am":
                     picked.append(item["title"])
                 st.caption(f"{item['source']} · {age}"
                            + (f" · [open]({item['link']})" if item.get("link") else ""))
-            if picked and st.button(f"Add {len(picked)} to Headlines", type="primary"):
-                existing = st.session_state.get("wcr_headlines", "")
+            if picked and st.button(f"Add {len(picked)} to {_head_title}", type="primary"):
+                # The target box is the one THIS format calls its headline
+                # section -- wcr_headlines on AM and PM, wcr_key_headlines on
+                # Friday. Hardcoding it wrote Friday's picks into a widget that
+                # does not exist on Friday.
+                _box = f"wcr_{_head_key}"
+                existing = st.session_state.get(_box, "")
                 lines = [ln for ln in existing.splitlines() if ln.strip()]
                 lines.extend(picked)
-                st.session_state["wcr_headlines"] = "\n".join(lines)
+                st.session_state[_box] = "\n".join(lines)
                 for n in range(len(found.get("items", []))):
                     st.session_state[f"head_{n}"] = False
                 st.rerun()

@@ -644,10 +644,21 @@ def build_html(ctx: dict) -> str:
         body.append(_signature_html(issue, own_page=False))
         return _page(title, stamp, body, body_class="am")
 
-    if kind == "friday" and c.get("key_headlines"):
-        body.append("<h2>Key Headlines</h2>" + _commentary(c["key_headlines"]))
-    elif c.get("market_action"):
-        body.append("<h2>Market Action</h2>" + _commentary(c["market_action"]))
+    # HEADLINES LEAD, then the session recap. Friday has led with Key Headlines
+    # since it was written and the morning brief leads with Headlines; as of
+    # 2026-09-23 the standard evening letter does too, so all three open on what
+    # happened before they explain it.
+    #
+    # Friday is still EITHER/OR rather than both: its Key Headlines section
+    # replaced Market Action, and that format has no market_action key to render.
+    if kind == "friday":
+        if c.get("key_headlines"):
+            body.append("<h2>Key Headlines</h2>" + _commentary(c["key_headlines"]))
+    else:
+        if c.get("headlines"):
+            body.append("<h2>Headlines</h2>" + _commentary(c["headlines"]))
+        if c.get("market_action"):
+            body.append("<h2>Market Action</h2>" + _commentary(c["market_action"]))
 
     tech_lc = technicals_block(ctx.get("tech_lc"), c.get("technicals_lc", []), "Live Cattle")
     tech_fc = technicals_block(ctx.get("tech_fc"), c.get("technicals_fc", []), "Feeders")
