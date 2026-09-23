@@ -4,6 +4,7 @@ import plotly.graph_objects as go
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 import html
 import time
@@ -79,6 +80,11 @@ DAILY_CLASSES = ("STEER", "HEIFER")
 DAILY_GRADE_TOTAL = "Total all grades"
 DAILY_BASES = {"LIVE FOB": "Live FOB", "DRESSED DELIVERED": "Dressed Delivered"}
 DAILY_CUT_LABEL = {"morning": "Final", "afternoon": "1:30 pm cut"}
+
+# /Summary rows carry both the day total and the running week total, tagged in
+# current_period. "Confirmed" is that trading day; "Week to Date" is cumulative
+# from Monday and resets on the trading Monday, not the file Monday.
+DAILY_VOLUME_PERIODS = {"Confirmed": "day", "Week to Date": "wtd"}
 
 # The window drives the FETCH, not just the view, so the default is the cheap
 # one. A hidden tab still executes (see the Tabs block), which means every load
@@ -452,6 +458,42 @@ def daily_last_published(stamps: str) -> str:
 # publication_stamps), and stating one would only mislead the next reader into
 # thinking time drives this. The `stamps` argument drives it. max_entries bounds
 # what disk collects, since the key changes roughly twice a day.
+def _fetch_many(jobs: list, timeout: int = 90) -> dict:
+    """
+    Run independent datamart GETs concurrently, returning {key: rows}.
+
+    Latency here is server-bound, not payload-bound: a 30-day window costs
+    about 2.2 s whether it returns 108 KB of Summary or 1 MB of Detail. Run
+    sequentially, the sixteen requests this page needs are over half a minute
+    of wall clock on a cold cache -- and because a hidden Streamlit tab still
+    executes, everyone pays it, including someone who only opens the Weekly
+    tab. They are independent GETs, so they overlap cleanly.
+
+    Each worker builds its OWN session via _session(): requests.Session is not
+    safe to share across threads. Nothing in here touches st.*, so it is safe
+    inside a cached function.
+
+    A job that fails yields [] rather than raising: these are independent
+    reports and one being down is not a reason to blank the others.
+    """
+    def run(job):
+        key, slug, section, params = job
+        try:
+            resp = _session().get(f"{LMR_BASE}/{slug}/{section}",
+                                  params=params, timeout=timeout)
+            if resp.status_code in (204, 404):
+                return key, []
+            resp.raise_for_status()
+            return key, _daily_rows(resp.json())
+        except Exception:
+            return key, []
+
+    if not jobs:
+        return {}
+    with ThreadPoolExecutor(max_workers=min(8, len(jobs))) as ex:
+        return dict(ex.map(run, jobs))
+
+
 @st.cache_data(persist="disk", max_entries=64, show_spinner=False)
 def fetch_daily_cash(start: str, end: str, stamps: str) -> pd.DataFrame:
     """
@@ -486,52 +528,43 @@ def fetch_daily_cash(start: str, end: str, stamps: str) -> pd.DataFrame:
     A region that fails is SKIPPED, not raised: these are eight independent
     reports and one being down is not a reason to blank the other three.
     """
-    sess = _session()
+    jobs = [((region, cut), slug, "Detail",
+             {"q": f"report_date={start}:{end};grade_desc={DAILY_GRADE_TOTAL}"})
+            for region, cuts in DAILY_REGIONS.items() for cut, slug in cuts.items()]
+    fetched = _fetch_many(jobs)
+
     out = []
-    for region, cuts in DAILY_REGIONS.items():
-        for cut, slug in cuts.items():
-            try:
-                resp = sess.get(
-                    f"{LMR_BASE}/{slug}/Detail",
-                    params={"q": f"report_date={start}:{end}"
-                                 f";grade_desc={DAILY_GRADE_TOTAL}"},
-                    timeout=90)
-                if resp.status_code in (204, 404):
-                    continue
-                resp.raise_for_status()
-                rows = _daily_rows(resp.json())
-            except Exception:
+    for (region, cut), rows in fetched.items():
+        for x in rows:
+            if str(x.get("purchase_type_code", "")).strip() != DAILY_PURCHASE_TYPE:
                 continue
-            for x in rows:
-                if str(x.get("purchase_type_code", "")).strip() != DAILY_PURCHASE_TYPE:
-                    continue
-                if str(x.get("class_desc", "")).strip() not in DAILY_CLASSES:
-                    continue
-                if str(x.get("grade_desc", "")).strip() != DAILY_GRADE_TOTAL:
-                    continue
-                basis = str(x.get("selling_basis_desc", "")).strip()
-                if basis not in DAILY_BASES:
-                    continue
-                # UNPRICED ROWS ARE KEPT, and that is load-bearing. USDA
-                # publishes a file for a day with no confirmed trade, every
-                # price null -- that is its "Undefined" market test, a real
-                # answer. Dropping those rows made a published no-trade day
-                # indistinguishable from a day USDA never published, so the
-                # headline silently fell back to an older day: measured over the
-                # last year the headline was behind the newest published day for
-                # 15% of wall-clock. daily_combined() still drops them, so no
-                # unpriced row reaches an average; they exist only so the page
-                # can tell "nothing traded" from "nothing published".
-                price = _dnum(x.get("wtd_avg_price"))
-                out.append({
-                    "region": region, "cut": cut,
-                    "file_date": x.get("report_date"),
-                    "class": str(x.get("class_desc", "")).strip(),
-                    "basis": DAILY_BASES[basis],
-                    "head": _dnum(x.get("head_count")),
-                    "weight": _dnum(x.get("wtd_avg_weight")),
-                    "price": price,
-                })
+            if str(x.get("class_desc", "")).strip() not in DAILY_CLASSES:
+                continue
+            if str(x.get("grade_desc", "")).strip() != DAILY_GRADE_TOTAL:
+                continue
+            basis = str(x.get("selling_basis_desc", "")).strip()
+            if basis not in DAILY_BASES:
+                continue
+            # UNPRICED ROWS ARE KEPT, and that is load-bearing. USDA
+            # publishes a file for a day with no confirmed trade, every
+            # price null -- that is its "Undefined" market test, a real
+            # answer. Dropping those rows made a published no-trade day
+            # indistinguishable from a day USDA never published, so the
+            # headline silently fell back to an older day: measured over the
+            # last year the headline was behind the newest published day for
+            # 15% of wall-clock. daily_combined() still drops them, so no
+            # unpriced row reaches an average; they exist only so the page
+            # can tell "nothing traded" from "nothing published".
+            price = _dnum(x.get("wtd_avg_price"))
+            out.append({
+                "region": region, "cut": cut,
+                "file_date": x.get("report_date"),
+                "class": str(x.get("class_desc", "")).strip(),
+                "basis": DAILY_BASES[basis],
+                "head": _dnum(x.get("head_count")),
+                "weight": _dnum(x.get("wtd_avg_weight")),
+                "price": price,
+            })
 
     df = pd.DataFrame(out)
     if df.empty:
@@ -555,6 +588,119 @@ def fetch_daily_cash(start: str, end: str, stamps: str) -> pd.DataFrame:
         df.loc[morning, "file_date"] - pd.tseries.offsets.BDay(1))
 
     return df.sort_values(["trade_date", "region", "cut"]).reset_index(drop=True)
+
+
+@st.cache_data(persist="disk", max_entries=64, show_spinner=False)
+def fetch_daily_volume(start: str, end: str, stamps: str) -> pd.DataFrame:
+    """
+    Negotiated cash HEAD COUNT per region -- the day's confirmed total and the
+    running week-to-date -- from each report's /Summary section, which the
+    price fetch never asks for.
+
+    `stamps` is the cache key, exactly as in fetch_daily_cash(); see there.
+
+    THIS IS A BROADER UNIVERSE THAN THE PRICES, and must never be shown as the
+    head count behind them. fetch_daily_cash() filters to Steer and Heifer,
+    Live FOB and Dressed Delivered, "Total all grades", because that is what a
+    quoted average has to be built from. USDA's Confirmed and Week-to-Date
+    volumes count every class and all four selling bases -- mixed lots,
+    dairybred, the FOB/delivered variants the price section leaves out. On
+    09/18/2026 Nebraska that is 3,690 head confirmed against 1,547 in the live
+    FOB steer row. Same market, different question.
+
+    A NULL VOLUME IS ZERO, NOT MISSING. USDA leaves the field empty for a
+    region with no confirmed trade, and its own aggregate adds that in as
+    nothing: summing these four regions with nulls as zero reproduces
+    LM_CT100's current_week_head_count EXACTLY on 118 of 118 file dates
+    (verified 2026-09-23). That is why the 5-Area figure on the page is a sum
+    of these four and not a fifth request -- and why a region that stops
+    publishing would silently understate the total rather than announce
+    itself. Coverage over the last 180 days, morning files: IA/MN 88%,
+    Nebraska 78%, Kansas 57%, TX/OK/NM 38%.
+    """
+    jobs = [((region, cut), slug, "Summary",
+             {"q": f"report_date={start}:{end}"})
+            for region, cuts in DAILY_REGIONS.items() for cut, slug in cuts.items()]
+    fetched = _fetch_many(jobs)
+
+    out = []
+    for (region, cut), rows in fetched.items():
+        for x in rows:
+            if str(x.get("purchase_type_desc", "")).strip() != DAILY_PURCHASE_TYPE:
+                continue
+            period = str(x.get("current_period", "")).strip()
+            if period not in DAILY_VOLUME_PERIODS:
+                continue
+            out.append({
+                "region": region, "cut": cut,
+                "file_date": x.get("report_date"),
+                "period": DAILY_VOLUME_PERIODS[period],
+                "head": _dnum(x.get("current_date_volume")),
+                # On the Week-to-Date row this is the RUNNING TOTAL AT THE SAME
+                # POINT LAST WEEK, not last week's finished total: measured,
+                # week_ago_volume(D) equals current_date_volume(D-7). It is the
+                # like-for-like comparison, which is the useful one midweek.
+                "head_week_ago": _dnum(x.get("week_ago_volume")),
+            })
+
+    df = pd.DataFrame(out)
+    if df.empty:
+        return df
+    df["file_date"] = pd.to_datetime(df["file_date"], format="%m/%d/%Y", errors="coerce")
+    df = df.dropna(subset=["file_date"])
+    if df.empty:
+        return df
+
+    # Same one-business-day shift as the prices -- the morning file's volumes
+    # describe the previous business day too, so the week-to-date must be keyed
+    # on the TRADING day or it lands a day late and the Monday reset moves.
+    df["trade_date"] = df["file_date"]
+    morning = df["cut"] == "morning"
+    df.loc[morning, "trade_date"] = (
+        df.loc[morning, "file_date"] - pd.tseries.offsets.BDay(1))
+    return df.sort_values(["trade_date", "region", "cut"]).reset_index(drop=True)
+
+
+def weekly_to_date(vol: pd.DataFrame, trade_date) -> dict:
+    """
+    Week-to-date head per region for one trading day, plus the 5-Area sum.
+
+    Prefers the final (morning) figure and falls back to the 1:30 pm cut, the
+    same precedence the price tiles use, so a region reports as far through the
+    day as USDA has taken it. Nulls count as zero -- see fetch_daily_volume.
+    """
+    if vol.empty:
+        return {}
+    day = vol[(vol["trade_date"] == trade_date) & (vol["period"] == "wtd")]
+    if day.empty:
+        return {}
+    out = {}
+    for region in DAILY_REGIONS:
+        reg = day[day["region"] == region]
+        row = None
+        for cut in ("morning", "afternoon"):
+            hit = reg[reg["cut"] == cut]
+            if not hit.empty:
+                row = hit.iloc[0]
+                break
+        if row is None:
+            continue
+        out[region] = {
+            "head": 0.0 if pd.isna(row["head"]) else float(row["head"]),
+            "week_ago": (None if pd.isna(row["head_week_ago"])
+                         else float(row["head_week_ago"])),
+            "cut": row["cut"],
+        }
+    if not out:
+        return {}
+    out["_total"] = {
+        "head": sum(v["head"] for v in out.values()),
+        "week_ago": (sum(v["week_ago"] for v in out.values()
+                         if v["week_ago"] is not None)
+                     if any(v["week_ago"] is not None for v in out.values()) else None),
+        "cut": None,
+    }
+    return out
 
 
 def daily_combined(df: pd.DataFrame) -> pd.DataFrame:
@@ -979,10 +1125,12 @@ with tab_daily:
             _stamps = stamps_for(_probe, _daily_slugs)
             daily_df = fetch_daily_cash(_start_d.strftime("%m/%d/%Y"),
                                         _end_d.strftime("%m/%d/%Y"), _stamps)
+            daily_vol = fetch_daily_volume(_start_d.strftime("%m/%d/%Y"),
+                                           _end_d.strftime("%m/%d/%Y"), _stamps)
             daily_err = ""
         except Exception as e:
             _stamps = PROBE_FAILED
-            daily_df, daily_err = pd.DataFrame(), str(e)
+            daily_df, daily_vol, daily_err = pd.DataFrame(), pd.DataFrame(), str(e)
 
     # Show the publication stamp rather than a "last refreshed" clock. Our
     # refresh time says nothing useful -- USDA's does, and it is the number that
@@ -1104,6 +1252,62 @@ with tab_daily:
             grid.append(entry)
         st.dataframe(pd.DataFrame(grid), width="stretch", hide_index=True)
 
+        # ── Week to date ─────────────────────────────────────────────────────
+        wtd = weekly_to_date(daily_vol, last_trade)
+        if wtd:
+            st.markdown(
+                f'<div class="sec-header" style="border-left-color:{CONF_COLOR};">'
+                f'Negotiated cash volume, week to date &mdash; through '
+                f'{last_trade.strftime("%A, %b %d")}</div>',
+                unsafe_allow_html=True)
+
+            # The 5-Area total leads as a line rather than a fifth tile. Five
+            # tiles across is one too many: at a narrow window each is about
+            # 80px, which is where the region labels start breaking mid-word.
+            # Four also keeps this row the same shape as the price row above.
+            _tot = wtd.get("_total")
+            if _tot is not None:
+                _cmp = ""
+                if _tot["week_ago"] is not None:
+                    _d = _tot["head"] - _tot["week_ago"]
+                    _arrow = "▲" if _d > 0 else ("▼" if _d < 0 else "")
+                    _col = POS if _d > 0 else (NEG if _d < 0 else MUTED)
+                    _cmp = (f' <span style="color:{_col};font-weight:600;">{_arrow} '
+                            f'{abs(_d):,.0f} hd</span> against {_tot["week_ago"]:,.0f} hd '
+                            f'at the same point last week')
+                st.markdown(
+                    f'<div style="font-size:0.95rem;color:{JPSI_DARK};margin:-4px 0 12px;">'
+                    f'<b>5-Area total {_tot["head"]:,.0f} head</b>{_cmp}.</div>',
+                    unsafe_allow_html=True)
+
+            cols = st.columns(len(DAILY_REGIONS))
+            for col, region in zip(cols, DAILY_REGIONS):
+                entry = wtd.get(region)
+                with col:
+                    if entry is None:
+                        st.markdown(
+                            tile(region, "—",
+                                 '<div class="tile-delta-neu">not published</div>',
+                                 "tile-neu"),
+                            unsafe_allow_html=True)
+                    else:
+                        st.markdown(
+                            tile(region, fmt_hd(entry["head"]),
+                                 hd_delta_html(entry["head"], entry["week_ago"]),
+                                 "tile-d14"),
+                            unsafe_allow_html=True)
+
+            st.markdown(
+                '<div class="note" style="margin-top:6px;">Cumulative negotiated cash head '
+                'from Monday through the trading day above, against the running total at the '
+                'same point last week &mdash; USDA&rsquo;s own week-to-date line, not a sum computed '
+                'here. <b>This counts more cattle than the prices above.</b> The averages are '
+                'Steer and Heifer on Live FOB and Dressed Delivered only; this is every class '
+                'and all four selling bases, so it is the size of the week&rsquo;s trade rather than '
+                'the head behind those quotes. The 5-Area figure is the four regions added up, '
+                'which reproduces USDA&rsquo;s own 5-Area total exactly.</div>',
+                unsafe_allow_html=True)
+
         # ── Daily trend ──────────────────────────────────────────────────────
         st.markdown(
             '<div class="sec-header">Daily Live FOB by region &mdash; final prints</div>',
@@ -1177,12 +1381,13 @@ with tab_daily:
         'afternoon file (LM_CT133) last published 27 Jun 2023 and the summary (LM_CT134) 5 Jul 2024, '
         'and the API has returned nothing for either since. Colorado is still inside the 5-Area '
         'weekly average on the Weekly tab.<br><br>'
+        '<b>Week to date</b> is USDA&rsquo;s own cumulative negotiated cash head from Monday, read from each report&rsquo;s Summary section. It counts every class and all four selling bases, so it is a wider count than the Steer/Heifer Live-FOB-and-Dressed averages above and will not tie to them. The 5-Area figure is the four regions summed, which reproduces USDA&rsquo;s own 5-Area week-to-date exactly.<br><br>'
         '<b>&ldquo;Undefined&rdquo;</b> is USDA\'s own state when a region has too little confirmed '
         'trade to publish a market test &mdash; a real answer, not a failed fetch. Kansas and '
         'TX/OK/NM are routinely undefined early in the week.<br><br>'
         'Negotiated cash only, Steer and Heifer combined head-count-weighted, &ldquo;Total all '
         'grades&rdquo;. Sources: <b>LM_CT117/118</b> (TX/OK/NM), <b>LM_CT120/121</b> (Kansas), '
-        '<b>LM_CT123/124</b> (Nebraska), <b>LM_CT136/137</b> (Iowa/Minnesota). Cached until USDA republishes, checked every 5 minutes.'
+        '<b>LM_CT123/124</b> (Nebraska), <b>LM_CT136/137</b> (Iowa/Minnesota) — prices from each report&rsquo;s Detail section, week-to-date head from its Summary. Cached until USDA republishes, checked every 5 minutes.'
         '</div>',
         unsafe_allow_html=True)
 
