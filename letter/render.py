@@ -417,8 +417,12 @@ table.cof td:first-child { font-weight: 600; }
 .sig { margin-top: 4px; }
 .sig.own-page { page-break-before: always; }
 .sig div { margin: 0; }
-.disclaimer {
-  margin-top: 26px; font-size: 8pt; line-height: 1.35; color: #222; text-align: justify;
+/* .sig .disclaimer, not .disclaimer: ".sig div" above is the more specific
+   selector, so a bare .disclaimer rule loses to it and the margin-top is
+   silently dropped -- which is why the risk text sat hard against the cell
+   number with no gap at all. */
+.sig .disclaimer {
+  margin-top: 30px; font-size: 8pt; line-height: 1.35; color: #222; text-align: justify;
 }
 """
 
