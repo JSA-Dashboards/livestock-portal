@@ -150,7 +150,14 @@ st.markdown(f"""
   .tile-d30   {{ border-top-color:{D30_COLOR}; }}
   .tile-neu   {{ border-top-color:{MUTED}; }}
   .tile-label {{ color:{MUTED}; font-size:0.66rem; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:6px; }}
-  .tile-value {{ color:{JPSI_DARK}; font-size:1.55rem; font-weight:700; line-height:1.1; }}
+  /* Tile values must never break mid-token. Streamlit's default overflow-wrap
+     splits them once four tiles share a narrow row -- "Undefined" rendered as
+     "Undefin/ed" and "$222.00" as "$222./00". nowrap stops the break and the
+     clamp shrinks the text to fit rather than letting it overflow the tile.
+     At desktop width the clamp resolves to 1.55rem, so nothing changes there
+     and the weekly tiles, which use the same class, are untouched in practice. */
+  .tile-value {{ color:{JPSI_DARK}; font-size:clamp(1rem, 2vw, 1.55rem);
+                 font-weight:700; line-height:1.1; white-space:nowrap; }}
   .tile-delta-pos {{ color:{POS}; font-size:0.8rem; font-weight:600; margin-top:4px; }}
   .tile-delta-neg {{ color:{NEG}; font-size:0.8rem; font-weight:600; margin-top:4px; }}
   .tile-delta-neu {{ color:{MUTED}; font-size:0.8rem; font-weight:600; margin-top:4px; }}
