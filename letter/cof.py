@@ -18,9 +18,14 @@ THE ROUNDING DIFFERENCE, which is deliberate and worth knowing before you send.
 cof_recap computes On-Feed and the Year-Ago basis from USDA's head counts:
 11,163/11,080 = 100.7 and 11,080/11,198 = 98.9. The old Excel sheet the letter
 was built from read 100.8 and 99. Placed and Marketed agree to the decimal, so
-only those two cells ever differed. CLAUDE.md records the computed figure as the
-one to show, confirmed 2026-09-22 -- so this module prints 100.7 / 98.9 and the
-build warns that the number differs from what went out last month.
+only those two cells ever differed.
+
+SETTLED TWICE. CLAUDE.md records the computed figure as the one to show
+(2026-09-22), and Ross reaffirmed it on 2026-09-23 after seeing both versions
+side by side in a rendered letter. So this module prints 100.7 / 98.9, the build
+warns each time that those two cells differ from what went out last month, and
+the letter agrees with the COF Recap tab rather than with the retired sheet.
+Do not "fix" this back.
 """
 from __future__ import annotations
 
@@ -82,9 +87,15 @@ def fetch(issue: date, guesses: dict = None) -> dict:
                 "reason": f"latest release {release.isoformat()} is not in this week",
                 "release_date": release.isoformat()}
 
+    # The letter spells the month out -- "September COF Report". cof_recap's own
+    # title abbreviates it ("Sep COF Report") for the dashboard's narrower page,
+    # so the name is rebuilt here rather than reused.
+    month_name = recap_mod.MONTH_NAMES[month - 1]
+
     return {
         "include": True,
-        "title": recap.get("title"),
+        "title": f"{month_name} COF Report",
+        "short_title": recap.get("title"),
         "release_date": release.isoformat(),
         "placement_month": recap.get("placement_month"),
         "actual": recap.get("actual", {}),

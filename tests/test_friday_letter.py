@@ -314,3 +314,27 @@ def test_settle_log_files_prices_under_their_own_settle_date(tmp_path):
     ctx["live_cattle"][0]["settle"] = 220.5
     settle_log.record(ctx, p)
     assert settle_log.settles_on(date(2026, 9, 23), p) == {"LEV6": 220.5}
+
+
+def test_cof_block_punctuation_matches_the_sent_letter():
+    """
+    The 9/18/26 letter reads "September COF Report", with a trailing hyphen on
+    each row label and colons on the first two column heads but not Year-Ago.
+    cof_recap's own title abbreviates the month for the dashboard's narrower
+    page, so the letter rebuilds it.
+    """
+    html = render.cof_block({
+        "include": True, "title": "September COF Report",
+        "actual": {"on_feed": 100.7, "placed": 90.8, "marketed": 96.7},
+        "year_ago": {"on_feed": 98.9, "placed": 90.1, "marketed": 86.4},
+        "guesses": {"on_feed": 101.8, "placed": 96.8, "marketed": 96.1},
+    })
+    assert "September COF Report" in html and "Sep COF Report" not in html
+    for label in ("On-Feed-", "Placed-", "Marketed-"):
+        assert f"<td>{label}</td>" in html
+    assert "<th>Actual:</th>" in html and "<th>Guesses:</th>" in html
+    assert "<th>Year-Ago</th>" in html
+    # Placed and Marketed reproduce the letter exactly; only On-Feed and the
+    # Year-Ago basis differ, and that difference is the documented rounding one.
+    for v in ("90.8", "96.8", "90.1", "96.7", "96.1", "86.4", "101.8"):
+        assert v in html

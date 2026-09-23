@@ -327,14 +327,17 @@ def cof_block(cof: dict) -> str:
     def cell(v):
         return "&mdash;" if v is None else f"{float(v):.1f}"
 
+    # Labels and headers punctuated as the letter punctuates them: a trailing
+    # hyphen on each row label, colons on the first two column heads but not on
+    # Year-Ago. Copied from the 9/18/26 letter rather than tidied.
     rows = "".join(
-        f"<tr><td>{label}</td><td>{cell(actual.get(key))}</td>"
+        f"<tr><td>{label}-</td><td>{cell(actual.get(key))}</td>"
         f"<td>{cell(guesses.get(key))}</td><td>{cell(year_ago.get(key))}</td></tr>"
         for key, label in (("on_feed", "On-Feed"), ("placed", "Placed"), ("marketed", "Marketed"))
     )
     return (
         f"<h2>{_esc(cof.get('title') or 'COF Report')}</h2>"
-        "<table class='cof'><thead><tr><th></th><th>Actual</th><th>Guesses</th>"
+        "<table class='cof'><thead><tr><th></th><th>Actual:</th><th>Guesses:</th>"
         "<th>Year-Ago</th></tr></thead><tbody>" + rows + "</tbody></table>"
     )
 
