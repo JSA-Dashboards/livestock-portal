@@ -18,6 +18,8 @@ from pathlib import Path
 
 import streamlit as st
 
+import portal_auth
+
 HERE = Path(__file__).parent
 
 
@@ -145,13 +147,14 @@ div[class*="st-key-tile_"] a[data-testid="stPageLink-NavLink"]:hover p {
 
 def tools_visible() -> bool:
     """
-    True once ?tools=1 has been seen in this session.
+    Admin sees the tools; clients do not.
 
-    Sticky on purpose: Streamlit drops query parameters as you navigate between
-    pages, so without remembering it the tile would vanish the moment you
-    clicked it. Cleared when the browser session ends.
+    ONE QUESTION, ASKED IN ONE PLACE -- portal_auth.is_admin(). ?tools=1 is kept
+    as a way in for a session that has not signed in yet, so a bookmark still
+    works, but signing in is the real route and the only one that opens the page
+    itself.
     """
-    if st.session_state.get(TOOLS_SESSION_KEY):
+    if portal_auth.is_admin() or st.session_state.get(TOOLS_SESSION_KEY):
         return True
     try:
         asked = st.query_params.get(TOOLS_PARAM)
@@ -207,6 +210,7 @@ def render_home():
     # eleven and 4/4/4 at twelve, so it does not need revisiting each time.
     # Five would divide ten evenly but puts the tiles back near the ~170px
     # width that made "CME Feeder Cattle Index" spill past its own edge.
+    _render_grid = True
     TILES_PER_ROW = 4
     for start in range(0, len(DASHBOARDS), TILES_PER_ROW):
         cols = st.columns(TILES_PER_ROW)
@@ -216,6 +220,11 @@ def render_home():
                     st.page_link(d["page"], label=d["title"])
                     st.markdown(f"<div class='jsa-tile-desc'>{d['desc']}</div>",
                                 unsafe_allow_html=True)
+
+    # Discreet, and deliberately uninformative: a client who sees "Staff
+    # sign-in" learns that staff exist, not that a letter tool does.
+    st.write("")
+    portal_auth.admin_sign_in()
 
 
 home_page = st.Page(render_home, title="Home", url_path="home", default=True)

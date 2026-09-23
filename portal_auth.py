@@ -40,6 +40,96 @@ import streamlit as st
 
 DEFAULT_SECRET = "PORTAL_PASSPHRASE"
 
+# -- Admin vs client ----------------------------------------------------------
+#
+# ONE QUESTION, ASKED IN ONE PLACE. "Is this the admin?" is now is_admin(), so
+# every page asks it the same way and the answer can change without hunting
+# through the portal for URL-parameter checks.
+#
+# TODAY it is a shared passphrase, which is the weaker backing and worth naming:
+# one secret everyone with it can forward, no per-person revocation, no record
+# of who did what. It is proportionate while "admin" means the letter tool and
+# nothing else.
+#
+# THE UPGRADE IS THIS FUNCTION AND NOTHING ELSE. JSA runs on Microsoft 365, so
+# st.login() against Entra gives real identity -- clients keep browsing
+# anonymously and admin becomes "signed in as Ross". When that is wanted,
+# is_admin() checks st.user instead and no caller changes.
+#
+# ADMIN_PASSPHRASE is the name; REPORTS_PASSPHRASE is still honoured so an
+# already-configured deployment does not break on the rename.
+ADMIN_SECRETS = ("ADMIN_PASSPHRASE", "REPORTS_PASSPHRASE")
+_ADMIN_KEY = "_portal_is_admin"
+
+
+def admin_passphrase() -> str:
+    for name in ADMIN_SECRETS:
+        value = configured_passphrase(name)
+        if value:
+            return value
+    return ""
+
+
+def is_admin() -> bool:
+    """The one question. Backed by a passphrase today, by identity later."""
+    return bool(st.session_state.get(_ADMIN_KEY))
+
+
+def admin_sign_in(label: str = "Staff sign-in") -> None:
+    """
+    A discreet sign-in, for the foot of the home page.
+
+    Says nothing about what it unlocks: a client seeing "Staff sign-in" learns
+    that staff exist, not that a letter tool does.
+    """
+    if is_admin():
+        return
+    secret = admin_passphrase()
+    if not secret:
+        return
+    with st.expander(label, expanded=False):
+        with st.form("admin_gate", clear_on_submit=True):
+            entered = st.text_input("Passphrase", type="password",
+                                    label_visibility="collapsed", placeholder="Passphrase")
+            if st.form_submit_button("Sign in") and entered:
+                if hmac.compare_digest(entered.strip(), secret):
+                    st.session_state[_ADMIN_KEY] = True
+                    st.rerun()
+                else:
+                    st.error("Incorrect passphrase.")
+
+
+def require_admin(title: str = "Restricted") -> None:
+    """
+    Block a page unless this session is the admin.
+
+    Fails closed with no passphrase configured, exactly as require_passphrase
+    does -- a control that disables itself when misconfigured is not one.
+    """
+    if is_admin():
+        return
+    secret = admin_passphrase()
+    if not secret:
+        _shell(f"{title} is not configured",
+               f"No <code>{ADMIN_SECRETS[0]}</code> is set for this deployment, so "
+               "access cannot be verified and this page is closed.<br><br>"
+               "Add it to the app&rsquo;s secrets to restore it.")
+        st.stop()
+
+    _shell(title, "This section is restricted. Enter the passphrase to continue.")
+    _, mid, _ = st.columns([1, 2, 1])
+    with mid:
+        with st.form("admin_required", clear_on_submit=False):
+            entered = st.text_input("Passphrase", type="password",
+                                    label_visibility="collapsed", placeholder="Passphrase")
+            if st.form_submit_button("Enter", use_container_width=True):
+                if hmac.compare_digest(entered.strip(), secret):
+                    st.session_state[_ADMIN_KEY] = True
+                    st.rerun()
+                else:
+                    st.error("Incorrect passphrase.")
+    st.stop()
+
 
 def configured_passphrase(secret_name: str = DEFAULT_SECRET) -> str:
     """

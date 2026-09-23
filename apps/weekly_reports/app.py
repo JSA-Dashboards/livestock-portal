@@ -31,11 +31,9 @@ if str(REPO) not in sys.path:
 
 import portal_auth  # noqa: E402
 
-portal_auth.require_passphrase(
-    "REPORTS_PASSPHRASE",
-    title="JSA Daily Cattle Reports",
-    subtitle="This section is restricted. Enter the passphrase to continue.",
-)
+# Same question the portal asks everywhere else. Signing in on the home page
+# opens this too; arriving here directly offers the same box.
+portal_auth.require_admin("JSA Daily Cattle Reports")
 
 # -- Secrets -> environment ---------------------------------------------------
 # The letter package is a plain library and reads os.environ; st.secrets does
