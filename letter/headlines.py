@@ -195,8 +195,23 @@ def fetch_packer_news(limit: int = 10, max_age_h: int = MAX_AGE_HOURS) -> list:
             out.append({"source": f"Google News ({label})", "error": f"{type(e).__name__}"})
             continue
 
+        # A 200 THAT IS NOT A FEED IS THE FAILURE THAT MATTERS. Google answers a
+        # datacenter IP with a consent interstitial or a sorry page -- status
+        # 200, no <item> in it -- and the panel would then show one fewer source
+        # and say nothing, which is exactly the quiet failure this module's
+        # docstring warns about and exactly what it did on the deployed app.
+        #
+        # Zero PARSED items is different and not an error: the queries are
+        # narrow, and a morning with no packer news is a real morning.
+        blocks = re.findall(r"<item>(.*?)</item>", body, re.S | re.I)
+        if not blocks:
+            out.append({"source": f"Google News ({label})",
+                        "error": "answered 200 but sent no feed "
+                                 "-- blocked, rate-limited or asking for consent"})
+            continue
+
         kept = 0
-        for block in re.findall(r"<item>(.*?)</item>", body, re.S | re.I)[:60]:
+        for block in blocks[:60]:
             title = _clean((re.search(r"<title[^>]*>(.*?)</title>", block, re.S) or [None, ""])[1])
             pub = _clean((re.search(r"<source[^>]*>(.*?)</source>", block, re.S) or [None, ""])[1])
             # Only strip the suffix when it really is the publisher's name --

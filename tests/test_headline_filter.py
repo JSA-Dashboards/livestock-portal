@@ -99,6 +99,37 @@ def test_dedupe_drops_untitled_rows():
     assert headlines._dedupe([{"title": ""}, {"title": "   "}, {}]) == []
 
 
+def test_a_200_that_is_not_a_feed_is_reported(monkeypatch):
+    """
+    The failure that actually happened. Google answers a datacenter IP with a
+    consent page -- HTTP 200, no <item> anywhere -- and before this the panel
+    lost a whole source without one word on screen, which is indistinguishable
+    from a quiet news day.
+    """
+    class _Resp:
+        status_code = 200
+        text = "<html><body>Before you continue to Google News</body></html>"
+
+    monkeypatch.setattr(headlines.sources, "_session",
+                        lambda *a, **k: type("S", (), {"get": lambda *a, **k: _Resp()})())
+    rows = headlines.fetch_packer_news()
+    assert rows, "a consent page must not come back as silence"
+    assert all(r.get("error") for r in rows)
+    assert "no feed" in rows[0]["error"]
+
+
+def test_an_empty_but_real_feed_is_not_an_error(monkeypatch):
+    """A feed that parses and simply has nothing relevant is a quiet morning."""
+    class _Resp:
+        status_code = 200
+        text = ("<rss><channel><item><title>Corn basis firms - AgWeb</title>"
+                "<source url='x'>AgWeb</source></item></channel></rss>")
+
+    monkeypatch.setattr(headlines.sources, "_session",
+                        lambda *a, **k: type("S", (), {"get": lambda *a, **k: _Resp()})())
+    assert headlines.fetch_packer_news() == []
+
+
 def test_packer_queries_are_all_qualified():
     """
     Every query names a packer or a plant AND a cattle word. "Tyson" alone is a
