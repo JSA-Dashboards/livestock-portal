@@ -7,6 +7,12 @@ Livestock Inventory, Cash Cattle Trade, Fed Cattle Crush, Backgrounding Crush) i
 Makes the single set_page_config call allowed per multi-page run, then
 hands off to st.navigation (top nav, no sidebar, no login gate — matches
 how each of these ran standalone).
+
+A shared-passphrase gate is written and ready in portal_auth.py but is NOT
+wired in — deferred 2026-09-22. To enable it, set PORTAL_PASSPHRASE in the
+app's secrets FIRST, then call portal_auth.require_passphrase() immediately
+after set_page_config below. It fails closed, so wiring it without the secret
+in place takes all twelve dashboards down.
 """
 from pathlib import Path
 
@@ -50,6 +56,18 @@ DASHBOARDS = [
      "desc": "USDA NASS livestock, poultry, aquaculture inventory & dairy production."},
     {"title": "Cash Cattle Trade", "page": "apps/cash_trade/app.py", "url_path": "cash-trade",
      "desc": "Combined Steer/Heifer FOB & Dressed prices, plus national negotiated cash trade volume."},
+]
+
+# Kept OUT of DASHBOARDS on purpose, for two reasons. It is an authoring tool
+# rather than a dashboard, and a thirteenth tile would give the grid 4/4/4/1 --
+# the stranded last-row tile the TILES_PER_ROW comment below exists to avoid.
+# It gets its own section above the grid instead.
+TOOLS = [
+    {"title": "PM Weekly Cattle Reports", "page": "apps/weekly_reports/app.py",
+     # url_path deliberately unchanged by the rename, the way Cattle Weights
+     # kept "beef-weight" -- any bookmark already handed out keeps working.
+     "url_path": "weekly-cattle-reports",
+     "desc": "Build the daily client letter from live data. Friday is the week-in-review format. Passphrase required."},
 ]
 
 _TILE_CSS = """
@@ -126,6 +144,21 @@ def render_home():
         )
 
     st.write("")
+
+    # Tools sit above the dashboards, in their own row, reusing the same tile
+    # styling. Asking for TILES_PER_ROW columns and filling only the first keeps
+    # this tile the same width as every tile below it -- a lone st.columns(1)
+    # tile would stretch the full page and stop matching.
+    if TOOLS:
+        tool_cols = st.columns(4)
+        for offset, t in enumerate(TOOLS):
+            with tool_cols[offset]:
+                with st.container(key=f"tile_tool_{offset}"):
+                    st.page_link(t["page"], label=t["title"])
+                    st.markdown(f"<div class='jsa-tile-desc'>{t['desc']}</div>",
+                                unsafe_allow_html=True)
+        st.write("")
+
     # Four per row, not one column per dashboard. st.columns(len(DASHBOARDS))
     # gave eight ~170px columns, too narrow for an 18px serif title -- which is
     # why "CME Feeder Cattle Index" was spilling past its own tile edge. Always
@@ -155,7 +188,7 @@ home_page = st.Page(render_home, title="Home", url_path="home", default=True)
 pg = st.navigation(
     [home_page] + [
         st.Page(d["page"], title=d["title"], url_path=d["url_path"])
-        for d in DASHBOARDS
+        for d in DASHBOARDS + TOOLS
     ],
     position="top",
 )

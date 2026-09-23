@@ -15,3 +15,13 @@ Thumbs.db
 # ignored — they ARE that app's data, not a cache.
 .claude/launch.json
 .claude/settings.local.json
+
+# letter/build.py output: the fetched data cache, your per-issue commentary
+# draft, and the rendered HTML/PDF. Generated artifacts bound for clients, not
+# repo content -- and the drafts would otherwise pile up two per week.
+out/
+
+# letter/settle_log.py's record of the front-month settles. Market data, not
+# source -- but do NOT move it into out/: that directory gets cleared, and
+# losing this file silently takes the week-over-week change with it.
+letter/data/
