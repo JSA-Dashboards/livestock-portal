@@ -115,7 +115,7 @@ def gather(issue: date, errors: list, kind: str = "tuesday", cof_guesses: dict =
     ctx: dict = {
         "issue_date": issue,
         "kind": kind,
-        "change_basis": config.CHANGE_BASIS,
+        "change_basis": config.change_basis_for(kind),
         "live_cattle": [],
         "feeder_cattle": [],
         "tech_lc": None,
@@ -636,6 +636,12 @@ def main(argv=None) -> int:
     existed = cpath.exists()
     commentary.write_template(cpath, hints(ctx, kind), kind)
     ctx["commentary"] = commentary.read(cpath, kind)
+
+    # FROM THE FORMAT, NOT THE CACHE. data_<slug>_<date>.json stores whatever
+    # basis was in force when it was fetched, so a file written before
+    # 2026-09-24 says "week" for every letter. A --no-fetch re-render would
+    # quote week-over-week on a Monday and print [[?]] for it.
+    ctx["change_basis"] = config.change_basis_for(kind)
 
     # AFTER the commentary is read, because the commentary is the best evidence
     # of what the morning is about -- see chart.pick. Re-picked on a --no-fetch

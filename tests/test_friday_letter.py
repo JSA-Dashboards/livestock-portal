@@ -994,3 +994,66 @@ def test_empty_comments_print_no_heading():
     ctx = _cash_ctx("recap")
     ctx["commentary"] = {"market_action": ["x"], "comments": []}
     assert "Comments" not in render.build_html(ctx)
+
+
+# -- Which change each letter quotes -------------------------------------------
+
+@pytest.mark.parametrize("kind,expected", [
+    ("am", "day"), ("tuesday", "day"), ("recap", "day"), ("friday", "week"),
+])
+def test_only_friday_quotes_the_week(kind, expected):
+    """
+    Narrowed 2026-09-24. The week-in-review is the letter that reports a week;
+    Monday through Thursday quote the prior session like the morning brief.
+
+    DELIBERATE DEPARTURE, NOT A BUG FIX. config.py records that the 9/22 letter
+    -- a MONDAY -- quoted week-over-week on all six contracts, exact to the
+    thousandth. Ross asked for this twice and explicitly.
+    """
+    from letter import config
+    assert config.change_basis_for(kind) == expected
+
+
+def test_an_unknown_format_cannot_render_a_gap():
+    """
+    change_week needs the prior FRIDAY'S settle and prints [[?]] without it;
+    change_day needs only the previous bar. The fallback is the safe one.
+    """
+    from letter import config
+    assert config.change_basis_for("something new") == "day"
+
+
+def test_monday_to_thursday_print_a_real_change_without_a_week_base():
+    """
+    The nuisance this retires. Massive has had no prior-Friday bar since
+    2026-09-14, so these letters printed [[?]] wherever the hand-typed
+    substitute was missing -- which is every reboot of the deployed app.
+    """
+    rows = [{"month": "Oct", "settle": 219.075, "change_day": -1.85,
+             "change_week": None, "week_base_missing": True}]
+    for kind in ("tuesday", "recap"):
+        from letter import config
+        html = render.futures_block("Live Cattle", rows, config.change_basis_for(kind))
+        assert "-1.85" in html
+        assert render.MISSING not in html
+
+
+def test_friday_still_depends_on_the_week_base():
+    """Correctly -- it is the letter reporting a week. Marked, never guessed."""
+    from letter import config
+    rows = [{"month": "Oct", "settle": 219.075, "change_day": -1.85,
+             "change_week": None, "week_base_missing": True}]
+    html = render.futures_block("Live Cattle", rows, config.change_basis_for("friday"))
+    assert render.MISSING in html
+
+
+def test_the_basis_comes_from_the_format_not_the_cache():
+    """
+    data_<slug>_<date>.json stores the basis in force when it was fetched, so
+    every file written before 2026-09-24 says "week". A --no-fetch re-render
+    would quote week-over-week on a Monday and print [[?]] for it.
+    """
+    build_src = (REPO_ROOT / "letter" / "build.py").read_text(encoding="utf-8")
+    page_src = (REPO_ROOT / "apps" / "weekly_reports" / "app.py").read_text(encoding="utf-8")
+    assert 'ctx["change_basis"] = config.change_basis_for(kind)' in build_src
+    assert 'ctx_for_render["change_basis"] = config.change_basis_for(kind)' in page_src

@@ -312,13 +312,37 @@ CHART_POOL = [
 #   Dec LC  219.450 - 216.625 = +2.825    Oct FC  328.025 - 323.500 = +4.525
 #   Feb LC  220.550 - 217.350 = +3.20     Nov FC  323.200 - 318.000 = +5.20
 #
-# So "week", not "day". build.py still writes BOTH into the data cache, which is
-# what made the check possible and is worth keeping.
+# So "week", not "day" -- FOR THAT LETTER. build.py still writes BOTH into the
+# data cache, which is what made the check possible and is worth keeping.
 #
-# THE MORNING BRIEF IS DIFFERENT and does not read this: it quotes the prior
-# session's move, because CME livestock does not open until 08:30 Central and a
-# week-to-date figure is not what a reader wants before the bell.
-CHANGE_BASIS = "week"      # "week" | "day"
+# NARROWED TO FRIDAY ON 2026-09-24, at Ross's direction: the week-in-review is
+# the letter that reports a week, and Monday through Thursday now quote the
+# prior session like the morning brief does.
+#
+# NOTE WHAT THAT CHANGES. The 9/22 letter checked above was a MONDAY, and it
+# quoted week-over-week -- so this is a deliberate departure from what clients
+# last received on that day, not a correction of a bug. Ross asked for it twice
+# and explicitly.
+#
+# It also retires a recurring nuisance. change_week needs the prior FRIDAY'S
+# settle, which Massive has not had since 2026-09-14, so Monday-Thursday were
+# printing [[?]] wherever the hand-typed substitute was unavailable -- which is
+# every reboot of the deployed app. change_day needs only the previous bar and
+# is always there. Friday still depends on the week base, correctly.
+CHANGE_BASIS_BY_KIND = {
+    "am": "day",
+    "tuesday": "day",     # Monday's full letter
+    "recap": "day",       # Tue/Wed/Thu
+    "friday": "week",     # the week-in-review, and the only one that reports a week
+}
+
+# Kept as the fallback for an unknown format. "week" was the old global value;
+# "day" is the safer default now -- it cannot render [[?]].
+CHANGE_BASIS = "day"      # "week" | "day"
+
+
+def change_basis_for(kind: str = "tuesday") -> str:
+    return CHANGE_BASIS_BY_KIND.get(str(kind).strip().lower(), CHANGE_BASIS)
 
 # Moving averages the Technicals section quotes.
 MA_WINDOWS = (9, 20)

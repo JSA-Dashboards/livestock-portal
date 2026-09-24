@@ -429,6 +429,10 @@ ctx_for_render = dict(ctx)
 ctx_for_render["issue_date"] = issue
 ctx_for_render["kind"] = kind
 ctx_for_render["session"] = session
+# Follows the FORMAT, so switching the Letter radio re-bases the change column
+# without a refetch -- and a cache written before 2026-09-24 cannot impose the
+# old week-over-week basis on a Monday letter.
+ctx_for_render["change_basis"] = config.change_basis_for(kind)
 ctx_for_render["commentary"] = sections
 
 # -- Chart of the day (morning brief only) ------------------------------------
