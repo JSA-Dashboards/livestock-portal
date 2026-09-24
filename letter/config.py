@@ -65,6 +65,20 @@ TITLE_BY_SESSION = {
 def title_for(session: str = DEFAULT_SESSION) -> str:
     return TITLE_BY_SESSION.get(str(session).strip().lower(), TITLE)
 
+# ── The page frame ───────────────────────────────────────────────────────────
+# A hairline rule around the letter, in the sage from the JSA monogram
+# (#5e7164, the same value the dashboards use). Set FRAME to "" to drop it.
+#
+# HAIRLINE AND SAGE, NOT BLACK AND BOLD. A heavy box around a business letter
+# reads as a certificate. At 0.75pt in the brand colour it reads as stationery,
+# which is the point -- it should be the last thing noticed, not the first.
+FRAME = "#5e7164"
+FRAME_WIDTH = "0.75pt"
+# How far the rule sits OUTSIDE the text block. The page margin is 0.9in top and
+# bottom, 0.85in left and right, so 0.38in puts the rule roughly half way
+# between the text and the paper edge on every side.
+FRAME_INSET = "0.38in"
+
 # ── Signature block (page 3 of the printed letter) ───────────────────────────
 SIGNATURE = {
     "name": "Ross Baldwin",

@@ -464,6 +464,12 @@ body {
    not participate in layout at all, which is why letterhead costs the
    one-page brief nothing. */
 html { background: #fff; }
+/* THE FRAME COSTS NO LAYOUT, same trick as the watermark. position:fixed keeps
+   it out of flow, so it cannot push the morning brief onto a second page, and
+   in print Chrome positions it against the PAGE box -- hence the NEGATIVE
+   offsets, which walk it out of the text area and into the margin. A frame
+   drawn with a border on <body> would be in flow and would repaginate. */
+.frame { position: fixed; z-index: -1; pointer-events: none; }
 .wm { position: fixed; left: 50%; top: 46%; transform: translate(-50%, -50%);
       width: 4.4in; opacity: 0.07; z-index: -1; pointer-events: none; }
 table.band { width: 100%; border-collapse: collapse; margin: 0 0 -10px; }
@@ -720,6 +726,11 @@ def build_html(ctx: dict) -> str:
     # writing. Both images are embedded; see _asset_uri.
     _logo, _mark = _asset_uri("logo-full.png"), _asset_uri("jsa-50-years.png")
     head = []
+    if getattr(config, "FRAME", ""):
+        _i = config.FRAME_INSET
+        head.append(
+            f'<div class="frame" style="top:-{_i};right:-{_i};bottom:-{_i};left:-{_i};'
+            f'border:{config.FRAME_WIDTH} solid {config.FRAME};"></div>')
     if _mark:
         head.append(f'<img class="wm" src="{_mark}" alt="">')
     head.append(
