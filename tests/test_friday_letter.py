@@ -329,19 +329,30 @@ def test_ams_string_payload_means_no_rows_not_a_crash():
 
 def test_the_three_pm_formats():
     """
-    Five weekdays, THREE evening formats as of 2026-09-24. Tuesday and Friday
-    are the two letters clients have always had and are deliberately unchanged;
-    Monday, Wednesday and Thursday get the lighter recap.
+    Five weekdays, three evening formats. The full letter opens the week on
+    MONDAY, the recap carries Tuesday through Thursday, and Friday is the
+    week-in-review.
 
-    An unknown day still falls to the full standard letter, not the recap --
-    if the day cannot be determined, send more rather than less.
+    THE ID "tuesday" NOW RUNS ONLY ON MONDAY. The ids are layout names with a
+    historical spelling, not days -- see config.FORMAT_FOR_DAY. This test is
+    where that is most likely to look like a typo, so: it is not one.
+
+    An unknown day falls to the full letter, not the recap -- if the day cannot
+    be determined, send more rather than less.
     """
     from letter import config
+    assert config.format_for("monday") == "tuesday"      # the FULL letter
     assert config.format_for("friday") == "friday"
-    assert config.format_for("tuesday") == "tuesday"
-    for d in ("monday", "wednesday", "thursday"):
+    for d in ("tuesday", "wednesday", "thursday"):
         assert config.format_for(d) == "recap", d
     assert config.format_for("nonsense") == "tuesday"
+
+
+def test_the_three_middle_days_are_alike():
+    """Ross's reason for the swap: Tue/Wed/Thu should be one letter, not two."""
+    from letter import config
+    kinds = {config.format_for(d) for d in ("tuesday", "wednesday", "thursday")}
+    assert len(kinds) == 1
 
 
 def test_the_recap_is_the_light_letter():

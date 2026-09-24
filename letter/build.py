@@ -524,7 +524,7 @@ def main(argv=None) -> int:
                     help="which weekday's letter (default: today, or Monday at a weekend). "
                          "Friday uses the week-in-review format; every other day uses "
                          "the standard one.")
-    ap.add_argument("--kind", choices=["tuesday", "friday"], default=None,
+    ap.add_argument("--kind", choices=["tuesday", "recap", "friday"], default=None,
                     help=argparse.SUPPRESS)   # kept so older commands still run
     ap.add_argument("--friday", action="store_true", help="shorthand for --day friday")
     ap.add_argument("--week-base", default="",

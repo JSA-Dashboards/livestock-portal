@@ -145,15 +145,21 @@ DISCLAIMER = (
 # The DAY is what you pick; the format is what it produces.
 DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 
-# THREE PM FORMATS AS OF 2026-09-24, not two. Tuesday and Friday are the two
-# letters clients have always had and are deliberately untouched; Monday,
-# Wednesday and Thursday now get "recap" -- the session in brief, without the
-# two technicals blocks and the Fundamental Rundown that make Tuesday the heavy
-# one. Chosen by Ross; the reasoning is that not every evening has a full
-# letter's worth in it.
+# THREE PM FORMATS. The full letter opens the week on MONDAY, the recap carries
+# Tuesday through Thursday, and Friday is the week-in-review. Moved here from
+# Monday/Tuesday on 2026-09-24 at Ross's request -- the long letter belongs at
+# the start of the week, and the three middle days are alike.
+#
+# THE FORMAT ID "tuesday" NOW RUNS ONLY ON MONDAY, which is as confusing as it
+# sounds. The ids are historical: they are what render.py, commentary.py, the
+# tests and the stored drafts all switch on, and renaming one touches thirty-odd
+# places for no behaviour change. They are internal -- draft files are named by
+# the DAY (commentary_pm_monday_<date>.md), so the mismatch never reaches a
+# filename or the page. Read the id as a LAYOUT NAME with an unfortunate
+# spelling: "tuesday" is the full letter, "recap" the short one.
 FORMAT_FOR_DAY = {
-    "monday": "recap",
-    "tuesday": "tuesday",
+    "monday": "tuesday",
+    "tuesday": "recap",
     "wednesday": "recap",
     "thursday": "recap",
     "friday": "friday",
