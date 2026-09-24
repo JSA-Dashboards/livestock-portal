@@ -17,6 +17,7 @@ from __future__ import annotations
 import html
 from datetime import date
 
+from . import chart as chart_mod
 from . import config
 
 MISSING = '<span class="missing">[[?]]</span>'
@@ -451,6 +452,13 @@ table.cof th, table.cof td { padding: 1px 16px 1px 0; text-align: left; }
 table.cof th { font-weight: 700; }
 table.cof td:first-child { font-weight: 600; }
 .signoff { margin: 18px 0 26px; }
+/* THE CHART COSTS NO VERTICAL SPACE, and that is the only reason it is allowed
+   on a one-page brief. Floated right before the sign-off, it drops into the
+   band beside the signature block -- measured empty at 1.89in tall by 4.97in
+   wide -- so the text flows up its left and the page does not grow. Make it
+   taller than that band and the letter runs to two pages; a test checks. */
+.dayplot-wrap { float: right; margin: 2px 0 6px 18px; }
+.dayplot { display: block; }
 /* One page is the product: a three-minute brief that spills its
    disclaimer onto a second sheet has stopped being one. Tightened for
    the morning only -- the evening letter keeps its roomier spacing. */
@@ -689,6 +697,9 @@ def build_html(ctx: dict) -> str:
     if kind == "am":
         body = list(head)                  # masthead, and the intro if there is one
         body.extend(am_blocks(ctx, c))
+        # BEFORE the sign-off in source order, which is what puts a float in the
+        # bottom-right corner: everything after it flows up its left side.
+        body.append(chart_mod.chart_block(ctx.get("chart")))
         body.append(f'<p class="signoff">{_esc(sign_off)}</p>')
         body.append(_signature_html(issue, own_page=False))
         return _page(title, stamp, body, body_class="am")

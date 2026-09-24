@@ -183,6 +183,12 @@ N_CONTRACTS = 3
 # week-to-date figure is not what a reader wants before the bell.
 CHANGE_BASIS = "week"      # "week" | "day"
 
+# ── Chart of the day (morning brief) ─────────────────────────────────────────
+# Sessions on the bottom-right chart. 60 is about a quarter -- long enough to
+# show the trend the letter is describing, short enough that 3.1 inches of width
+# is still one readable line rather than a smear.
+CHART_SESSIONS = 60
+
 # Moving averages the Technicals section quotes.
 MA_WINDOWS = (9, 20)
 

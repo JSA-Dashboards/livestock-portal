@@ -131,6 +131,7 @@ def gather(issue: date, errors: list, kind: str = "tuesday", cof_guesses: dict =
         "regional_cash": {},
         "cof": {},
         "outside": [],
+        "chart": {},
         "calendar": [],
         "regional_cash": {},
     }
@@ -147,6 +148,14 @@ def gather(issue: date, errors: list, kind: str = "tuesday", cof_guesses: dict =
         ctx["feeder_cattle"] = _try("feeder cattle futures", lambda: sources.fetch_futures(
             config.FEEDER_CATTLE_CODE, api_key, issue, config.N_CONTRACTS,
             completed_only=settled_only), errors) or []
+
+        # The chart of the day, morning brief only. Same series technicals
+        # already pulls, clipped the same way the AM settles are -- a chart
+        # ending on a half-finished bar would contradict the numbers beside it.
+        if kind == "am":
+            ctx["chart"] = _try("chart series", lambda: sources.fetch_front_history(
+                config.FEEDER_CATTLE_CODE, api_key, issue,
+                config.CHART_SESSIONS, completed_only=True), errors) or {}
 
         # Technicals run on the front contract of each -- the one the letter names.
         if ctx["live_cattle"]:

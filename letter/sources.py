@@ -793,6 +793,42 @@ def _prior_settle(api, ticker: str, api_key: str, as_of: date):
     return float(prior.iloc[-1]), when
 
 
+def fetch_front_history(product_code: str, api_key: str, as_of: date,
+                        sessions: int = 60, completed_only: bool = True) -> dict:
+    """
+    The front contract's last N settles, for the chart of the day.
+
+    Reuses the series technicals already pulls, so this is one more call against
+    a response the build is fetching anyway rather than a new source with a new
+    way to fail. completed_only by default because the morning brief quotes
+    settled sessions and a chart ending on a half-finished bar would contradict
+    the numbers printed beside it.
+
+    Returns {} rather than raising: a missing chart is a letter without a chart.
+    """
+    try:
+        api = _massive()
+        contracts = api.get_active_contract_tickers(product_code, api_key, as_of)[:1]
+        if not contracts:
+            return {}
+        ticker = contracts[0]["ticker"]
+        s = api.get_settlement_histories([ticker], api_key).get(ticker)
+        if s is None:
+            return {}
+        s = s.dropna()
+        s = s[s.index < as_of] if completed_only else s[s.index <= as_of]
+        s = s.tail(int(sessions))
+        if len(s) < 5:
+            return {}
+        return {"ticker": ticker,
+                "month": contract_month(ticker),
+                "dates": list(s.index),
+                "values": [float(v) for v in s.values],
+                "sessions": len(s)}
+    except Exception:
+        return {}
+
+
 def fetch_outside_markets(api_key: str, as_of: date) -> list:
     """
     Front-month price and overnight change for each outside market.
