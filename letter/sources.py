@@ -746,16 +746,56 @@ def front_contracts(product_code: str, api_key: str, as_of: date, n: int = 1) ->
     return (live or rows)[:n]
 
 
+# How many CALENDAR days back the prior session's settle may sit before the gap
+# is a hole rather than a weekend. Fri->Tue over a Monday holiday is 4; Massive's
+# 2026-09-14..09-18 outage was 7 and must never be quoted as one session's move.
+MAX_PRIOR_SETTLE_AGE_DAYS = 5
+
+
+def _prior_settle(api, ticker: str, api_key: str, as_of: date):
+    """
+    The last settle STRICTLY BEFORE as_of, with its date, from the history.
+
+    Strictly before, because the history's newest bar is today's own in-progress
+    session -- differencing against that gave corn -0.25 where the real overnight
+    move was -9.00.
+
+    Returns (settle, date) or (None, None) when the newest usable bar is too old
+    to be the previous session. A multi-session move quoted as an overnight one
+    is a wrong number that looks right, so the brief marks it [[?]] instead.
+    """
+    hist = api.get_settlement_histories([ticker], api_key).get(ticker)
+    if hist is None:
+        return None, None
+    prior = hist.dropna()
+    prior = prior[prior.index < as_of]
+    if prior.empty:
+        return None, None
+    when = prior.index[-1]
+    when = when.date() if hasattr(when, "date") else when
+    if (as_of - when).days > MAX_PRIOR_SETTLE_AGE_DAYS:
+        return None, None
+    return float(prior.iloc[-1]), when
+
+
 def fetch_outside_markets(api_key: str, as_of: date) -> list:
     """
     Front-month price and overnight change for each outside market.
 
-    THE CHANGE COMES FROM THE SNAPSHOT'S OWN session.previous_settlement, not
-    from differencing the settlement history. The history's newest bar is TODAY'S
-    own in-progress session, so subtracting it gave corn -0.25 where the real
-    overnight move was -9.00 against a 536.75 prior settle. Massive already
-    carries both the base and the change; computing it again only adds a way to
-    get it wrong, and it sidesteps the gaps that history has had.
+    THE BASE COMES FROM THE SETTLEMENT HISTORY, NOT THE SNAPSHOT. This used to
+    trust session.previous_settlement and session.change on the grounds that
+    Massive already carries both, and on 2026-09-24 that was wrong by a whole
+    session for crude: the CLX6 snapshot reported previous_settlement 90.52,
+    which is Tuesday 09-22, while Wednesday 09-23 settled 92.16. The brief
+    printed Nov Crude +3.26 against a real overnight move of +1.41, and nothing
+    anywhere said so. Corn and the S&P agreed with the history that same
+    morning, which is exactly why it went unnoticed -- one instrument out of
+    three, on a field the code had been told to trust.
+
+    The history is the same series the futures block already reads and it is
+    dated, so "the settle before today" is a fact rather than a label. The
+    snapshot's own figure is still recorded for comparison, because the two
+    disagreeing is worth being able to see after the fact.
     """
     api = _massive()
     out = []
@@ -771,14 +811,23 @@ def fetch_outside_markets(api_key: str, as_of: date) -> list:
                 price = (session.get("settlement_price")
                          or (snap.get("last_trade") or {}).get("price")
                          or session.get("close"))
-                prior = session.get("previous_settlement")
-                change = session.get("change")
-                if change is None and price is not None and prior:
-                    change = float(price) - float(prior)
+                prior, prior_date = _prior_settle(api, front, api_key, as_of)
+                snap_prior = session.get("previous_settlement")
+
+                # No dated base means no change. Falling back to the snapshot
+                # here would reinstate the bug on exactly the days the history
+                # is unreliable, which are the days it matters most.
+                change = (float(price) - prior) if (price is not None and prior) else None
+
                 row.update({
                     "ticker": front, "month": contract_month(front),
                     "price": round(float(price), 4) if price else None,
-                    "prior_settle": round(float(prior), 4) if prior else None,
+                    "prior_settle": round(prior, 4) if prior else None,
+                    "prior_settle_date": prior_date.isoformat() if prior_date else None,
+                    "snapshot_prior_settle": (round(float(snap_prior), 4)
+                                              if snap_prior else None),
+                    "snapshot_disagrees": bool(
+                        prior and snap_prior and abs(float(snap_prior) - prior) > 0.0001),
                     "change": round(float(change), 4) if change is not None else None,
                 })
         except Exception:

@@ -130,6 +130,31 @@ def test_an_empty_but_real_feed_is_not_an_error(monkeypatch):
     assert headlines.fetch_packer_news() == []
 
 
+def test_the_pick_list_never_writes_to_a_checkbox_key():
+    """
+    The Add button crashed the page on its first real use, 2026-09-24:
+    StreamlitWidgetAlreadyInstantiatedError, because it reset the checkboxes by
+    assigning st.session_state["head_<n>"] = False after those checkboxes had
+    already been built in the same run.
+
+    The fix puts a generation number in the key and bumps it, so the next run
+    asks for widgets that have never existed. Read as text -- importing the page
+    would execute a Streamlit script.
+    """
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent
+           / "apps" / "weekly_reports" / "app.py").read_text(encoding="utf-8")
+
+    assert 'st.session_state[f"head_' not in src, \
+        "assigning to a checkbox's own key is what raised the error"
+    assert "wcr_head_gen" in src, "the generation counter is how the ticks get cleared"
+
+    # The text area IS written to, and that is fine: the panel renders above the
+    # boxes precisely so wcr_<section> does not exist yet. Guard the ordering.
+    assert src.index("wcr_head_gen") < src.index('key=f"wcr_{key}"'), \
+        "the candidate panel must stay above the commentary text areas"
+
+
 def test_packer_queries_are_all_qualified():
     """
     Every query names a packer or a plant AND a cattle word. "Tyson" alone is a

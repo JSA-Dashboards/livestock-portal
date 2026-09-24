@@ -328,6 +328,19 @@ if _head_key:
         else:
             for err in found.get("errors", []):
                 st.caption(f"⚠ {err}")
+            # A GENERATION NUMBER IN THE CHECKBOX KEY, so clearing the ticks
+            # never writes to a widget that already exists. Assigning
+            # st.session_state["head_<n>"] = False after the loop is the obvious
+            # way to reset them and it raises StreamlitWidgetAlreadyInstantiated-
+            # Error every time -- the checkboxes were built moments earlier in
+            # this same run, and Streamlit refuses to have their state written
+            # behind their back. It crashed the page on the first real use of
+            # the Add button, 2026-09-24, mid-letter.
+            #
+            # Bumping the generation asks for a DIFFERENT set of widgets on the
+            # next run instead. They have never been instantiated, so they start
+            # unchecked with nothing assigned to them.
+            gen = st.session_state.get("wcr_head_gen", 0)
             picked = []
             for n, item in enumerate(found.get("items", [])):
                 age = (f"{item['age_h']}h ago" if item.get("age_h") is not None
@@ -335,7 +348,7 @@ if _head_key:
                 label = item["title"]
                 if len(label) > 150:
                     label = label[:150] + "…"
-                if st.checkbox(label, key=f"head_{n}"):
+                if st.checkbox(label, key=f"head_{gen}_{n}"):
                     picked.append(item["title"])
                 st.caption(f"{item['source']} · {age}"
                            + (f" · [open]({item['link']})" if item.get("link") else ""))
@@ -348,9 +361,12 @@ if _head_key:
                 existing = st.session_state.get(_box, "")
                 lines = [ln for ln in existing.splitlines() if ln.strip()]
                 lines.extend(picked)
+                # Writing to the TEXT AREA's key is fine and is why this whole
+                # panel is rendered above them: wcr_<section> has not been
+                # instantiated yet at this point in the script. The checkboxes
+                # have been, which is why they get a new generation instead.
                 st.session_state[_box] = "\n".join(lines)
-                for n in range(len(found.get("items", []))):
-                    st.session_state[f"head_{n}"] = False
+                st.session_state["wcr_head_gen"] = gen + 1
                 st.rerun()
 
 st.subheader("Your read")
