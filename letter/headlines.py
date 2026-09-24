@@ -13,13 +13,17 @@ be restated freely; someone else's headline text is theirs. Showing a title on a
 private, passphrase-gated page as a pointer to go read the story is a different
 act from reprinting it in a PDF sent to paying clients.
 
-Three kinds of source:
+Four kinds of source:
 
   RSS        Beef Magazine responds to an ordinary request. Drovers and AgWeb
              both return 403 to anything that is not a browser, Meatingplace is
              subscriber-only, and Reuters' agriculture feed is dead -- so the
              list is deliberately short rather than padded with feeds that fail
              silently.
+
+             THAT 403 IS NO LONGER THE END OF THE STORY: see Trade below. A
+             publisher who refuses a script is still indexed, so their reporting
+             is reachable without a request ever touching their server.
 
   USDA prose The narratives already fetched for the numbers. AMS writes a
              paragraph on every daily cash report describing how the trade went,
@@ -42,6 +46,18 @@ Three kinds of source:
              from the rest of this module: a feed either answers or it 404s,
              while a search that returns nothing looks exactly like a quiet news
              day. Read it as recall, never as coverage.
+
+  Trade and  Two more searches, scoped by site:. Drovers and Beef Magazine, who
+  newsrooms  write about nothing else; and Reuters, Politico, the WSJ and the
+             NYT, who write about cattle only when something has happened.
+
+             They are filtered DIFFERENTLY and that is the point. The general
+             newsrooms get _NEWSROOM, which is strict because they produce
+             "squash beef" and "clean tech exports". The trade press gets the
+             ordinary _RELEVANT, because a cattle publication does not need
+             disambiguating -- run Drovers through the strict filter and "Fall
+             Calf Run Begins as Prices Ease" is discarded, since that filter has
+             no word for "calf" and never needed one.
 """
 from __future__ import annotations
 
@@ -197,6 +213,28 @@ _NEWSROOM = re.compile(
 _NOT_A_STORY = re.compile(r"stock price today|\bstock quote\b|share price|price quote", re.I)
 
 
+# TRADE PRESS, scoped the same way but filtered the LOOSE way. Added at Ross's
+# request 2026-09-24.
+#
+# DROVERS IS THE POINT OF DOING IT LIKE THIS. This module's docstring records
+# that Drovers 403s anything that is not a browser, which is why it was never an
+# RSS feed -- but Google indexes them, so a site: query reaches their reporting
+# without a request ever touching their server.
+#
+# Beef Magazine is here as well as in RSS_FEEDS on purpose. That feed is the
+# only one in the list, so it is a single point of failure; the search is a
+# second road to the same publisher, and _dedupe collapses the overlap.
+#
+# _RELEVANT, NOT _NEWSROOM. The strict filter exists because a general newsroom
+# writes "squash beef" and "clean tech exports"; a cattle publication does not.
+# Run through it, "Fall Calf Run Begins as Prices Ease" is thrown away -- the
+# strict test has no word for "calf", because it never needed one.
+TRADE_NEWS_SITES = ["drovers.com", "beefmagazine.com"]
+
+TRADE_NEWS_QUERY = ("(cattle OR beef OR feeder OR calves OR packer OR corn) ("
+                    + " OR ".join(f"site:{s}" for s in TRADE_NEWS_SITES) + ")")
+
+
 def _google_news(label: str, query: str, relevant, limit: int,
                  max_age_h: int, seen: set) -> list:
     """
@@ -298,6 +336,11 @@ def fetch_general_news(limit: int = 8, max_age_h: int = MAX_AGE_HOURS) -> list:
     """
     return _google_news("newsrooms", GENERAL_NEWS_QUERY, _NEWSROOM,
                         limit, max_age_h, set())
+
+
+def fetch_trade_news(limit: int = 8, max_age_h: int = MAX_AGE_HOURS) -> list:
+    """Drovers and Beef Magazine, via the search rather than their servers."""
+    return _google_news("trade", TRADE_NEWS_QUERY, _RELEVANT, limit, max_age_h, set())
 
 
 def fetch_usda_narratives(as_of: date = None) -> list:
@@ -403,6 +446,9 @@ def candidates(as_of: date = None, limit_per_feed: int = 12,
     # docstring for the miss that put it here.
     if include_packers:
         for row in fetch_packer_news(max_age_h=max_age_h):
+            (errors if row.get("error") else items).append(row)
+        # Drovers and Beef Magazine, which write about nothing else.
+        for row in fetch_trade_news(max_age_h=max_age_h):
             (errors if row.get("error") else items).append(row)
         # Reuters / Politico / WSJ / NYT. Last of the fetched sources because
         # when these four write about cattle it is policy and trade -- context

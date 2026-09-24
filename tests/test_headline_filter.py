@@ -182,6 +182,55 @@ def test_a_ticker_page_is_not_a_story():
     assert not headlines._NOT_A_STORY.search("Tyson Foods Reports Higher Profit as Sales Tick Up")
 
 
+# -- Drovers and Beef Magazine -------------------------------------------------
+
+def test_the_trade_sites_are_scanned():
+    for site in ("drovers.com", "beefmagazine.com"):
+        assert f"site:{site}" in headlines.TRADE_NEWS_QUERY
+
+
+def test_drovers_is_reached_without_touching_drovers():
+    """
+    The reason this is a search and not a feed: the module docstring records
+    that Drovers 403s anything that is not a browser. Google indexes them, so
+    their reporting is reachable with no request to their server.
+    """
+    src = (__import__("pathlib").Path(headlines.__file__)).read_text(encoding="utf-8")
+    assert "drovers.com" in src
+    # no direct feed was added alongside it
+    assert not any("drovers" in url.lower() for _, url in headlines.RSS_FEEDS)
+
+
+def test_the_trade_press_uses_the_LOOSE_filter():
+    """
+    Run through _NEWSROOM, a real Drovers headline is discarded: that filter has
+    no word for "calf" because a general newsroom never needed one. Trade press
+    does not need disambiguating -- every story is already a cattle story.
+    """
+    real = "Fall Calf Run Begins as Prices Ease, Herd Rebuilding Slow"
+    assert headlines._RELEVANT.search(real)
+    assert not headlines._NEWSROOM.search(real)
+
+    src = (__import__("pathlib").Path(headlines.__file__)).read_text(encoding="utf-8")
+    call = src[src.index("def fetch_trade_news"):src.index("def fetch_trade_news") + 400]
+    assert "_RELEVANT" in call and "_NEWSROOM" not in call
+
+
+def test_beef_magazine_has_two_roads_on_purpose():
+    """
+    It is the only entry in RSS_FEEDS, so that feed is a single point of failure.
+    The search is a second route to the same publisher; _dedupe collapses the
+    overlap when both answer.
+    """
+    assert any("beefmagazine" in url for _, url in headlines.RSS_FEEDS)
+    assert "site:beefmagazine.com" in headlines.TRADE_NEWS_QUERY
+    both = headlines._dedupe([
+        {"title": "Export ban rumors quelled—for now", "source": "Beef Magazine"},
+        {"title": "Export ban rumors quelled—for now", "source": "beefmagazine.com"},
+    ])
+    assert len(both) == 1
+
+
 def test_all_four_newsrooms_are_in_the_query():
     for site in ("reuters.com", "politico.com", "wsj.com", "nytimes.com"):
         assert f"site:{site}" in headlines.GENERAL_NEWS_QUERY
