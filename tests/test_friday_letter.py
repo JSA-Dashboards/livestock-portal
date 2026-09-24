@@ -327,16 +327,75 @@ def test_ams_string_payload_means_no_rows_not_a_crash():
 
 # -- Weekday selection --------------------------------------------------------
 
-def test_only_friday_uses_the_week_in_review_format():
+def test_the_three_pm_formats():
     """
-    Five days to pick from, two formats. Friday is the week-in-review; every
-    other weekday produces the standard letter, unchanged.
+    Five weekdays, THREE evening formats as of 2026-09-24. Tuesday and Friday
+    are the two letters clients have always had and are deliberately unchanged;
+    Monday, Wednesday and Thursday get the lighter recap.
+
+    An unknown day still falls to the full standard letter, not the recap --
+    if the day cannot be determined, send more rather than less.
     """
     from letter import config
     assert config.format_for("friday") == "friday"
-    for d in ("monday", "tuesday", "wednesday", "thursday"):
-        assert config.format_for(d) == "tuesday", d
+    assert config.format_for("tuesday") == "tuesday"
+    for d in ("monday", "wednesday", "thursday"):
+        assert config.format_for(d) == "recap", d
     assert config.format_for("nonsense") == "tuesday"
+
+
+def test_the_recap_is_the_light_letter():
+    """
+    Added 2026-09-24 for Mon/Wed/Thu. One written technicals block instead of
+    two, and no Fundamental Rundown -- those are what make Tuesday heavy.
+    """
+    keys = [k for k, _ in commentary.sections_for("recap")]
+    assert keys == ["headlines", "market_action", "technicals"]
+    assert "fundamental" not in keys
+    assert "technicals_lc" not in keys and "technicals_fc" not in keys
+
+
+def test_tuesday_and_friday_are_untouched_by_it():
+    """Ross asked for these two to stay exactly as they were."""
+    tue = [k for k, _ in commentary.sections_for("tuesday")]
+    fri = [k for k, _ in commentary.sections_for("friday")]
+    assert tue == ["headlines", "market_action", "technicals_lc",
+                   "technicals_fc", "fundamental"]
+    assert fri == ["key_headlines", "technicals_lc", "technicals_fc",
+                   "cash_recap", "cof_note"]
+
+
+def test_the_recap_prints_one_technicals_read_not_two():
+    """
+    Handing the same bullets to both sub-blocks would print the read twice,
+    under Live Cattle and again under Feeders, as if written about each.
+    """
+    ctx = _pm_ctx({"technicals": ["Holding the 20-day."]}, kind="recap")
+    ctx["tech_lc"] = {"ma": {9: 220.0, 20: 219.0}, "complete": True}
+    ctx["tech_fc"] = {"ma": {9: 336.0, 20: 334.0}, "complete": True}
+    html = render.build_html(ctx)
+    assert html.count("Holding the 20-day.") == 1
+    # both products' computed averages still appear
+    assert "220.00" in html and "336.00" in html
+
+
+def test_the_recap_keeps_its_signature_inline():
+    """
+    That one page break was the difference between two sheets and three, which
+    is most of what "lighter" was supposed to buy. Tuesday and Friday keep the
+    signature page.
+    """
+    recap = render.build_html(_pm_ctx({"market_action": ["x"]}, kind="recap"))
+    tuesday = render.build_html(_pm_ctx({"market_action": ["x"]}, kind="tuesday"))
+    assert "sig own-page" not in recap
+    assert "sig own-page" in tuesday
+
+
+def test_the_am_report_ignores_the_weekday_entirely():
+    """One morning format, all five days -- the recap must not leak into it."""
+    from letter import config
+    for d in config.DAYS:
+        assert config.format_for(d.lower(), "am") == "am", d
 
 
 def test_day_defaults_from_the_issue_date():

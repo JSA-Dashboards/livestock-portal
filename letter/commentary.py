@@ -50,6 +50,22 @@ SECTIONS_BY_KIND = {
     "am": [
         ("headlines", "Headlines"),
     ],
+    # Mon/Wed/Thu. The session, briefly.
+    #
+    # ONE "technicals" KEY, NOT technicals_lc AND technicals_fc. Tuesday gives
+    # each product its own written read; this letter gives one. The computed
+    # moving averages for BOTH products still print above it -- those are
+    # arithmetic and cost nothing to include.
+    #
+    # It does NOT share the technicals_lc/fc keys, deliberately: a Tuesday draft
+    # and a recap draft are different files, and silently pouring a two-product
+    # read into a one-block section would print the Live Cattle read under a
+    # heading covering both.
+    "recap": [
+        ("headlines", "Headlines"),
+        ("market_action", "Market Action"),
+        ("technicals", "Technicals"),
+    ],
     "friday": [
         ("key_headlines", "Key Headlines"),
         ("technicals_lc", "Technicals: Live Cattle"),

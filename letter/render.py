@@ -726,6 +726,9 @@ def build_html(ctx: dict) -> str:
     if kind == "am":
         intro = config.INTRO_AM.format(stamp=stamp)
         sign_off = config.SIGN_OFF_AM
+    elif kind == "recap":
+        # A session, not a period -- see config.INTRO_RECAP for why it is blank.
+        intro, sign_off = config.INTRO_RECAP, config.SIGN_OFF_TUESDAY
     elif kind == "friday":
         intro, sign_off = f"For the week of {stamp}:", config.SIGN_OFF_FRIDAY
     else:
@@ -794,10 +797,21 @@ def build_html(ctx: dict) -> str:
         if c.get("market_action"):
             body.append("<h2>Market Action</h2>" + _commentary(c["market_action"]))
 
-    tech_lc = technicals_block(ctx.get("tech_lc"), c.get("technicals_lc", []), "Live Cattle")
-    tech_fc = technicals_block(ctx.get("tech_fc"), c.get("technicals_fc", []), "Feeders")
-    if tech_lc or tech_fc:
-        body.append("<h2>Technicals</h2>" + tech_lc + tech_fc)
+    if kind == "recap":
+        # The computed averages for BOTH products, then ONE written read under
+        # them. The commentary is passed to neither sub-block: handing the same
+        # bullets to each would print the read twice, once under Live Cattle and
+        # once under Feeders, as though it had been written about each.
+        tech_lc = technicals_block(ctx.get("tech_lc"), [], "Live Cattle")
+        tech_fc = technicals_block(ctx.get("tech_fc"), [], "Feeders")
+        written = _commentary(c.get("technicals", []))
+        if tech_lc or tech_fc or written:
+            body.append("<h2>Technicals</h2>" + tech_lc + tech_fc + written)
+    else:
+        tech_lc = technicals_block(ctx.get("tech_lc"), c.get("technicals_lc", []), "Live Cattle")
+        tech_fc = technicals_block(ctx.get("tech_fc"), c.get("technicals_fc", []), "Feeders")
+        if tech_lc or tech_fc:
+            body.append("<h2>Technicals</h2>" + tech_lc + tech_fc)
 
     if kind == "friday":
         # Friday drops the five-bullet weekly cash block and carries the
@@ -817,9 +831,17 @@ def build_html(ctx: dict) -> str:
         body.append(cash_trade_block(ctx["cash"]))
         body.append(rundown_block(ctx.get("fci"), ctx["slaughter"], ctx["cutout"],
                                   ctx.get("daily_slaughter"), ctx.get("carcass_weights")))
-        if c.get("fundamental"):
+        # The Fundamental Rundown is what makes Tuesday the heavy letter, so the
+        # recap stops here. `recap` has no "fundamental" key at all, so this is
+        # belt and braces rather than the only guard.
+        if kind != "recap" and c.get("fundamental"):
             body.append("<h2>Fundamental Rundown</h2>" + _commentary(c["fundamental"]))
 
     body.append(f'<p class="signoff">{_esc(sign_off)}</p>')
-    body.append(_signature_html(issue))
+    # THE RECAP'S SIGNATURE DOES NOT TAKE ITS OWN PAGE. Tuesday and Friday put
+    # it on a sheet of its own and keep doing so -- they are the long letters and
+    # a clean signature page suits them. On the recap that one page break was
+    # the difference between two sheets and three, which is most of what
+    # "lighter" was supposed to buy.
+    body.append(_signature_html(issue, own_page=(kind != "recap")))
     return _page(title, stamp, body)

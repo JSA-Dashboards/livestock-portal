@@ -107,6 +107,12 @@ SIGN_OFF_AM = "Have a good day,"
 INTRO_AM = ""
 SIGN_OFF_FRIDAY = "Have a good weekend,"
 
+# The recap letter opens on nothing, for the reason INTRO_AM is empty: the
+# masthead already reads "JSA PM Daily Cattle Report 9/24/26", and unlike the
+# Tuesday and Friday intros there is no PERIOD to name -- a recap covers the
+# session its date already gives. Put a string here and it renders.
+INTRO_RECAP = ""
+
 # Verbatim from the 9/18/26 PDF. Reproduced exactly -- this is the compliance
 # text, not prose, so it is never regenerated or reflowed.
 DISCLAIMER = (
@@ -139,11 +145,17 @@ DISCLAIMER = (
 # The DAY is what you pick; the format is what it produces.
 DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 
+# THREE PM FORMATS AS OF 2026-09-24, not two. Tuesday and Friday are the two
+# letters clients have always had and are deliberately untouched; Monday,
+# Wednesday and Thursday now get "recap" -- the session in brief, without the
+# two technicals blocks and the Fundamental Rundown that make Tuesday the heavy
+# one. Chosen by Ross; the reasoning is that not every evening has a full
+# letter's worth in it.
 FORMAT_FOR_DAY = {
-    "monday": "tuesday",
+    "monday": "recap",
     "tuesday": "tuesday",
-    "wednesday": "tuesday",
-    "thursday": "tuesday",
+    "wednesday": "recap",
+    "thursday": "recap",
     "friday": "friday",
 }
 
