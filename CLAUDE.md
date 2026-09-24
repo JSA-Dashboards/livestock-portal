@@ -35,7 +35,21 @@ has the app registered under the old owner path, so the webhook fires, returns
 `200 OK`, and does nothing — no error anywhere.
 
 To ship: push, then **Manage app → ⋮ → Reboot app** on the live URL. Allow 2–5
-minutes; the "not found" page partway through provisioning is normal.
+minutes; the "not found" page partway through provisioning is normal. The app
+is in the `jsa-dashboards` workspace — see Deployment facts, which was wrong
+about this until 2026-09-24.
+
+A reboot does a full fresh clone, so it always takes current `master`; the
+startup log says `Cloning repository... Pulling code changes from Github`, and
+reading that log is the way to prove which code is actually running rather than
+inferring it from the page.
+
+THE STATED CAUSE ABOVE IS NOW IN DOUBT. It was written when this app was
+believed to live in the personal workspace, and that turned out to be false, so
+"registered under the old owner path" may no longer be the reason — or may no
+longer be true at all. Nobody has tested whether a bare push now auto-deploys.
+The reboot step is still correct and still the safe habit; only the explanation
+is unverified.
 
 ## Required secrets
 
@@ -97,10 +111,17 @@ diff before copying — but a layout or logic fix belongs in both.
 
 - Branch `master`, main file `Home.py`, Python 3.14
 - Live at `jsa-livestock.streamlit.app`
-- Hosted in the personal Streamlit workspace, not the org one. An attempt to
-  move it to the org workspace on 2026-09-05 failed for reasons never
-  established, and was reverted. Do not retry casually — it takes all ten
-  dashboards down.
+- Hosted in the **`jsa-dashboards` org workspace** on Streamlit Community
+  Cloud, listed as `livestock-portal ∙ master ∙ Home.py`, alongside
+  basis-tracker, beef-weight-dashboard, ethanol-margin-matrix,
+  jsa-risk-analyzer and soy-crush-calculator. The personal `baldwinrv`
+  workspace is **empty** — nothing to find there.
+
+  This entry read "personal workspace, not the org one" until 2026-09-24,
+  recording a move attempt on 2026-09-05 that "failed and was reverted". The
+  move did land at some point after that; verified 2026-09-24 by signing in
+  and rebooting from the org workspace. Nothing needs retrying, and looking in
+  the personal workspace finds an empty page rather than an error.
 
 ## The crush pages
 
