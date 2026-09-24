@@ -58,7 +58,8 @@ for _name in _ALLOWED_SECRETS:
         os.environ[_name] = str(_value)
 
 from letter import build as letter_build  # noqa: E402
-from letter import commentary, config, headlines, mailbox, render, settle_log, topdf  # noqa: E402
+from letter import (archive, commentary, config, headlines, mailbox, render,  # noqa: E402
+                    settle_log, topdf)
 
 # ...then .env, for anything the secrets did not supply.
 #
@@ -453,3 +454,37 @@ if st.session_state.get("wcr_pdf"):
     st.download_button("Download PDF", data=st.session_state["wcr_pdf"],
                        file_name=f"{config.title_for(session)} {day.title()} {issue}.pdf",
                        mime="application/pdf", use_container_width=True)
+
+# -- Archive ------------------------------------------------------------------
+# AFTER SENDING, NOT INSTEAD OF IT. This copies the rendered letter into the
+# private jsa-letter-archive repo and pushes. It is a separate button on purpose:
+# "published" means Ross emailed it, which nothing here can detect, and archiving
+# every build would bury the one that went out under a day of drafts.
+#
+# Unavailable on the deployed app -- no clone, no push credentials -- so it says
+# so rather than offering a button that cannot work.
+_arch_ok, _arch_why = archive.available()
+st.divider()
+if not _arch_ok:
+    st.caption(f"Archive unavailable — {_arch_why}. Run locally to archive a sent letter.")
+else:
+    a1, a2 = st.columns([1, 3])
+    with a1:
+        if st.button("Archive as sent", use_container_width=True):
+            OUT.mkdir(parents=True, exist_ok=True)
+            _hp = OUT / f"{config.title_for(session)} {day.title()} {issue}.html"
+            _hp.write_text(html, encoding="utf-8")
+            _pp = OUT / f"{config.title_for(session)} {day.title()} {issue}.pdf"
+            res = archive.publish(issue, session, _hp, _pp if _pp.exists() else None,
+                                  kind=kind, title=config.title_for(session))
+            if not res["ok"]:
+                st.error(f"Not archived — {res['reason']}")
+            elif not res["changed"]:
+                st.info("Already archived, unchanged.")
+            else:
+                st.success("Archived and pushed." if res["pushed"]
+                           else f"Committed locally. {res['reason']}")
+    with a2:
+        st.caption("Press this for the letter you actually sent. It copies the HTML "
+                   "and PDF into the private archive repo and pushes — re-sending a "
+                   "corrected letter keeps the earlier one in git history.")

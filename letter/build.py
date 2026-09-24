@@ -35,7 +35,8 @@ import warnings
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from . import cof, commentary, config, render, settle_log, sources, technicals, topdf
+from . import (archive, cof, commentary, config, render, settle_log, sources,
+               technicals, topdf)
 
 # snowflake_db passes a raw DBAPI connection to pd.read_sql, which pandas
 # warns about on every query. That is the shared module's choice, not this
@@ -442,6 +443,9 @@ def main(argv=None) -> int:
     ap.add_argument("--no-fetch", action="store_true",
                     help="re-render from the last fetch -- use after editing commentary")
     ap.add_argument("--html-only", action="store_true", help="skip the PDF step")
+    ap.add_argument("--archive", action="store_true",
+                    help="copy this letter into the private archive repo, commit and "
+                         "push. Use it for the letter you actually sent, not a draft.")
     ap.add_argument("--out", default=str(OUT), help="output directory")
     ap.add_argument("--session", choices=[x.lower() for x in config.SESSIONS],
                     default=config.DEFAULT_SESSION.lower(),
@@ -554,10 +558,31 @@ def main(argv=None) -> int:
     html_path.write_text(html, encoding="utf-8")
 
     pdf_msg = ""
+    pdf_path = None
     if not args.html_only:
         pdf_path = out_dir / f"{config.title_for(session)} {day.title()} {issue}.pdf"
         ok, msg = topdf.html_to_pdf(html_path, pdf_path)
         pdf_msg = f"PDF: {msg}" if ok else f"PDF NOT written -- {msg}"
+        if not ok:
+            pdf_path = None
+
+    # -- Archive, only when asked ------------------------------------------
+    # OPT-IN, because "published" means Ross sent it and only he knows when.
+    # Archiving every build would commit a dozen drafts a day and bury the one
+    # that went out. See letter/archive.py.
+    archive_msg = ""
+    if getattr(args, "archive", False):
+        result = archive.publish(issue, session, html_path, pdf_path,
+                                 kind=kind, title=config.title_for(session))
+        if not result["ok"]:
+            archive_msg = f"ARCHIVE FAILED -- {result['reason']}"
+        elif not result["changed"]:
+            archive_msg = "Archive: already held this letter, unchanged."
+        else:
+            where = "pushed" if result["pushed"] else "committed locally"
+            archive_msg = f"Archive: {len(result['files'])} file(s) {where}."
+            if result["reason"]:
+                archive_msg += f" {result['reason']}"
 
     # -- Report -------------------------------------------------------------
     missing = html.count(render.MISSING)
@@ -565,6 +590,8 @@ def main(argv=None) -> int:
     print(f"HTML: {html_path}")
     if pdf_msg:
         print(pdf_msg)
+    if archive_msg:
+        print(archive_msg)
     if not existed:
         print(f"\nCommentary file created: {cpath}")
         titles = " / ".join(t for _, t in commentary.sections_for(kind))
