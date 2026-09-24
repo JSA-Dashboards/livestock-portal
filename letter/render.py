@@ -16,11 +16,38 @@ from __future__ import annotations
 
 import html
 from datetime import date
+from pathlib import Path
 
 from . import chart as chart_mod
 from . import config
 
+import base64
+import functools
+
 MISSING = '<span class="missing">[[?]]</span>'
+
+@functools.lru_cache(maxsize=8)
+def _asset_uri(name: str) -> str:
+    """
+    An image from assets/, inlined as a data URI.
+
+    EMBEDDED, NOT LINKED, for three reasons that all matter here. The PDF is
+    produced by headless Edge and then emailed: a <img src="assets/..."> would
+    resolve relative to wherever the HTML happens to sit, a jpsi.com URL would
+    need the network at print time and would silently drop to a broken-image box
+    if it were slow, and neither survives the file being forwarded. A data URI
+    is part of the document.
+
+    Returns "" when the file is missing, so a letter still builds -- letterhead
+    is presentation, and losing it must not cost the numbers.
+    """
+    path = Path(__file__).resolve().parent.parent / "assets" / name
+    try:
+        return ("data:image/png;base64,"
+                + base64.b64encode(path.read_bytes()).decode("ascii"))
+    except OSError:
+        return ""
+
 
 
 # -- Formatting ---------------------------------------------------------------
@@ -423,7 +450,22 @@ body {
   font-size: 11.5pt; line-height: 1.32; color: #000; margin: 0;
   -webkit-print-color-adjust: exact; print-color-adjust: exact;
 }
-.masthead { font-weight: 700; font-size: 13pt; margin: 0 0 14px; }
+/* Masthead is a row now: title left, logo hard right. baseline rather than
+   center so the wordmark sits on the same line as the title rather than
+   floating above it. */
+.masthead { font-weight: 700; font-size: 13pt; margin: 0 0 14px;
+            display: flex; align-items: baseline; justify-content: space-between;
+            gap: 18px; }
+.masthead img { height: 0.34in; width: auto; align-self: center; }
+/* THE WATERMARK SITS BEHIND THE TEXT, not over it. z-index -1 puts it under
+   the content, which only works because the page background lives on <html>
+   -- put a background on <body> and this disappears underneath it.
+   position:fixed so it is placed against the PAGE box in print, and it does
+   not participate in layout at all, which is why letterhead costs the
+   one-page brief nothing. */
+html { background: #fff; }
+.wm { position: fixed; left: 50%; top: 46%; transform: translate(-50%, -50%);
+      width: 4.4in; opacity: 0.07; z-index: -1; pointer-events: none; }
 table.band { width: 100%; border-collapse: collapse; margin: 0 0 -10px; }
 /* The two blocks sit TOGETHER on the left, not at opposite edges of the page.
    A 50/50 split put Cattle Futures at the horizontal midpoint and opened a
@@ -674,7 +716,16 @@ def build_html(ctx: dict) -> str:
 
     # An empty intro renders nothing rather than an empty paragraph -- see
     # config.INTRO_AM, which is blank because the masthead already said it.
-    head = [f'<div class="masthead">{_esc(title)} {stamp}</div>']
+    # Letterhead on every letter, AM and PM alike -- it is the same company
+    # writing. Both images are embedded; see _asset_uri.
+    _logo, _mark = _asset_uri("logo-full.png"), _asset_uri("jsa-50-years.png")
+    head = []
+    if _mark:
+        head.append(f'<img class="wm" src="{_mark}" alt="">')
+    head.append(
+        f'<div class="masthead"><span>{_esc(title)} {stamp}</span>'
+        + (f'<img src="{_logo}" alt="John Stewart and Associates">' if _logo else "")
+        + '</div>')
     if intro:
         head.append(f'<p class="intro">{_esc(intro)}</p>')
 
