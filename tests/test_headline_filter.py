@@ -273,3 +273,77 @@ def test_packer_queries_are_all_qualified():
     """
     for label, query in headlines.PACKER_QUERIES:
         assert any(w in query.lower() for w in ("beef", "cattle", "slaughter")), label
+
+
+# -- Newest first --------------------------------------------------------------
+
+import datetime as _dt
+
+
+def test_all_three_date_formats_parse():
+    """
+    The sources genuinely differ and every one of these is real:
+      ISO+tz from RSS, Google News and the mailbox; US order from AMS;
+      a bare date from the border report.
+    """
+    iso = headlines._when_key({"when": "2026-09-24T14:27:40+00:00"})
+    ams = headlines._when_key({"when": "09/24/2026 11:07:09"})
+    day = headlines._when_key({"when": "2026-09-23"})
+    assert iso.year == 2026 and iso.hour == 14
+    assert ams.month == 9 and ams.day == 24 and ams.hour == 11
+    assert day.day == 23 and day.hour == 0
+    for got in (iso, ams, day):
+        assert got.tzinfo is not None, "naive stamps must be pinned to UTC to sort"
+
+
+def test_an_unknown_date_sorts_to_the_bottom():
+    """An item whose age is unknown must not claim to be the newest on the page."""
+    assert headlines._when_key({"when": None}) == headlines._EPOCH
+    assert headlines._when_key({"when": "not a date"}) == headlines._EPOCH
+    assert headlines._when_key({}) == headlines._EPOCH
+
+
+def test_candidates_come_back_newest_first(monkeypatch):
+    monkeypatch.setattr(headlines, "fetch_usda_narratives", lambda *a, **k: [
+        {"source": "USDA AMS cash trade", "title": "AMS narrative", "when": "09/22/2026 11:07:09"}])
+    monkeypatch.setattr(headlines, "fetch_rss", lambda *a, **k: [
+        {"source": "Beef Magazine", "title": "older story", "when": "2026-09-23T08:00:00+00:00"},
+        {"source": "Beef Magazine", "title": "newest story", "when": "2026-09-24T20:00:00+00:00"}])
+    monkeypatch.setattr(headlines, "fetch_packer_news", lambda *a, **k: [])
+    monkeypatch.setattr(headlines, "fetch_trade_news", lambda *a, **k: [])
+    monkeypatch.setattr(headlines, "fetch_general_news", lambda *a, **k: [])
+    got = headlines.candidates(include_mailbox=False)
+    assert [i["title"] for i in got["items"]] == ["newest story", "older story", "AMS narrative"]
+
+
+def test_ordering_does_not_decide_which_duplicate_survives(monkeypatch):
+    """
+    Dedupe keeps the FIRST occurrence and source order is priority order, so the
+    USDA copy of a story beats a newsroom's. Sorting must run AFTER that, or the
+    newer-but-lesser copy wins.
+    """
+    same = "Screwworm ban eased on Mexican cattle"
+    monkeypatch.setattr(headlines, "fetch_usda_narratives", lambda *a, **k: [
+        {"source": "USDA border report", "title": same, "when": "2026-09-20"}])
+    monkeypatch.setattr(headlines, "fetch_rss", lambda *a, **k: [
+        {"source": "Beef Magazine", "title": same, "when": "2026-09-24T20:00:00+00:00"}])
+    for fn in ("fetch_packer_news", "fetch_trade_news", "fetch_general_news"):
+        monkeypatch.setattr(headlines, fn, lambda *a, **k: [])
+    got = headlines.candidates(include_mailbox=False)
+    assert len(got["items"]) == 1
+    assert got["items"][0]["source"] == "USDA border report", "the newer copy displaced the better one"
+
+
+def test_equal_timestamps_keep_their_source_order(monkeypatch):
+    """
+    A digest gives every headline the same receivedDateTime, so ties are the
+    common case, not the edge case. The sort is stable.
+    """
+    when = "2026-09-24T17:00:00+00:00"
+    rows = [{"source": "Meatingplace", "title": f"headline {n}", "when": when} for n in range(5)]
+    monkeypatch.setattr(headlines, "fetch_usda_narratives", lambda *a, **k: [])
+    monkeypatch.setattr(headlines, "fetch_rss", lambda *a, **k: rows)
+    for fn in ("fetch_packer_news", "fetch_trade_news", "fetch_general_news"):
+        monkeypatch.setattr(headlines, fn, lambda *a, **k: [])
+    got = headlines.candidates(include_mailbox=False)
+    assert [i["title"] for i in got["items"]] == [f"headline {n}" for n in range(5)]

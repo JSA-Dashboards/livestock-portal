@@ -397,6 +397,45 @@ def fetch_usda_narratives(as_of: date = None) -> list:
     return out
 
 
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _when_key(item: dict):
+    """
+    A sortable UTC timestamp for a candidate, for newest-first display.
+
+    THREE FORMATS REACH THIS, because the sources genuinely differ:
+
+        2026-09-24T14:27:40+00:00   RSS, Google News, the mailbox -- ISO, tz-aware
+        09/24/2026 11:07:09         AMS, US order, no zone
+        2026-09-23                  the border report -- a date, no time at all
+
+    A naive stamp is read as UTC. AMS publishes in Eastern, so its line can sort
+    a few hours earlier than it really is; that is a place in a pick list, not a
+    wrong number, and guessing a zone per source would be the bigger error. The
+    date-only border report lands at midnight, which puts it at the end of its
+    day -- right, since nothing says when in that day it came.
+
+    Anything unparseable sorts to the bottom rather than the top: an item whose
+    age is unknown must not claim to be the newest thing on the page.
+    """
+    raw = str(item.get("when") or "").strip()
+    if not raw:
+        return _EPOCH
+    for parse in (
+        lambda v: datetime.fromisoformat(v),
+        lambda v: datetime.strptime(v, "%m/%d/%Y %H:%M:%S"),
+        lambda v: datetime.strptime(v, "%m/%d/%Y"),
+        lambda v: datetime.fromisoformat(v[:10]),
+    ):
+        try:
+            got = parse(raw)
+        except (TypeError, ValueError):
+            continue
+        return got if got.tzinfo else got.replace(tzinfo=timezone.utc)
+    return _EPOCH
+
+
 def _dedupe(items: list) -> list:
     """
     One row per story.
@@ -464,7 +503,16 @@ def candidates(as_of: date = None, limit_per_feed: int = 12,
         errors.extend({"source": "", "error": e} for e in got.get("errors", []))
         needs_sign_in = bool(got.get("needs_sign_in"))
 
-    return {"items": _dedupe(items),
+    # NEWEST AT THE TOP. Sorted after the dedupe, not before: dedupe keeps the
+    # FIRST occurrence and the source order above is priority order, so the USDA
+    # copy of a story survives over a newsroom's. Ordering is display only and
+    # must not decide which duplicate wins.
+    #
+    # Stable, so items sharing a timestamp -- or both unparseable -- keep the
+    # source order they arrived in.
+    ordered = sorted(_dedupe(items), key=_when_key, reverse=True)
+
+    return {"items": ordered,
             "errors": [(f"{e['source']}: {e['error']}" if e.get("source") else e["error"])
                        for e in errors],
             "needs_sign_in": needs_sign_in}
