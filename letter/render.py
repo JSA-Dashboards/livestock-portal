@@ -348,6 +348,52 @@ def friday_rundown_block(fci: dict, slaughter: dict, cutout: dict,
     return "<h2>Cattle market rundown:</h2>" + _bullets(rows)
 
 
+def wtd_cash_rows(ctx: dict) -> list:
+    """
+    This week's cash by state, in the letter's own shorthand:
+    "NE: 221.00-222.50 live &middot; 350 dressed".
+
+    Only states that actually traded are listed -- naming four every day so
+    three can say "Undefined" is three wasted lines.
+
+    SHARED BY THE MORNING BRIEF AND THE RECAP. It was the morning brief's alone
+    until 2026-09-24, when Ross asked for the same treatment Tue-Thu evening;
+    extracted rather than copied, because two implementations of "how this
+    letter writes a cash range" is exactly the kind of pair that drifts.
+    """
+    regions = (ctx.get("regional_cash") or {}).get("regions") or {}
+    traded = [(n, r) for n, r in regions.items() if not r.get("undefined")]
+    rows = []
+    for name, r in traded:
+        bits = []
+        if r.get("live_low") is not None:
+            bits.append(f"{trim_range(r['live_low'], r['live_high'])} live")
+        if r.get("dressed_low") is not None:
+            bits.append(f"{trim_range(r['dressed_low'], r['dressed_high'])} dressed")
+        rows.append(f"{_esc(name)}: {' &middot; '.join(bits)}")
+    if not rows and regions:
+        rows.append("No established test this week")
+    return rows
+
+
+def wtd_cash_block(ctx: dict) -> str:
+    """
+    The recap's Cash Trade: this week's state ranges and nothing else.
+
+    NO CUTOUT AND NO SLAUGHTER, unlike the morning brief's version of this
+    block. Ross's point: on the evening letter both already appear a few inches
+    below in the cattle market rundown, so repeating them here is the same
+    figure twice on one page. The brief has no rundown, which is why it carries
+    them there.
+
+    NOT last week's weighted average either -- that is Monday's block, and it
+    says "Last week's cash trade" because on a Monday that is the week worth
+    reporting. Tuesday onward, the week in progress is the news.
+    """
+    rows = wtd_cash_rows(ctx)
+    return "<h2>Cash Trade</h2>" + _bullets(rows) if rows else ""
+
+
 def cash_cattle_block(regional: dict) -> str:
     """
     North and South negotiated ranges.
@@ -635,18 +681,7 @@ def am_blocks(ctx: dict, c: dict) -> list:
     #   "Cash  NE 221.00-222.50 live, 350 dressed"
     # Only states that actually traded are listed -- naming four every morning
     # so three can say "Undefined" is three wasted lines.
-    regions = (ctx.get("regional_cash") or {}).get("regions") or {}
-    traded = [(n, r) for n, r in regions.items() if not r.get("undefined")]
-    if traded:
-        for name, r in traded:
-            bits = []
-            if r.get("live_low") is not None:
-                bits.append(f"{trim_range(r['live_low'], r['live_high'])} live")
-            if r.get("dressed_low") is not None:
-                bits.append(f"{trim_range(r['dressed_low'], r['dressed_high'])} dressed")
-            rows.append(f"{_esc(name)}: {' &middot; '.join(bits)}")
-    elif regions:
-        rows.append("No established test this week")
+    rows.extend(wtd_cash_rows(ctx))
 
     # NO WEEKLY WEIGHTED AVERAGE HERE. LM_CT150's "this week" is the last
     # COMPLETED week, published after it ends -- so on a Wednesday morning it is
@@ -828,10 +863,21 @@ def build_html(ctx: dict) -> str:
             if c.get("cof_note"):
                 body.append(_commentary(c["cof_note"]))
     else:
-        body.append(cash_trade_block(ctx["cash"]))
+        # WHICH CASH BLOCK DEPENDS ON THE DAY, and that is the whole point.
+        # Monday reports the week that just closed, so it leads with the
+        # weighted average under "Last week's cash trade". Tuesday onward the
+        # week in progress is the news, so the recap carries this week's state
+        # ranges instead -- the same block the morning brief runs, minus the
+        # cutout and slaughter lines, which are a few inches below in the
+        # rundown on this letter and would be the same figure twice.
+        if kind == "recap":
+            body.append(wtd_cash_block(ctx))
+        else:
+            body.append(cash_trade_block(ctx["cash"]))
+
         body.append(rundown_block(ctx.get("fci"), ctx["slaughter"], ctx["cutout"],
                                   ctx.get("daily_slaughter"), ctx.get("carcass_weights")))
-        # The Fundamental Rundown is what makes Tuesday the heavy letter, so the
+        # The Fundamental Rundown is what makes Monday the heavy letter, so the
         # recap stops here. `recap` has no "fundamental" key at all, so this is
         # belt and braces rather than the only guard.
         if kind != "recap" and c.get("fundamental"):

@@ -807,3 +807,86 @@ def test_the_summary_names_every_format_in_use():
     summary = config.pm_format_summary()
     for kind in set(config.FORMAT_FOR_DAY.values()):
         assert config.FORMAT_LABELS[kind] in summary, kind
+
+
+# -- Which cash block each evening letter carries ------------------------------
+
+_CASH_WTD = {"regions": {
+    "NE": {"live_low": 221.0, "live_high": 222.5, "dressed_low": 348.0, "dressed_high": 350.0},
+    "IA/MN": {"live_low": 218.0, "live_high": 222.0},
+    "TX/OK/NM": {"undefined": True},
+}}
+
+
+def _cash_ctx(kind):
+    ctx = _pm_ctx({"headlines": ["x"], "market_action": ["x"], "technicals": ["x"],
+                   "technicals_lc": ["x"], "technicals_fc": ["x"], "fundamental": ["x"]},
+                  kind=kind)
+    ctx["regional_cash"] = _CASH_WTD
+    ctx["cutout"] = {"choice": {"value": 377.31, "change": -1.58},
+                     "select": {"value": 352.34, "change": -5.51}}
+    ctx["daily_slaughter"] = {"current_day": 94000, "wtd": 299000}
+    return ctx
+
+
+def test_monday_still_reports_last_weeks_cash():
+    """
+    On a Monday the week that just closed is the week worth reporting, so the
+    full letter keeps the weighted average. Ross confirmed this one is right.
+    """
+    html = render.build_html(_cash_ctx("tuesday"))
+    assert "Last week" in html and "cash trade" in html
+
+
+def test_the_recap_reports_the_week_in_progress():
+    """Tuesday onward, last week's average is history; this week is the news."""
+    html = render.build_html(_cash_ctx("recap"))
+    assert "<h2>Cash Trade</h2>" in html
+    assert "Last week" not in html
+    assert "221-222.50 live" in html
+
+
+def test_the_recap_cash_block_repeats_nothing_from_the_rundown():
+    """
+    Ross's reason for trimming it: the cutout and the slaughter counts are a few
+    inches below in the rundown on this letter, so carrying them here too is the
+    same figure twice on one page. The morning brief has no rundown, which is
+    why it keeps them.
+    """
+    html = render.build_html(_cash_ctx("recap"))
+    cash = html.split("<h2>Cash Trade</h2>")[1].split("<h2>")[0]
+    assert "Cutout" not in cash
+    assert "Slaughter" not in cash
+    # ...and they are still on the letter, lower down
+    assert "Cattle market rundown" in html
+
+
+def test_an_undefined_state_is_left_out_rather_than_listed():
+    """Naming four states so three can say Undefined is three wasted lines."""
+    html = render.build_html(_cash_ctx("recap"))
+    cash = html.split("<h2>Cash Trade</h2>")[1].split("<h2>")[0]
+    assert "NE:" in cash and "IA/MN:" in cash
+    assert "TX/OK/NM" not in cash
+
+
+def test_the_morning_brief_and_the_recap_share_one_implementation():
+    """
+    Two ways of writing "how this letter formats a cash range" is exactly the
+    pair that drifts. The rows come from one function.
+    """
+    rows = render.wtd_cash_rows({"regional_cash": _CASH_WTD})
+    assert rows == ["NE: 221-222.50 live &middot; 348-350 dressed",
+                    "IA/MN: 218-222 live"]
+    src = (REPO_ROOT / "letter" / "render.py").read_text(encoding="utf-8")
+    assert src.count("No established test this week") == 1
+
+
+def test_the_recap_actually_fetches_week_to_date_cash():
+    """
+    The block renders nothing without it, and gather only pulled it for the AM
+    and Friday. Friday's is a DIFFERENT source -- a single day, North/South --
+    so the recap needs the week-to-date one by name.
+    """
+    src = (REPO_ROOT / "letter" / "build.py").read_text(encoding="utf-8")
+    recap = src[src.index('if kind == "recap":'):src.index('if kind == "friday":')]
+    assert "fetch_regional_cash_wtd" in recap

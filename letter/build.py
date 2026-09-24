@@ -191,6 +191,16 @@ def gather(issue: date, errors: list, kind: str = "tuesday", cof_guesses: dict =
         ctx["regional_cash"] = _try("cash week-to-date (AMS daily)",
                                     lambda: sources.fetch_regional_cash_wtd(issue), errors) or {}
 
+    if kind == "recap":
+        # THE SAME WEEK-TO-DATE SOURCE THE MORNING BRIEF USES, not the single-day
+        # one Friday reads. Tue-Thu evening the news is how the week has traded
+        # so far, and Monday is routinely untested -- a Tuesday letter built from
+        # Monday alone reads "no established test" while the week has in fact
+        # traded. Monday's letter does not need this: it reports last week's
+        # completed average instead.
+        ctx["regional_cash"] = _try("cash week-to-date (AMS daily)",
+                                    lambda: sources.fetch_regional_cash_wtd(issue), errors) or {}
+
     if kind == "friday":
         ctx["cftc"] = _try("CFTC managed money", sources.fetch_cftc, errors) or {}
         # Regional cash is a single trading day, and on a Friday letter that day
