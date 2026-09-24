@@ -181,6 +181,25 @@ CHART_SESSIONS = 60
 # and "federal reserve" do. "basis" belongs to feeders because that is the basis
 # this letter quotes. Getting this wrong costs a slightly-off chart, not a wrong
 # number, which is why it is allowed to be a heuristic at all.
+# HOW MUCH EACH SOURCE'S HEADLINE COUNTS when the chart is picked from the day's
+# candidate list rather than from what Ross typed. Twenty-two headlines spanning
+# Tyson, screwworm, corn and equities is a muddy signal, and without weighting
+# the topic with the most STORIES wins -- which is not the same as the topic that
+# matters. USDA is writing about this market specifically and is never
+# speculative; the trade press is close behind; a general newsroom covering
+# cattle at all is notable but it is one desk among many.
+#
+# Matched on a lowercase substring of the source name, so a new outlet lands on
+# the default rather than needing an entry here.
+CHART_SOURCE_WEIGHTS = {"usda": 3.0}
+CHART_TRADE_SOURCES = (
+    "beef magazine", "drovers", "meatingplace", "emeat", "global agritrends",
+    "sterling", "meat+poultry", "brownfield", "northern ag", "agweb",
+    "feedstuffs", "wattpoultry", "ag proud", "farm", "cattle",
+)
+CHART_TRADE_WEIGHT = 2.0
+CHART_DEFAULT_SOURCE_WEIGHT = 1.0
+
 CHART_POOL = [
     {"key": "feeders", "label": "Feeder Cattle", "code": FEEDER_CATTLE_CODE,
      "style": "decimal",
@@ -194,7 +213,13 @@ CHART_POOL = [
     {"key": "live", "label": "Live Cattle", "code": LIVE_CATTLE_CODE,
      "style": "decimal",
      "words": ("fed cattle", "live cattle", "fat cattle", "packer", "slaughter",
-               "cutout", "boxed", "carcass", "kill floor")},
+               "cutout", "boxed", "carcass", "kill floor",
+               # The packers BY NAME. headlines._RELEVANT has carried these
+               # since the Kansas miss, and leaving them out here meant three
+               # Tyson plant stories in one morning's candidate list scored
+               # zero for Live Cattle. A packer story is a fed cattle story.
+               "tyson", "jbs", "cargill", "national beef", "beef plant",
+               "meatpacking", "packing plant")},
     {"key": "corn", "label": "Corn", "code": "ZC", "style": "eighths",
      "words": ("corn", "feed cost", "ration", "cost of gain", "grain", "bushel",
                "harvest", "new crop", "yield")},

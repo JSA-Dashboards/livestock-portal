@@ -109,44 +109,96 @@ def _nice_bounds(lo: float, hi: float):
     return lo_r, hi_r, ticks
 
 
-def pick(issue: date, text: str = "", movers: dict = None, pool: list = None) -> tuple:
+def _score(text: str, entry: dict) -> float:
+    """
+    How much a piece of text is about one market.
+
+    WEIGHTED BY SPECIFICITY. A hit on "cost of gain" says far more than a hit on
+    "corn", so a phrase scores its word count. Without this every single-word hit
+    tied and the tie-break -- the rotation -- decided, which is how "Corn basis
+    firms as harvest rolls" drew a Live Cattle chart.
+    """
+    low = (text or "").lower()
+    return sum(low.count(w) * len(w.split()) for w in entry["words"])
+
+
+def source_weight(source: str) -> float:
+    """
+    How much one outlet's headline counts. See config.CHART_SOURCE_WEIGHTS.
+
+    Substring match, so an outlet nobody has seen before lands on the default
+    instead of needing a config entry the day it first appears.
+    """
+    low = (source or "").lower()
+    for marker, weight in config.CHART_SOURCE_WEIGHTS.items():
+        if marker in low:
+            return weight
+    if any(m in low for m in config.CHART_TRADE_SOURCES):
+        return config.CHART_TRADE_WEIGHT
+    return config.CHART_DEFAULT_SOURCE_WEIGHT
+
+
+def pick(issue: date, text: str = "", candidates: list = None,
+         movers: dict = None, pool: list = None) -> tuple:
     """
     Which chart this morning gets, and why. Returns (entry, reason).
 
-    THREE TIERS, IN ORDER OF HOW MUCH EACH ONE KNOWS:
+    FOUR TIERS, IN ORDER OF HOW MUCH EACH ONE KNOWS:
 
-      1. What Ross wrote. If the headlines talk about corn, the chart is corn.
-         The human already said what the morning is about; nothing computed
-         beats that.
-      2. What actually moved. No keyword match means the letter is not steering,
-         so the most applicable chart is the market that did something -- scored
-         as a percentage so a 2-point corn move and a 40-point S&P move compare.
-      3. A rotation. Nothing typed and nothing fetched: fall back to a cycle that
-         shows every chart once before repeating, shuffled per cycle so it is not
-         a fixed weekly rota.
+      1. What Ross wrote. If the headlines he typed talk about corn, the chart is
+         corn. The human already said what the morning is about; nothing
+         computed beats that.
+      2. What the day's headlines are about -- the candidate list the panel
+         already fetched, weighted by source so USDA's own cash-trade narrative
+         outranks a general newsroom that covered cattle once. This is what
+         aims the chart before a word has been typed.
+      3. What actually moved. Nothing in the text either way, so the most
+         applicable chart is the market that did something -- scored as a
+         percentage so 8 cents of corn and 40 S&P points compare.
+      4. A rotation. Nothing to go on at all: a cycle that shows every chart once
+         before repeating, shuffled per cycle so it is not a fixed weekly rota.
+
+    NOTHING HERE FETCHES ANYTHING, and tier 2 must never cause a fetch: the
+    candidate list costs several HTTP calls and is only passed in when the caller
+    already has it. A CLI build that never asked for headlines simply skips to
+    tier 3, which is why the reason string always names the tier that fired.
 
     DETERMINISTIC, NEVER RANDOM AT RENDER TIME. A letter is built twice -- once
     to fetch, once with --no-fetch to make the PDF -- and an actually-random pick
-    would put a different chart in the PDF than the one that was previewed. Same
-    date and same text always give the same chart.
+    would put a different chart in the PDF than the one that was previewed.
     """
     pool = pool or config.CHART_POOL
     order, pos = _rotation(issue, len(pool))
 
-    low = (text or "").lower()
-    if low:
-        # WEIGHTED BY SPECIFICITY. A hit on "cost of gain" says far more about
-        # what the letter is about than a hit on "corn", so a phrase scores its
-        # word count. Without this every single-word hit tied and the tie-break
-        # -- the rotation -- decided, which is how "Corn basis firms as harvest
-        # rolls" drew a Live Cattle chart.
-        scored = [(sum(low.count(w) * len(w.split()) for w in e["words"]),
-                   -order.index(i), e)
-                  for i, e in enumerate(pool)]
-        best = max(scored, key=lambda t: (t[0], t[1]))
+    def _best(scores):
+        ranked = [(scores[i], -order.index(i), e) for i, e in enumerate(pool)]
+        return max(ranked, key=lambda t: (t[0], t[1]))
+
+    if text:
+        best = _best([_score(text, e) for e in pool])
         if best[0] > 0:
+            low = text.lower()
             hits = [w for w in best[2]["words"] if w in low]
             return best[2], f"matched {', '.join(repr(w) for w in hits[:2])} in your text"
+
+    if candidates:
+        totals, top_title = [0.0] * len(pool), {}
+        for item in candidates:
+            title = item.get("title") or ""
+            weight = source_weight(item.get("source"))
+            for i, e in enumerate(pool):
+                s = _score(title, e) * weight
+                if s <= 0:
+                    continue
+                totals[i] += s
+                if s > top_title.get(i, (0, "", ""))[0]:
+                    top_title[i] = (s, title, item.get("source") or "")
+        best = _best(totals)
+        if best[0] > 0:
+            i = pool.index(best[2])
+            _, title, src = top_title.get(i, (0, "", ""))
+            short = (title[:52] + "…") if len(title) > 53 else title
+            return best[2], f"the day's headlines — {src}: “{short}”"
 
     if movers:
         ranked = [(abs(v), e) for e in pool

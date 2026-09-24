@@ -27,7 +27,7 @@ from pathlib import Path
 
 import pytest
 
-from letter import chart, render, topdf
+from letter import chart, config, render, topdf
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -212,19 +212,98 @@ def test_a_phrase_outranks_a_bare_word():
     assert entry["key"] == "live"
 
 
+# -- Tier 2: the day's candidate headlines -------------------------------------
+
+def _cands():
+    """One realistic morning's panel: many topics, mixed sources."""
+    return [
+        {"source": "USDA border report",
+         "title": "Douglas, AZ - steer calves and yearlings sold steady, Mexican cattle"},
+        {"source": "Beef Magazine", "title": "Cattle futures drop on export rumors"},
+        {"source": "Tri-City Herald", "title": "Latest on Tyson beef plant: industry watching"},
+        {"source": "meat+poultry", "title": "Illinois seeks buyer for Tyson Foods beef plant"},
+        {"source": "Politico", "title": "Trump officials weigh rolling back beef import plan"},
+    ]
+
+
+def test_the_days_headlines_aim_the_chart_before_anything_is_typed():
+    """The point of the tier: open the page, press Fetch, chart is already aimed."""
+    entry, reason = chart.pick(ISSUE, "", _cands())
+    assert entry["key"] == "live"
+    assert "the day's headlines" in reason
+    assert "Tyson" in reason          # says WHICH headline did it
+
+
+def test_what_you_typed_still_beats_the_whole_candidate_pile():
+    entry, reason = chart.pick(ISSUE, "Corn and cost of gain", _cands())
+    assert entry["key"] == "corn" and "in your text" in reason
+
+
+def test_a_packer_name_is_a_fed_cattle_story():
+    """
+    _RELEVANT has carried the packer names since the Kansas miss. Leaving them
+    out of the chart pool meant three Tyson plant stories in one morning scored
+    zero for Live Cattle and a single border line outvoted them.
+    """
+    assert chart._score("Tyson Foods beef plant sold", {"words":
+                        dict(config.CHART_POOL[1])["words"]}) > 0
+
+
+@pytest.mark.parametrize("source,expected", [
+    ("USDA AMS cash trade", 3.0),
+    ("USDA border report", 3.0),
+    ("Beef Magazine", 2.0),
+    ("Meatingplace", 2.0),
+    ("Reuters", 1.0),
+    ("Politico", 1.0),
+    ("Some Local Paper Nobody Has Seen", 1.0),
+])
+def test_sources_are_weighted_by_how_much_they_know(source, expected):
+    assert chart.source_weight(source) == expected
+
+
+def test_one_usda_line_outranks_a_lone_general_newsroom():
+    """Same content, different desks: USDA's cattle-specific report wins."""
+    same = "Mexican cattle and steer calves at the border"
+    usda = chart.pick(ISSUE, "", [{"source": "USDA border report", "title": same},
+                                  {"source": "Reuters", "title": "Crude oil and OPEC energy"}])
+    assert usda[0]["key"] == "feeders"
+
+
+def test_an_empty_candidate_list_falls_through():
+    entry, reason = chart.pick(ISSUE, "", [], {"crude": 0.02})
+    assert "biggest mover" in reason
+
+
+def test_the_candidate_tier_can_never_trigger_a_fetch():
+    """
+    Several HTTP calls behind every build, for a chart choice, would be a bad
+    trade. The list is passed in only when the caller already has it.
+    """
+    # The IMPORT, not the word -- "headlines" appears all over the prose here.
+    src = (REPO / "letter" / "chart.py").read_text(encoding="utf-8")
+    assert not re.search(r"^\s*(from \.? ?import|import)\s+.*headlines", src, re.M)
+    assert not re.search(r"^\s*from \. import .*headlines", src, re.M)
+
+    # build.py takes the list as an argument and never goes and gets one.
+    build = (REPO / "letter" / "build.py").read_text(encoding="utf-8")
+    assert "candidates: list = None" in build
+    assert "headlines.candidates(" not in build
+
+
 def test_no_text_falls_to_the_biggest_mover():
-    entry, reason = chart.pick(ISSUE, "", {"live": 0.001, "corn": -0.030, "sp": 0.004})
+    entry, reason = chart.pick(ISSUE, "", None, {"live": 0.001, "corn": -0.030, "sp": 0.004})
     assert entry["key"] == "corn" and "biggest mover" in reason
 
 
 def test_movers_are_compared_as_fractions_not_points():
     """40 S&P points is a smaller day than 8 cents of corn; only the ratio knows."""
-    entry, _ = chart.pick(ISSUE, "", {"sp": 40 / 7772.5, "corn": 8 / 529.0})
+    entry, _ = chart.pick(ISSUE, "", None, {"sp": 40 / 7772.5, "corn": 8 / 529.0})
     assert entry["key"] == "corn"
 
 
 def test_nothing_to_go_on_falls_to_a_rotation():
-    entry, reason = chart.pick(ISSUE, "", {})
+    entry, reason = chart.pick(ISSUE, "", None, {})
     assert reason == "rotation" and entry in chart.config.CHART_POOL
 
 

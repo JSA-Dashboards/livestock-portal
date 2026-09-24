@@ -429,9 +429,13 @@ if kind == "am":
         _forced = st.selectbox("Chart of the day", _choices, index=0,
                                help="Auto reads your headlines first, then the "
                                     "biggest mover, then a rotation.")
+    # Whatever "Fetch headlines" already pulled, if anything. Never fetched for
+    # the chart's sake -- press the button and the chart aims itself at the
+    # day's news; do not and it falls through to the biggest mover.
+    _cands = (st.session_state.get("wcr_heads") or {}).get("items") or None
     ctx_for_render["chart"] = letter_build.build_chart(
         ctx_for_render, issue, os.environ.get("MASSIVE_API_KEY", "").strip(), [],
-        forced="" if _forced == "Auto" else _forced)
+        forced="" if _forced == "Auto" else _forced, candidates=_cands)
     with k2:
         _c = ctx_for_render.get("chart") or {}
         st.caption(f"**{_c.get('title', 'no chart')}** — {_c.get('reason', 'unavailable')}"

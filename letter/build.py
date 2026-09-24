@@ -461,7 +461,7 @@ def chart_movers(ctx: dict) -> dict:
 
 
 def build_chart(ctx: dict, issue: date, api_key: str, errors: list,
-                forced: str = "") -> dict:
+                forced: str = "", candidates: list = None) -> dict:
     """
     Choose the morning's chart and fetch its series.
 
@@ -474,7 +474,10 @@ def build_chart(ctx: dict, issue: date, api_key: str, errors: list,
         return {}
     text = " ".join(" ".join(v) for v in (ctx.get("commentary") or {}).values()
                     if isinstance(v, list))
-    entry, why = chart.pick(issue, text, chart_movers(ctx))
+    # candidates are passed in ONLY when the caller already has them -- the panel
+    # on the authoring page. Fetching them here would put several HTTP calls
+    # behind every build for a chart choice. See chart.pick.
+    entry, why = chart.pick(issue, text, candidates, chart_movers(ctx))
     if forced:
         entry = next((e for e in config.CHART_POOL if e["key"] == forced), entry)
         why = "chosen by hand"
