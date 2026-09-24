@@ -365,19 +365,24 @@ def test_the_recap_is_the_light_letter():
     two, and no Fundamental Rundown -- those are what make Tuesday heavy.
     """
     keys = [k for k, _ in commentary.sections_for("recap")]
-    assert keys == ["headlines", "market_action", "technicals"]
+    assert keys == ["headlines", "market_action", "technicals", "comments"]
     assert "fundamental" not in keys
     assert "technicals_lc" not in keys and "technicals_fc" not in keys
 
 
-def test_tuesday_and_friday_are_untouched_by_it():
-    """Ross asked for these two to stay exactly as they were."""
+def test_the_recap_did_not_disturb_the_other_two():
+    """
+    Ross asked for the full letter and the week-in-review to keep their own
+    sections when the recap was added. Comments arrived later and deliberately
+    went on ALL THREE, so it is expected here -- everything before it is what
+    those two letters have always had.
+    """
     tue = [k for k, _ in commentary.sections_for("tuesday")]
     fri = [k for k, _ in commentary.sections_for("friday")]
     assert tue == ["headlines", "market_action", "technicals_lc",
-                   "technicals_fc", "fundamental"]
+                   "technicals_fc", "fundamental", "comments"]
     assert fri == ["key_headlines", "technicals_lc", "technicals_fc",
-                   "cash_recap", "cof_note"]
+                   "cash_recap", "cof_note", "comments"]
 
 
 def test_the_recap_prints_one_technicals_read_not_two():
@@ -932,3 +937,60 @@ def test_friday_fetches_the_week_not_the_day():
     friday = friday[:friday.index("return ctx")]
     assert "fetch_regional_cash_wtd" in friday
     assert "fetch_regional_cash(issue)" not in friday
+
+
+# -- Comments ------------------------------------------------------------------
+
+@pytest.mark.parametrize("kind", ["tuesday", "recap", "friday"])
+def test_every_evening_letter_has_comments_last(kind):
+    """
+    Ross's catch-all, added 2026-09-24: whatever the named sections do not
+    cover. Last in the list, because the list is the order they render in.
+    """
+    keys = [k for k, _ in commentary.sections_for(kind)]
+    assert keys[-1] == "comments", keys
+
+
+def test_the_morning_brief_does_not_get_comments():
+    """
+    One page and under three minutes is the brief's whole budget, and a
+    free-text catch-all is the easiest way to spend it.
+    """
+    assert "comments" not in dict(commentary.sections_for("am"))
+
+
+@pytest.mark.parametrize("kind", ["tuesday", "recap", "friday"])
+def test_comments_render_above_the_sign_off(kind):
+    """
+    "Below the cattle market rundown and above Have a good evening." The three
+    formats end with different blocks -- Friday's rundown sits mid-letter -- so
+    the position that means the same thing in all three is last before the
+    sign-off.
+    """
+    ctx = _cash_ctx(kind)
+    ctx["commentary"] = {"headlines": ["x"], "market_action": ["x"], "technicals": ["x"],
+                         "technicals_lc": ["x"], "technicals_fc": ["x"],
+                         "fundamental": ["x"], "key_headlines": ["x"], "cash_recap": ["x"],
+                         "comments": ["Feedlots are current."]}
+    html = render.build_html(ctx)
+    assert "<h2>Comments</h2>" in html
+    assert html.index("<h2>Comments</h2>") < html.index('class="signoff"')
+    # nothing else comes between it and the sign-off
+    assert "<h2>" not in html[html.index("<h2>Comments</h2>") + 20:html.index('class="signoff"')]
+
+
+def test_on_the_recap_comments_sit_directly_under_the_rundown():
+    """Which is how Ross described the position."""
+    ctx = _cash_ctx("recap")
+    ctx["commentary"] = {"headlines": ["x"], "market_action": ["x"],
+                         "technicals": ["x"], "comments": ["Feedlots are current."]}
+    import re as _re
+    heads = _re.findall(r"<h2>(.*?)</h2>", render.build_html(ctx))
+    assert heads[-2:] == ["Cattle market rundown:", "Comments"]
+
+
+def test_empty_comments_print_no_heading():
+    """Same rule as every other section: blank means absent, not empty."""
+    ctx = _cash_ctx("recap")
+    ctx["commentary"] = {"market_action": ["x"], "comments": []}
+    assert "Comments" not in render.build_html(ctx)

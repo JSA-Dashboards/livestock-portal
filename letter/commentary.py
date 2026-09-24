@@ -39,6 +39,15 @@ SECTIONS_BY_KIND = {
         ("technicals_lc", "Technicals: Live Cattle"),
         ("technicals_fc", "Technicals: Feeder Cattle"),
         ("fundamental", "Fundamental Rundown"),
+        # LAST, and on every evening letter. Ross's catch-all: whatever the
+        # named sections do not cover. Placed above the sign-off rather than
+        # below the rundown literally, because the three formats end with
+        # different blocks -- Friday's rundown sits mid-letter -- and "the last
+        # thing before Have a good evening" is the same position in all three.
+        #
+        # NOT on the morning brief: that is one page and under three minutes,
+        # and a free-text catch-all is the easiest way to lose the budget.
+        ("comments", "Comments"),
     ],
     # The morning brief has ONE written section. Everything else on the page is
     # fetched, and the whole thing is meant to be read in under three minutes --
@@ -65,6 +74,15 @@ SECTIONS_BY_KIND = {
         ("headlines", "Headlines"),
         ("market_action", "Market Action"),
         ("technicals", "Technicals"),
+        # LAST, and on every evening letter. Ross's catch-all: whatever the
+        # named sections do not cover. Placed above the sign-off rather than
+        # below the rundown literally, because the three formats end with
+        # different blocks -- Friday's rundown sits mid-letter -- and "the last
+        # thing before Have a good evening" is the same position in all three.
+        #
+        # NOT on the morning brief: that is one page and under three minutes,
+        # and a free-text catch-all is the easiest way to lose the budget.
+        ("comments", "Comments"),
     ],
     "friday": [
         ("key_headlines", "Key Headlines"),
@@ -72,6 +90,15 @@ SECTIONS_BY_KIND = {
         ("technicals_fc", "Technicals: Feeder Cattle"),
         ("cash_recap", "Cash Trade Recap"),
         ("cof_note", "Cattle on Feed Commentary"),
+        # LAST, and on every evening letter. Ross's catch-all: whatever the
+        # named sections do not cover. Placed above the sign-off rather than
+        # below the rundown literally, because the three formats end with
+        # different blocks -- Friday's rundown sits mid-letter -- and "the last
+        # thing before Have a good evening" is the same position in all three.
+        #
+        # NOT on the morning brief: that is one page and under three minutes,
+        # and a free-text catch-all is the easiest way to lose the budget.
+        ("comments", "Comments"),
     ],
 }
 

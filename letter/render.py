@@ -886,6 +886,12 @@ def build_html(ctx: dict) -> str:
         if kind != "recap" and c.get("fundamental"):
             body.append("<h2>Fundamental Rundown</h2>" + _commentary(c["fundamental"]))
 
+    # COMMENTS, LAST. The catch-all for anything the named sections do not
+    # cover, on every evening letter. The morning brief never reaches this line
+    # -- it returned above -- which is deliberate: see commentary.py.
+    if c.get("comments"):
+        body.append("<h2>Comments</h2>" + _commentary(c["comments"]))
+
     body.append(f'<p class="signoff">{_esc(sign_off)}</p>')
     # THE RECAP'S SIGNATURE DOES NOT TAKE ITS OWN PAGE. Tuesday and Friday put
     # it on a sheet of its own and keep doing so -- they are the long letters and
