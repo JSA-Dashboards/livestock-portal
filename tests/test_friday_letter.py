@@ -15,7 +15,7 @@ from datetime import date
 
 import pytest
 
-from letter import cof, commentary, render, sources
+from letter import cof, commentary, config, render, sources
 
 
 # -- CFTC ---------------------------------------------------------------------
@@ -546,6 +546,45 @@ def test_an_undated_contract_drops_the_label_rather_than_guessing():
     html = render.build_html(ctx)
     assert "<h2>Cattle Futures</h2>" in html
     assert "Settlement on" not in html
+
+
+def test_the_morning_brief_has_no_intro_line():
+    """
+    Removed 2026-09-24. "Morning report for 9/24/26:" sat directly under a
+    masthead reading "JSA AM Daily Cattle Report 9/24/26" -- the same two facts
+    twice, at the top of a brief whose budget is three minutes.
+    """
+    html = render.build_html(_am_ctx(
+        [{"month": "Oct", "settle": 220.5, "change_day": 1.0,
+          "settle_date": "2026-09-23"}], date(2026, 9, 24)))
+    assert "JSA AM Daily Cattle Report 9/24/26" in html
+    assert "Morning report for" not in html
+    # Not an empty paragraph either -- the element is absent.
+    assert 'class="intro"' not in html
+
+
+@pytest.mark.parametrize("kind,expected", [
+    # _pm_ctx issues on 9/23; the point is the wording, not the date.
+    ("tuesday", "For the week through the close on 9/23/26:"),
+    ("friday", "For the week of 9/23/26:"),
+])
+def test_the_evening_intros_stay(kind, expected):
+    """
+    They are not redundant: they name the PERIOD the letter covers, which the
+    masthead does not. Only the morning one restated its own heading.
+    """
+    html = render.build_html(_pm_ctx({"market_action": ["x"], "key_headlines": ["x"]},
+                                     kind=kind))
+    assert expected in html
+
+
+def test_an_intro_renders_again_if_one_is_put_back(monkeypatch):
+    """The line is gone by configuration, not by deletion."""
+    monkeypatch.setattr(config, "INTRO_AM", "Morning report for {stamp}:")
+    html = render.build_html(_am_ctx(
+        [{"month": "Oct", "settle": 220.5, "change_day": 1.0,
+          "settle_date": "2026-09-23"}], date(2026, 9, 24)))
+    assert "Morning report for 9/24/26:" in html
 
 
 def test_headlines_never_reach_the_letter():

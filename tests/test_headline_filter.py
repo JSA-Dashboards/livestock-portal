@@ -130,6 +130,68 @@ def test_an_empty_but_real_feed_is_not_an_error(monkeypatch):
     assert headlines.fetch_packer_news() == []
 
 
+# -- Reuters / Politico / WSJ / NYT -------------------------------------------
+# Added 2026-09-24. These four have no cattle desk, so the subject filter has to
+# be stricter than the one an ag feed needs. Every case below is a real result
+# from the live query.
+
+NEWSROOM_PASS = [
+    "Trump officials weigh rolling back beef import plan as GOP midterm panic spreads",
+    "US eases screwworm ban on Mexican cattle, but beef prices unlikely to budge",
+    "Brazil to use Uruguay's surplus of beef export quota to China, Lula says",
+    "Tyson Foods Reports Higher Profit as Sales Tick Up",
+    "Ranchers press Congress over cattle imports",
+]
+
+NEWSROOM_REJECT = [
+    # Bare "beef" is slang. This one passes the ordinary feed filter, which is
+    # the whole reason _NEWSROOM exists.
+    "Seahawks' Mike Macdonald, Broncos' Sean Payton squash beef after 'Cold War' video",
+    # Bare "export" carries a cattle story in a farm feed and nothing here.
+    "China's clean tech exports avoided more CO2 than UK emitted last year",
+    "The NYC Marathon Route Is Changing. Here's What's Different.",
+    "We Put 8 Vegetarian Sandwiches Head-to-Head",
+    "POLITICO barred from White House after court ruling restoring access",
+    "Venezuela's Rodriguez promises elections in transition to 'full democracy'",
+]
+
+
+@pytest.mark.parametrize("title", NEWSROOM_PASS)
+def test_newsroom_filter_accepts(title):
+    assert headlines._NEWSROOM.search(title), f"dropped a cattle story: {title}"
+
+
+@pytest.mark.parametrize("title", NEWSROOM_REJECT)
+def test_newsroom_filter_rejects(title):
+    assert not headlines._NEWSROOM.search(title), f"let noise through: {title}"
+
+
+def test_the_loose_filter_would_have_let_the_sports_beef_through():
+    """Pins WHY there are two filters, so nobody collapses them back into one."""
+    sports = NEWSROOM_REJECT[0]
+    assert headlines._RELEVANT.search(sports)          # the ag-feed filter passes it
+    assert not headlines._NEWSROOM.search(sports)      # the newsroom filter does not
+
+
+def test_a_ticker_page_is_not_a_story():
+    """
+    Matches every content test there is and is the publisher's quote widget.
+    Turns up on every run of the WSJ query.
+    """
+    assert headlines._NOT_A_STORY.search("Tyson Foods Inc. Cl A (TSN) Stock Price Today")
+    assert not headlines._NOT_A_STORY.search("Tyson Foods Reports Higher Profit as Sales Tick Up")
+
+
+def test_all_four_newsrooms_are_in_the_query():
+    for site in ("reuters.com", "politico.com", "wsj.com", "nytimes.com"):
+        assert f"site:{site}" in headlines.GENERAL_NEWS_QUERY
+
+
+def test_the_newsroom_search_is_one_request():
+    """Four separate searches would be four round trips on a button Ross waits on."""
+    assert headlines.GENERAL_NEWS_QUERY.count("site:") == len(headlines.GENERAL_NEWS_SITES)
+
+
 def test_the_pick_list_never_writes_to_a_checkbox_key():
     """
     The Add button crashed the page on its first real use, 2026-09-24:

@@ -81,7 +81,16 @@ SIGN_OFF_TUESDAY = "Have a good evening,"
 # -- but they have survived several rounds of review without comment, so treat
 # them as accepted rather than pending. One edit each to change.
 SIGN_OFF_AM = "Have a good day,"
-INTRO_AM = "Morning report for {stamp}:"
+# EMPTY ON PURPOSE, 2026-09-24. This read "Morning report for {stamp}:" directly
+# under a masthead reading "JSA AM Daily Cattle Report 9/24/26" -- the same two
+# facts twice, at the top of a brief whose whole budget is three minutes.
+#
+# The evening intros are NOT redundant and stay: "For the week through the close
+# on 9/24/26" names the PERIOD the letter covers, which its masthead does not.
+# The morning brief covers one morning, and the masthead already said which.
+#
+# Put a string back here and it renders again; the renderer skips it when empty.
+INTRO_AM = ""
 SIGN_OFF_FRIDAY = "Have a good weekend,"
 
 # Verbatim from the 9/18/26 PDF. Reproduced exactly -- this is the compliance

@@ -163,9 +163,44 @@ PACKER_QUERIES = [
 ]
 
 
-def fetch_packer_news(limit: int = 10, max_age_h: int = MAX_AGE_HOURS) -> list:
+# GENERAL-INTEREST NEWSROOMS, added 2026-09-24 at Ross's request. These four
+# do not run a cattle desk, and when they do write about cattle it is because
+# something happened that the trade press will cover a day later -- an import
+# rule, a tariff, a screwworm ban, a packer's earnings. Worth having; worth
+# filtering hard.
+GENERAL_NEWS_SITES = ["reuters.com", "politico.com", "wsj.com", "nytimes.com"]
+
+# GOOGLE APPLIES THE TOPIC TERMS LOOSELY WHEN A site: FILTER IS PRESENT. A live
+# run of this exact query returned 100 items, of which 95 were NYT Cooking, the
+# NYC Marathon and Venezuelan politics. The query narrows the SOURCE; the strict
+# filter below is what narrows the subject, and it is doing almost all the work.
+GENERAL_NEWS_QUERY = ("(cattle OR beef OR meatpacking OR feedlot OR rancher) ("
+                      + " OR ".join(f"site:{s}" for s in GENERAL_NEWS_SITES) + ")")
+
+# A TIGHTER TEST THAN _RELEVANT, because general news breaks that one in ways an
+# ag feed never does. Both of these were real results:
+#
+#   "Seahawks' Mike Macdonald, Broncos' Sean Payton squash beef"  -- bare "beef"
+#   "China's clean tech exports avoided more CO2 than the UK"     -- bare "export"
+#
+# So "beef" only counts next to an industry word, and the trade words that carry
+# a cattle story in a farm feed carry nothing on their own here.
+_NEWSROOM = re.compile(
+    r"\b(cattle|feedlot|feedyard|ranchers?|meat.?packing|screwworm|cow herd|"
+    r"packing plant|tyson foods|jbs|cargill|national beef|"
+    r"beef\s+(?:price|prices|import|imports|export|exports|industry|producers?|"
+    r"supply|market|quota|tariffs?|packers?|plant|herd|cow|cattle))\b", re.I)
+
+# Not stories. A ticker page matches every content test there is -- "Tyson Foods
+# Inc. Cl A (TSN) Stock Price Today" is the publisher's quote widget, not
+# reporting, and it turns up every single run.
+_NOT_A_STORY = re.compile(r"stock price today|\bstock quote\b|share price|price quote", re.I)
+
+
+def _google_news(label: str, query: str, relevant, limit: int,
+                 max_age_h: int, seen: set) -> list:
     """
-    Beef packer and plant news from a Google News search.
+    One Google News search. Returns items and error rows, never raises.
 
     Titles arrive as "Headline - Publisher" with the publisher also in its own
     <source> tag, so the suffix is stripped and the publisher becomes the
@@ -175,76 +210,94 @@ def fetch_packer_news(limit: int = 10, max_age_h: int = MAX_AGE_HOURS) -> list:
     Links are Google's redirect URLs rather than the publisher's. They open
     fine; they are just ugly, and there is no way to ask this feed for the real
     one without following each redirect.
+
+    `relevant` is passed in because the packer search and the newsroom search
+    need different tests -- see _NEWSROOM.
     """
-    out, seen = [], set()
+    out = []
     # `when:` takes whole days, and rounding DOWN would cut the window short.
     days = max(1, -(-int(max_age_h) // 24))
+    try:
+        r = sources._session().get(
+            GOOGLE_NEWS, timeout=20, headers=_UA,
+            params={"q": f"{query} when:{days}d", "hl": "en-US",
+                    "gl": "US", "ceid": "US:en"})
+        if r.status_code != 200:
+            return [{"source": f"Google News ({label})", "error": f"HTTP {r.status_code}"}]
+        body = r.text
+    except Exception as e:
+        return [{"source": f"Google News ({label})", "error": f"{type(e).__name__}"}]
 
-    for label, query in PACKER_QUERIES:
-        try:
-            r = sources._session().get(
-                GOOGLE_NEWS, timeout=20, headers=_UA,
-                params={"q": f"{query} when:{days}d", "hl": "en-US",
-                        "gl": "US", "ceid": "US:en"})
-            if r.status_code != 200:
-                out.append({"source": f"Google News ({label})",
-                            "error": f"HTTP {r.status_code}"})
-                continue
-            body = r.text
-        except Exception as e:
-            out.append({"source": f"Google News ({label})", "error": f"{type(e).__name__}"})
+    # A 200 THAT IS NOT A FEED IS THE FAILURE THAT MATTERS. Google answers a
+    # datacenter IP with a consent interstitial or a sorry page -- status 200,
+    # no <item> in it -- and the panel would then show one fewer source and say
+    # nothing, which is exactly the quiet failure this module's docstring warns
+    # about.
+    #
+    # Zero PARSED items is different and not an error: the queries are narrow,
+    # and a morning with no packer news is a real morning.
+    blocks = re.findall(r"<item>(.*?)</item>", body, re.S | re.I)
+    if not blocks:
+        return [{"source": f"Google News ({label})",
+                 "error": "answered 200 but sent no feed "
+                          "-- blocked, rate-limited or asking for consent"}]
+
+    kept = 0
+    for block in blocks[:100]:
+        title = _clean((re.search(r"<title[^>]*>(.*?)</title>", block, re.S) or [None, ""])[1])
+        pub = _clean((re.search(r"<source[^>]*>(.*?)</source>", block, re.S) or [None, ""])[1])
+        # Only strip the suffix when it really is the publisher's name -- plenty
+        # of headlines contain " - " of their own.
+        if pub and title.endswith(f" - {pub}"):
+            title = title[: -(len(pub) + 3)].strip()
+        if not title or not relevant.search(title) or _NOT_A_STORY.search(title):
+            continue
+        key = re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
+        if key in seen:
             continue
 
-        # A 200 THAT IS NOT A FEED IS THE FAILURE THAT MATTERS. Google answers a
-        # datacenter IP with a consent interstitial or a sorry page -- status
-        # 200, no <item> in it -- and the panel would then show one fewer source
-        # and say nothing, which is exactly the quiet failure this module's
-        # docstring warns about and exactly what it did on the deployed app.
-        #
-        # Zero PARSED items is different and not an error: the queries are
-        # narrow, and a morning with no packer news is a real morning.
-        blocks = re.findall(r"<item>(.*?)</item>", body, re.S | re.I)
-        if not blocks:
-            out.append({"source": f"Google News ({label})",
-                        "error": "answered 200 but sent no feed "
-                                 "-- blocked, rate-limited or asking for consent"})
+        raw_date = _clean((re.search(r"<pubDate[^>]*>(.*?)</pubDate>", block, re.S)
+                           or [None, ""])[1])
+        when = None
+        if raw_date:
+            try:
+                when = parsedate_to_datetime(raw_date)
+            except (TypeError, ValueError):
+                when = None
+        age = (round((datetime.now(timezone.utc) - when).total_seconds() / 3600, 1)
+               if when and when.tzinfo else None)
+        if age is not None and age > max_age_h:
             continue
 
-        kept = 0
-        for block in blocks[:60]:
-            title = _clean((re.search(r"<title[^>]*>(.*?)</title>", block, re.S) or [None, ""])[1])
-            pub = _clean((re.search(r"<source[^>]*>(.*?)</source>", block, re.S) or [None, ""])[1])
-            # Only strip the suffix when it really is the publisher's name --
-            # plenty of headlines contain " - " of their own.
-            if pub and title.endswith(f" - {pub}"):
-                title = title[: -(len(pub) + 3)].strip()
-            if not title or not _RELEVANT.search(title):
-                continue
-            key = re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
-            if key in seen:
-                continue
-
-            raw_date = _clean((re.search(r"<pubDate[^>]*>(.*?)</pubDate>", block, re.S)
-                               or [None, ""])[1])
-            when = None
-            if raw_date:
-                try:
-                    when = parsedate_to_datetime(raw_date)
-                except (TypeError, ValueError):
-                    when = None
-            age = (round((datetime.now(timezone.utc) - when).total_seconds() / 3600, 1)
-                   if when and when.tzinfo else None)
-            if age is not None and age > max_age_h:
-                continue
-
-            seen.add(key)
-            link = _clean((re.search(r"<link[^>]*>(.*?)</link>", block, re.S) or [None, ""])[1])
-            out.append({"source": pub or "Google News", "title": title, "link": link,
-                        "when": when.isoformat() if when else None, "age_h": age})
-            kept += 1
-            if kept >= limit:
-                break
+        seen.add(key)
+        link = _clean((re.search(r"<link[^>]*>(.*?)</link>", block, re.S) or [None, ""])[1])
+        out.append({"source": pub or "Google News", "title": title, "link": link,
+                    "when": when.isoformat() if when else None, "age_h": age})
+        kept += 1
+        if kept >= limit:
+            break
     return out
+
+
+def fetch_packer_news(limit: int = 10, max_age_h: int = MAX_AGE_HOURS) -> list:
+    """Beef packer and plant news, from the trade and the local newsrooms."""
+    out, seen = [], set()
+    for label, query in PACKER_QUERIES:
+        out.extend(_google_news(label, query, _RELEVANT, limit, max_age_h, seen))
+    return out
+
+
+def fetch_general_news(limit: int = 8, max_age_h: int = MAX_AGE_HOURS) -> list:
+    """
+    Cattle stories from Reuters, Politico, the WSJ and the NYT.
+
+    ONE REQUEST FOR ALL FOUR, because Google's site: filter takes an OR list and
+    four separate searches would be four round trips on a button Ross is waiting
+    on. The cost is that the per-source cap is shared; with a filter this strict
+    that has never been the binding constraint.
+    """
+    return _google_news("newsrooms", GENERAL_NEWS_QUERY, _NEWSROOM,
+                        limit, max_age_h, set())
 
 
 def fetch_usda_narratives(as_of: date = None) -> list:
@@ -350,6 +403,11 @@ def candidates(as_of: date = None, limit_per_feed: int = 12,
     # docstring for the miss that put it here.
     if include_packers:
         for row in fetch_packer_news(max_age_h=max_age_h):
+            (errors if row.get("error") else items).append(row)
+        # Reuters / Politico / WSJ / NYT. Last of the fetched sources because
+        # when these four write about cattle it is policy and trade -- context
+        # for the letter rather than the day's market news.
+        for row in fetch_general_news(max_age_h=max_age_h):
             (errors if row.get("error") else items).append(row)
 
     # The paid digests, read from Ross's own mailbox -- see letter/mailbox.py

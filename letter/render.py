@@ -664,9 +664,13 @@ def build_html(ctx: dict) -> str:
         intro = f"For the week through the close on {stamp}:"
         sign_off = config.SIGN_OFF_TUESDAY
 
-    body = [
-        f'<div class="masthead">{_esc(title)} {stamp}</div>',
-        f'<p class="intro">{_esc(intro)}</p>',
+    # An empty intro renders nothing rather than an empty paragraph -- see
+    # config.INTRO_AM, which is blank because the masthead already said it.
+    head = [f'<div class="masthead">{_esc(title)} {stamp}</div>']
+    if intro:
+        head.append(f'<p class="intro">{_esc(intro)}</p>')
+
+    body = head + [
         futures_block("Live Cattle", ctx["live_cattle"], ctx["change_basis"]),
         futures_block("Feeder Cattle", ctx["feeder_cattle"], ctx["change_basis"]),
     ]
@@ -683,7 +687,7 @@ def build_html(ctx: dict) -> str:
     # One page, under three minutes, and that budget is the product -- a section
     # added here has to earn its place against the reading time, not just fit.
     if kind == "am":
-        body = [body[0], body[1]]          # masthead and intro only
+        body = list(head)                  # masthead, and the intro if there is one
         body.extend(am_blocks(ctx, c))
         body.append(f'<p class="signoff">{_esc(sign_off)}</p>')
         body.append(_signature_html(issue, own_page=False))
