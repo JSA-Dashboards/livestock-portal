@@ -48,6 +48,15 @@ _ALLOWED_SECRETS = (
     "USE_SNOWFLAKE", "SNOWFLAKE_ACCOUNT", "SNOWFLAKE_USER", "SNOWFLAKE_PASSWORD",
     "SNOWFLAKE_ROLE", "SNOWFLAKE_WAREHOUSE", "SNOWFLAKE_DATABASE",
     "SNOWFLAKE_PRIVATE_KEY_PATH", "SNOWFLAKE_PRIVATE_KEY", "SNOWFLAKE_PRIVATE_KEY_PWD",
+    # Graph, for the four subscription digests in the headline panel. NOT
+    # credentials -- a public client's client id and a tenant id are both public
+    # identifiers, sent in plaintext on every auth request. The credential is the
+    # token MSAL caches after device-code sign-in, and that never leaves the
+    # machine that signed in.
+    #
+    # They are here rather than committed as config because this repo is public,
+    # and a tenant id in a public repo names the organisation. Cheap to keep out.
+    "GRAPH_CLIENT_ID", "GRAPH_TENANT_ID",
 )
 for _name in _ALLOWED_SECRETS:
     try:
