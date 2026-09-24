@@ -213,7 +213,86 @@ fails *quietly*, which is the only failure mode that matters here.
 Validated against the letters actually sent on 9/15, 9/18 and 9/22: every
 automated figure reproduces exactly.
 
-### In flight as of 2026-09-23
+**All three formats now open on headlines.** The standard PM letter gained a
+Headlines section on 2026-09-23, ahead of Market Action, the way Friday leads
+with Key Headlines and the morning brief leads with Headlines. It shares the
+`headlines` key with the AM brief deliberately — same meaning, separate draft
+files. Friday stays either/or: Key Headlines replaced Market Action there and
+did not join it.
+
+The candidate panel is derived from the format's own section list, not from
+`kind`, so adding a headline section to a fourth format needs no change in
+`apps/weekly_reports/app.py`. Its sources are the AMS and border narratives,
+Beef Magazine, two Google News searches for the packers and for plant
+disruption, one more scoped to Reuters/Politico/WSJ/NYT, and — when the mailbox
+is connected — four paid digests. Nothing auto-inserts, on any format.
+
+The AM brief has **no intro line**: `config.INTRO_AM` is empty because the
+masthead already says "JSA AM Daily Cattle Report 9/24/26". The evening intros
+stay — they name the period the letter covers, which a masthead does not.
+
+### Numbers that are right in a way that looks wrong
+
+Three places where the obvious simplification is the bug that was just fixed.
+
+- **The AM report reads the last COMPLETED session, not the newest bar.**
+  `sources.fetch_futures(completed_only=True)`, passed by `gather()` for
+  `kind == "am"` only. The history's row for today exists from the moment the
+  session opens, so a brief rebuilt at 09:00 was taking a live price as a
+  settle and dating it today — `am_cattle_rows` promises yesterday's settle and
+  its move and was getting neither. Invisible for as long as the brief went out
+  at 07:30, when there is no bar for today and both readings agree. The evening
+  letter is written after the close and genuinely does want today's, so the two
+  formats differ on purpose. Do not unify them.
+- **Outside-market changes come from the settlement history, not the snapshot.**
+  Massive's `session.previous_settlement` was a whole session stale for crude on
+  2026-09-24: it reported 90.52 (Tuesday 09-22) when Wednesday settled 92.16, so
+  the brief printed Nov Crude +3.26 against a real +1.41. Corn and the S&P
+  agreed with the history that same morning, which is exactly why one instrument
+  in three was wrong with nothing on screen. `_prior_settle` takes the last
+  settle **strictly before** today — strictly, because the newest bar is today's
+  own in-progress session — and marks it rather than bridging a gap older than
+  `MAX_PRIOR_SETTLE_AGE_DAYS`. The snapshot's figure is still recorded so a
+  disagreement is visible after the fact.
+- **Two headline filters, and collapsing them re-breaks the panel.**
+  `_RELEVANT` is for ag feeds; `_NEWSROOM` is for Reuters/Politico/WSJ/NYT,
+  where "squash **beef** after Cold War video" and "China's clean tech
+  **exports**" both pass the looser one. A test pins the difference.
+
+### The `[[?]]` on the deployed app is not a bug
+
+The hand-entered prior-Friday settles live in `out/weekbase_<friday>.json`, and
+`out/` is gitignored **and** wiped by every Streamlit Cloud reboot. So the
+deployed authoring page shows "No prior-Friday settle for 6 contract(s)" and
+`[[?]]` in the futures block, always, and retyping them there lasts until the
+next reboot. On Ross's desktop the file is present and the block renders
+normally (`Oct: +4.60 at 220.525`). Same for `letter/data/settle_log.json`.
+
+This is only cosmetic because **the letter is built locally** — confirmed
+2026-09-24. If that ever stops being true, this becomes real and the fix is a
+tracked path, not a bigger warning.
+
+### Published letters are archived, and only when you say so
+
+`JSA-Dashboards/jsa-letter-archive` — **private**, cloned as a sibling of this
+checkout, written by `letter/archive.py`. Separate repo because this one is
+public and those are the letters clients pay for.
+
+    python -m letter.build --no-fetch --archive     # or "Archive as sent" on the page
+
+Never automatic: "published" means Ross emailed it, which no code can detect.
+Local-only — the deployed app has no clone and no push credentials and says so.
+Re-publishing a corrected letter overwrites the file and commits, so git history
+holds every version; nothing invents `-v2` names.
+
+**It starts at 2026-09-24 and earlier letters are not recoverable from disk.**
+Nothing kept them before that. The 9/15 and 9/22 renders are gone, and the 9/18
+file in `out/` was rebuilt on 9/23 — five days after it was sent — so it is not
+the published artifact either. Re-rendering is not archiving: rebuild the 9/23
+brief today and you get different futures, a settlement-date line that did not
+exist that morning, and no intro paragraph. Only Sent Items has the real ones.
+
+### In flight as of 2026-09-24
 
 - **Massive's futures history has no bars for 2026-09-14..09-18.** Not a fetch
   bug — the week is absent upstream. It leaves the PM moving averages marked
@@ -223,9 +302,10 @@ automated figure reproduces exactly.
   letter has been built on a Friday. Delete `letter/data/` and that restarts.
 - **Azure admin consent is pending** for the app registration "JSA Letter -
   email read" (delegated `Mail.Read`). Until it is granted, the headline
-  candidate panel runs on the AMS narratives and Beef Magazine, and the four
-  subscription digests show one line saying the mailbox is not connected.
-  Nothing else is blocked and no code change is needed when it lands.
+  candidate panel runs without the four subscription digests, which show one
+  line saying the mailbox is not connected. It now also blocks the one thing
+  that would back-fill the letters published before 2026-09-24 — Sent Items is
+  the only record of those. No code change is needed when it lands.
 - **The Sterling Profit Tracker carries the packer margin** the evening letter
   quotes by hand ("Sterling packer margins ... +138.80/hd versus +177.16/hd week
   before"). It arrives from `jnalivka@fmtc.com` and is already fetched for
