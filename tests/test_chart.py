@@ -173,6 +173,108 @@ def test_the_drawer_cannot_fetch():
     assert "sources" not in src
 
 
+# -- Which chart, and why ------------------------------------------------------
+
+ISSUE = date(2026, 9, 24)
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("Packers slow kills as the cutout slips", "live"),
+    ("Fed cattle trade develops in the north", "live"),
+    ("Feeder calves steady at the barns", "feeders"),
+    ("Screwworm ban eased on Mexican cattle", "feeders"),
+    ("Border reopens at Douglas", "feeders"),
+    ("Cost of gain keeps backgrounders sidelined", "corn"),
+    ("Crude spikes on OPEC headlines", "crude"),
+    ("Equities sell off on recession talk", "sp"),
+])
+def test_the_text_picks_the_chart(text, expected):
+    entry, reason = chart.pick(ISSUE, text)
+    assert entry["key"] == expected, f"{text!r} -> {entry['key']} ({reason})"
+    assert "matched" in reason
+
+
+def test_a_crop_harvest_is_not_a_kill_floor():
+    """
+    The miss that produced the weighting. "harvest" was in the Live Cattle words
+    for the packer sense, so "Corn basis firms as harvest rolls" tied three ways
+    on one hit each and the tie-break handed it to Live Cattle.
+    """
+    entry, _ = chart.pick(ISSUE, "Corn basis firms as harvest rolls")
+    assert entry["key"] == "corn"
+
+
+def test_a_phrase_outranks_a_bare_word():
+    """"cost of gain" says more about the morning than a stray "corn"."""
+    entry, _ = chart.pick(ISSUE, "corn cost of gain")
+    assert entry["key"] == "corn"
+    entry, _ = chart.pick(ISSUE, "fed cattle and a calf")
+    assert entry["key"] == "live"
+
+
+def test_no_text_falls_to_the_biggest_mover():
+    entry, reason = chart.pick(ISSUE, "", {"live": 0.001, "corn": -0.030, "sp": 0.004})
+    assert entry["key"] == "corn" and "biggest mover" in reason
+
+
+def test_movers_are_compared_as_fractions_not_points():
+    """40 S&P points is a smaller day than 8 cents of corn; only the ratio knows."""
+    entry, _ = chart.pick(ISSUE, "", {"sp": 40 / 7772.5, "corn": 8 / 529.0})
+    assert entry["key"] == "corn"
+
+
+def test_nothing_to_go_on_falls_to_a_rotation():
+    entry, reason = chart.pick(ISSUE, "", {})
+    assert reason == "rotation" and entry in chart.config.CHART_POOL
+
+
+def test_the_same_day_always_picks_the_same_chart():
+    """
+    NOT RANDOM AT RENDER TIME. The letter is built twice -- once to fetch, once
+    with --no-fetch to make the PDF -- so a genuinely random pick would put a
+    different chart in the PDF than the one that was previewed.
+    """
+    for _ in range(5):
+        assert chart.pick(ISSUE, "")[0]["key"] == chart.pick(ISSUE, "")[0]["key"]
+
+
+def test_each_cycle_shows_everything_once():
+    """
+    The guarantee is PER CYCLE, and a cycle is aligned to the ordinal, not to
+    whatever day you start counting from. An arbitrary five-day window can
+    straddle a boundary and legitimately repeat one chart at each end -- what it
+    can never do is repeat on consecutive days, which is the next test.
+    """
+    n = len(chart.config.CHART_POOL)
+    start = ISSUE
+    while start.toordinal() % n:            # step to a cycle boundary
+        start += timedelta(days=1)
+    for c in range(3):
+        cycle = [chart.pick(start + timedelta(days=c * n + i), "")[0]["key"]
+                 for i in range(n)]
+        assert len(set(cycle)) == n, f"cycle {c} repeated itself: {cycle}"
+
+
+def test_every_chart_comes_round_inside_a_fortnight():
+    """The point of the feature: a different chart, and all of them regularly."""
+    n = len(chart.config.CHART_POOL)
+    seen = {chart.pick(ISSUE + timedelta(days=i), "")[0]["key"] for i in range(14)}
+    assert len(seen) == n, f"only saw {sorted(seen)} in two weeks"
+
+
+def test_the_rotation_never_repeats_two_days_running():
+    days = [chart.pick(ISSUE + timedelta(days=i), "")[0]["key"] for i in range(40)]
+    assert all(a != b for a, b in zip(days, days[1:])), days
+
+
+def test_corn_is_written_in_eighths_like_the_bullets():
+    """529.25 on the chart beside 529'1 in the text would read as two numbers."""
+    dates, values = _series(20, 529.25)
+    svg = chart.line_chart(dates, values, "Dec Corn", style="eighths")
+    assert "'" in svg or ">529<" in svg
+    assert "529.25" not in svg
+
+
 # -- The real proof ------------------------------------------------------------
 
 @pytest.mark.skipif(not topdf.find_browser(), reason="no browser to render a PDF")

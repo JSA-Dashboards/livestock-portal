@@ -29,6 +29,8 @@ from __future__ import annotations
 
 from datetime import date
 
+from . import config
+
 # Sized to the empty band beside the signature, with room to spare. 96 user
 # units per inch, so the viewBox is also the size in CSS pixels.
 IN = 96
@@ -107,7 +109,92 @@ def _nice_bounds(lo: float, hi: float):
     return lo_r, hi_r, ticks
 
 
-def line_chart(dates: list, values: list, title: str = "",
+def pick(issue: date, text: str = "", movers: dict = None, pool: list = None) -> tuple:
+    """
+    Which chart this morning gets, and why. Returns (entry, reason).
+
+    THREE TIERS, IN ORDER OF HOW MUCH EACH ONE KNOWS:
+
+      1. What Ross wrote. If the headlines talk about corn, the chart is corn.
+         The human already said what the morning is about; nothing computed
+         beats that.
+      2. What actually moved. No keyword match means the letter is not steering,
+         so the most applicable chart is the market that did something -- scored
+         as a percentage so a 2-point corn move and a 40-point S&P move compare.
+      3. A rotation. Nothing typed and nothing fetched: fall back to a cycle that
+         shows every chart once before repeating, shuffled per cycle so it is not
+         a fixed weekly rota.
+
+    DETERMINISTIC, NEVER RANDOM AT RENDER TIME. A letter is built twice -- once
+    to fetch, once with --no-fetch to make the PDF -- and an actually-random pick
+    would put a different chart in the PDF than the one that was previewed. Same
+    date and same text always give the same chart.
+    """
+    pool = pool or config.CHART_POOL
+    order, pos = _rotation(issue, len(pool))
+
+    low = (text or "").lower()
+    if low:
+        # WEIGHTED BY SPECIFICITY. A hit on "cost of gain" says far more about
+        # what the letter is about than a hit on "corn", so a phrase scores its
+        # word count. Without this every single-word hit tied and the tie-break
+        # -- the rotation -- decided, which is how "Corn basis firms as harvest
+        # rolls" drew a Live Cattle chart.
+        scored = [(sum(low.count(w) * len(w.split()) for w in e["words"]),
+                   -order.index(i), e)
+                  for i, e in enumerate(pool)]
+        best = max(scored, key=lambda t: (t[0], t[1]))
+        if best[0] > 0:
+            hits = [w for w in best[2]["words"] if w in low]
+            return best[2], f"matched {', '.join(repr(w) for w in hits[:2])} in your text"
+
+    if movers:
+        ranked = [(abs(v), e) for e in pool
+                  for v in [movers.get(e["key"])] if v is not None]
+        if ranked:
+            top = max(ranked, key=lambda t: t[0])
+            return top[1], f"biggest mover ({top[0] * 100:.1f}%)"
+
+    return pool[order[pos]], "rotation"
+
+
+def _rotation(issue: date, n: int):
+    """
+    A deterministic cycle that shows every chart once before repeating.
+
+    A plain `ordinal % n` is a fixed rota -- with five charts, every Monday gets
+    the same one. Shuffling the order per cycle keeps the no-repeat property and
+    loses the pattern, and seeding on the cycle number keeps it reproducible.
+    """
+    import random
+    cycle, pos = divmod(issue.toordinal(), n)
+    order = list(range(n))
+    random.Random(cycle).shuffle(order)
+    # A chart landing last in one cycle and first in the next is the only way
+    # this repeats two days running. Cheap to avoid.
+    prev = list(range(n))
+    random.Random(cycle - 1).shuffle(prev)
+    if n > 1 and pos == 0 and order[0] == prev[-1]:
+        order[0], order[1] = order[1], order[0]
+    return order, pos
+
+
+def _fmt(v: float, style: str = "decimal") -> str:
+    """
+    The endpoint value, written the way the letter writes that market.
+
+    Corn is quoted in eighths in the bullets above -- 529'4 -- so a chart of the
+    same contract labelled 529.25 on the same page would look like a different
+    number. render.eighths is imported lazily because render imports this module
+    at load time, and duplicating the formatter would be one more copy to drift.
+    """
+    if style == "eighths":
+        from . import render
+        return render.eighths(v)
+    return f"{v:,.2f}"
+
+
+def line_chart(dates: list, values: list, title: str = "", style: str = "decimal",
                width_in: float = WIDTH_IN, height_in: float = HEIGHT_IN) -> str:
     """
     One series over time, as an <svg> string. Returns "" if there is nothing
@@ -171,7 +258,7 @@ def line_chart(dates: list, values: list, title: str = "",
                  f'stroke="#fff" stroke-width="2"/>')
     parts.append(f'<text x="{ex + 6:.1f}" y="{ey + 2.8:.1f}" font-size="8" '
                  f'fill="#111" font-weight="600" '
-                 f'style="font-variant-numeric:tabular-nums">{ev:,.2f}</text>')
+                 f'style="font-variant-numeric:tabular-nums">{_fmt(ev, style)}</text>')
 
     parts.append("</svg>")
     return "".join(parts)
@@ -187,7 +274,8 @@ def chart_block(chart: dict) -> str:
     """
     if not chart:
         return ""
-    svg = line_chart(chart.get("dates"), chart.get("values"), chart.get("title", ""))
+    svg = line_chart(chart.get("dates"), chart.get("values"),
+                     chart.get("title", ""), chart.get("style", "decimal"))
     if not svg:
         return ""
     return f'<div class="dayplot-wrap">{svg}</div>'

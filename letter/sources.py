@@ -808,7 +808,12 @@ def fetch_front_history(product_code: str, api_key: str, as_of: date,
     """
     try:
         api = _massive()
-        contracts = api.get_active_contract_tickers(product_code, api_key, as_of)[:1]
+        # front_contracts, NOT get_active_contract_tickers. The latter reads one
+        # page, and for CL that page is mostly spread and butterfly combos with
+        # the near months falling off the end -- on 2026-09-24 it answered CLF7
+        # where the front month was CLX6, five dollars away. Harmless for cattle
+        # and corn, wrong for crude, and the chart pool contains crude.
+        contracts = front_contracts(product_code, api_key, as_of, n=1)
         if not contracts:
             return {}
         ticker = contracts[0]["ticker"]

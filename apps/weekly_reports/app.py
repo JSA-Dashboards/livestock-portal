@@ -417,6 +417,26 @@ ctx_for_render["issue_date"] = issue
 ctx_for_render["kind"] = kind
 ctx_for_render["session"] = session
 ctx_for_render["commentary"] = sections
+
+# -- Chart of the day (morning brief only) ------------------------------------
+# Picked from what you just typed, then from what moved, then a rotation. Chosen
+# HERE rather than in the fetch, because `sections` is the live text in the
+# boxes -- edit a headline and the chart re-aims on the next rerun.
+if kind == "am":
+    _choices = ["Auto"] + [e["key"] for e in config.CHART_POOL]
+    k1, k2 = st.columns([1, 3])
+    with k1:
+        _forced = st.selectbox("Chart of the day", _choices, index=0,
+                               help="Auto reads your headlines first, then the "
+                                    "biggest mover, then a rotation.")
+    ctx_for_render["chart"] = letter_build.build_chart(
+        ctx_for_render, issue, os.environ.get("MASSIVE_API_KEY", "").strip(), [],
+        forced="" if _forced == "Auto" else _forced)
+    with k2:
+        _c = ctx_for_render.get("chart") or {}
+        st.caption(f"**{_c.get('title', 'no chart')}** — {_c.get('reason', 'unavailable')}"
+                   if _c else "No chart: no series came back for any market in the pool.")
+
 html = render.build_html(ctx_for_render)
 
 missing = html.count(render.MISSING)

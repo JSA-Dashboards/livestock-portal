@@ -35,8 +35,8 @@ import warnings
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from . import (archive, cof, commentary, config, render, settle_log, sources,
-               technicals, topdf)
+from . import (archive, chart, cof, commentary, config, render, settle_log,
+               sources, technicals, topdf)
 
 # snowflake_db passes a raw DBAPI connection to pd.read_sql, which pandas
 # warns about on every query. That is the shared module's choice, not this
@@ -149,13 +149,9 @@ def gather(issue: date, errors: list, kind: str = "tuesday", cof_guesses: dict =
             config.FEEDER_CATTLE_CODE, api_key, issue, config.N_CONTRACTS,
             completed_only=settled_only), errors) or []
 
-        # The chart of the day, morning brief only. Same series technicals
-        # already pulls, clipped the same way the AM settles are -- a chart
-        # ending on a half-finished bar would contradict the numbers beside it.
-        if kind == "am":
-            ctx["chart"] = _try("chart series", lambda: sources.fetch_front_history(
-                config.FEEDER_CATTLE_CODE, api_key, issue,
-                config.CHART_SESSIONS, completed_only=True), errors) or {}
+        # The chart of the day, morning brief only. Which market it shows is
+        # decided further down, once the commentary and the day's moves are
+        # known -- see build_chart().
 
         # Technicals run on the front contract of each -- the one the letter names.
         if ctx["live_cattle"]:
@@ -440,6 +436,65 @@ def hints(ctx: dict, kind: str = "tuesday") -> dict:
     return out
 
 
+def chart_movers(ctx: dict) -> dict:
+    """
+    {pool key: fractional move} for the day, so the picker can ask what actually
+    moved when the commentary is not steering.
+
+    AS A FRACTION OF PRICE, not in points. Corn moving 8 cents and the S&P
+    moving 40 are not comparable in points and are perfectly comparable as
+    percentages -- which is the only reason one number can rank five markets.
+    """
+    out = {}
+    for key, rows in (("live", ctx.get("live_cattle")), ("feeders", ctx.get("feeder_cattle"))):
+        for c in (rows or [])[:1]:
+            chg, px = c.get("change_day"), c.get("settle")
+            if chg is not None and px:
+                out[key] = float(chg) / float(px)
+    by_code = {"ZC": "corn", "ES": "sp", "CL": "crude"}
+    for m in ctx.get("outside") or []:
+        key = by_code.get(m.get("code"))
+        chg, px = m.get("change"), m.get("price")
+        if key and chg is not None and px:
+            out[key] = float(chg) / float(px)
+    return out
+
+
+def build_chart(ctx: dict, issue: date, api_key: str, errors: list,
+                forced: str = "") -> dict:
+    """
+    Choose the morning's chart and fetch its series.
+
+    Falls forward, not over: if the chosen market's history does not come back,
+    the next one in the rotation is tried rather than leaving a hole where a
+    chart was meant to be. A letter with the second-choice chart is better than
+    a letter with a gap, and neither is worth failing the build over.
+    """
+    if not api_key:
+        return {}
+    text = " ".join(" ".join(v) for v in (ctx.get("commentary") or {}).values()
+                    if isinstance(v, list))
+    entry, why = chart.pick(issue, text, chart_movers(ctx))
+    if forced:
+        entry = next((e for e in config.CHART_POOL if e["key"] == forced), entry)
+        why = "chosen by hand"
+
+    order = [entry] + [e for e in config.CHART_POOL if e["key"] != entry["key"]]
+    for candidate in order:
+        got = sources.fetch_front_history(candidate["code"], api_key, issue,
+                                          config.CHART_SESSIONS, completed_only=True)
+        if got:
+            if candidate is not entry:
+                why += f" (fell back from {entry['key']}: no series)"
+            return {"key": candidate["key"],
+                    "title": f"{got['month']} {candidate['label']} — {got['sessions']} sessions",
+                    "style": candidate["style"],
+                    "reason": why,
+                    "dates": got["dates"], "values": got["values"]}
+    errors.append("chart: no series available for any market in the pool")
+    return {}
+
+
 def _jsonable(o):
     if isinstance(o, (date, datetime)):
         return o.isoformat()
@@ -452,6 +507,9 @@ def main(argv=None) -> int:
     ap.add_argument("--no-fetch", action="store_true",
                     help="re-render from the last fetch -- use after editing commentary")
     ap.add_argument("--html-only", action="store_true", help="skip the PDF step")
+    ap.add_argument("--chart", default="",
+                    help="force the morning chart: feeders, live, corn, sp or crude. "
+                         "Default picks from what you wrote, then what moved.")
     ap.add_argument("--archive", action="store_true",
                     help="copy this letter into the private archive repo, commit and "
                          "push. Use it for the letter you actually sent, not a draft.")
@@ -561,6 +619,13 @@ def main(argv=None) -> int:
     existed = cpath.exists()
     commentary.write_template(cpath, hints(ctx, kind), kind)
     ctx["commentary"] = commentary.read(cpath, kind)
+
+    # AFTER the commentary is read, because the commentary is the best evidence
+    # of what the morning is about -- see chart.pick. Re-picked on a --no-fetch
+    # re-render too, so editing the headlines re-aims the chart.
+    if kind == "am":
+        ctx["chart"] = build_chart(ctx, issue, os.environ.get("MASSIVE_API_KEY", "").strip(),
+                                   errors, forced=getattr(args, "chart", "") or "")
 
     html = render.build_html(ctx)
     html_path = out_dir / f"{config.title_for(session)} {day.title()} {issue}.html"

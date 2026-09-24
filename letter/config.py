@@ -165,6 +165,46 @@ LIVE_CATTLE_CODE = "LE"
 FEEDER_CATTLE_CODE = "GF"
 N_CONTRACTS = 3
 
+# ── Chart of the day (morning brief) ─────────────────────────────────────────
+# Sessions on the bottom-right chart. 60 is about a quarter -- long enough to
+# show the trend the letter is describing, short enough that 3.1 inches of width
+# is still one readable line rather than a smear.
+CHART_SESSIONS = 60
+
+# The pool, and the words that make each one the RIGHT chart for a given
+# morning. A different chart every day was the ask; picking it from what the
+# letter is actually about is better than picking it at random, and costs one
+# scan of the text Ross already typed.
+#
+# WORDS ARE PHRASES WHERE THE BARE WORD IS AMBIGUOUS. "fed" is fed cattle here
+# and the Federal Reserve three lines down, so neither owns it -- "fed cattle"
+# and "federal reserve" do. "basis" belongs to feeders because that is the basis
+# this letter quotes. Getting this wrong costs a slightly-off chart, not a wrong
+# number, which is why it is allowed to be a heuristic at all.
+CHART_POOL = [
+    {"key": "feeders", "label": "Feeder Cattle", "code": FEEDER_CATTLE_CODE,
+     "style": "decimal",
+     "words": ("feeder", "calf", "calves", "stocker", "basis", "placement",
+               "grazing", "wheat pasture", "feeder index",
+               # The border story IS a feeder story -- Mexican cattle crossing
+               # at Douglas are feeders, which is why the portal has a whole
+               # dashboard for it. "import" is left out on purpose: beef imports
+               # belong to the fed cattle side.
+               "mexic", "screwworm", "border")},
+    {"key": "live", "label": "Live Cattle", "code": LIVE_CATTLE_CODE,
+     "style": "decimal",
+     "words": ("fed cattle", "live cattle", "fat cattle", "packer", "slaughter",
+               "cutout", "boxed", "carcass", "kill floor")},
+    {"key": "corn", "label": "Corn", "code": "ZC", "style": "eighths",
+     "words": ("corn", "feed cost", "ration", "cost of gain", "grain", "bushel",
+               "harvest", "new crop", "yield")},
+    {"key": "sp", "label": "S&P", "code": "ES", "style": "decimal",
+     "words": ("equit", "stock market", "s&p", "wall street", "risk-off",
+               "risk off", "federal reserve", "macro", "recession")},
+    {"key": "crude", "label": "Crude", "code": "CL", "style": "decimal",
+     "words": ("crude", "oil", "energy", "diesel", "fuel", "opec", "gasoline")},
+]
+
 # WHICH NET CHANGE THE EVENING LETTER QUOTES -- CONFIRMED 2026-09-23.
 #
 # Checked against the letter Ross sent for 9/22/26. Every one of the six
@@ -182,12 +222,6 @@ N_CONTRACTS = 3
 # session's move, because CME livestock does not open until 08:30 Central and a
 # week-to-date figure is not what a reader wants before the bell.
 CHANGE_BASIS = "week"      # "week" | "day"
-
-# ── Chart of the day (morning brief) ─────────────────────────────────────────
-# Sessions on the bottom-right chart. 60 is about a quarter -- long enough to
-# show the trend the letter is describing, short enough that 3.1 inches of width
-# is still one readable line rather than a smear.
-CHART_SESSIONS = 60
 
 # Moving averages the Technicals section quotes.
 MA_WINDOWS = (9, 20)
