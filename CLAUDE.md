@@ -39,10 +39,20 @@ minutes; the "not found" page partway through provisioning is normal. The app
 is in the `jsa-dashboards` workspace — see Deployment facts, which was wrong
 about this until 2026-09-24.
 
-A reboot does a full fresh clone, so it always takes current `master`; the
-startup log says `Cloning repository... Pulling code changes from Github`, and
-reading that log is the way to prove which code is actually running rather than
-inferring it from the page.
+A reboot does a full fresh clone, so it always takes current `master` — the
+startup log says `Cloning repository... Pulling code changes from Github`.
+
+**DO NOT TRUST THAT LOG'S TIMESTAMP TO TELL YOU WHETHER A REBOOT LANDED.**
+Manage app → the log panel serves a CACHED view, and in a browser session left
+open across several reboots it freezes: on 2026-09-24 it read `[14:20:35]`
+through five further reboots that had all in fact succeeded. Reloading the app
+URL, even cache-busted, does not refresh it. That stale reading nearly produced
+a delete-and-redeploy of a perfectly healthy app.
+
+The reliable check is to **look for a feature that only exists in the new code**
+— a button, a caption, a label you just added. The page cannot fake that. Use
+the log for what it is good at, which is seeing whether the dependency install
+failed, not for which commit is live.
 
 THE STATED CAUSE ABOVE IS NOW IN DOUBT. It was written when this app was
 believed to live in the personal workspace, and that turned out to be false, so
