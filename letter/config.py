@@ -26,6 +26,36 @@ TITLE_PREVIOUS = "AgMarket.Net Cattle Report"
 SESSIONS = ["AM", "PM"]
 DEFAULT_SESSION = "PM"
 
+# ── Which report the authoring page opens on ─────────────────────────────────
+# Before noon you are writing the morning brief; after it, the evening letter.
+# One number to move if that split is ever wrong.
+SESSION_SWITCH_HOUR = 12
+
+# CENTRAL, NOT THE SERVER'S CLOCK, and this is the whole difficulty. Streamlit
+# Cloud runs UTC, where 07:30 in Anthon is 12:30 -- already past the switch --
+# so a plain datetime.now() would open on PM every single morning, which is
+# exactly the case this exists to get right. Reading a named zone also keeps
+# DST correct without a second thought.
+LETTER_TZ = "America/Chicago"
+
+
+def session_for_now(now=None) -> str:
+    """
+    "AM" or "PM" by the clock in Anthon.
+
+    Never raises. A host with no tz database falls back to DEFAULT_SESSION,
+    which costs one click rather than a page -- and `now` is injectable so the
+    behaviour is testable without waiting for the afternoon.
+    """
+    if now is None:
+        try:
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+            now = datetime.now(ZoneInfo(LETTER_TZ))
+        except Exception:
+            return DEFAULT_SESSION
+    return "AM" if now.hour < SESSION_SWITCH_HOUR else "PM"
+
 TITLE_BY_SESSION = {
     "am": "JSA AM Daily Cattle Report",
     "pm": "JSA PM Daily Cattle Report",

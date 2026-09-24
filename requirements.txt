@@ -18,3 +18,4 @@ psycopg2-binary>=2.9.0  # beef_weight/livestock_inventory read the shared NASS c
 
 pypdf>=5.0  # letter/sources.py parses AMS report 3208, which is published only as a PDF
 msal>=1.30  # letter/mailbox.py reads the subscription digests from Ross's own inbox via Graph
+tzdata  # letter/config.session_for_now reads America/Chicago; the host's tz database is not guaranteed, and without it the page opens on PM every morning

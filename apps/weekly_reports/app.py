@@ -102,9 +102,14 @@ c0, c1, c2 = st.columns([1.4, 1.8, 4])
 with c0:
     # Two reports a day, each with its own five weekdays. Independent of the
     # day: AM Monday and PM Monday are different letters.
+    # Opens on the report you are most likely writing: AM before noon Central,
+    # PM after. Only the DEFAULT moves -- Streamlit keeps a widget's value
+    # across reruns, so picking the other one sticks, including across noon.
     session = st.radio("Report", config.SESSIONS,
-                       index=config.SESSIONS.index(config.DEFAULT_SESSION),
-                       horizontal=True).lower()
+                       index=config.SESSIONS.index(config.session_for_now()),
+                       horizontal=True,
+                       help="Defaults to the morning brief before noon Central "
+                            "and the evening letter after it.").lower()
 with c1:
     issue = st.date_input("Issue date", value=date.today(), format="YYYY-MM-DD")
 with c2:
