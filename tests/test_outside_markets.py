@@ -101,3 +101,67 @@ def test_no_history_at_all_yields_no_base():
 
 def test_the_cutoff_covers_a_long_weekend_but_not_a_lost_week():
     assert 4 <= sources.MAX_PRIOR_SETTLE_AGE_DAYS < 7
+
+
+# -- The AM report must not read today's bar as a settle ----------------------
+
+class _FuturesApi:
+    """Enough of massive_api for fetch_futures."""
+
+    def __init__(self, bars: dict, ticker: str = "GFU6"):
+        self._bars, self._ticker = bars, ticker
+
+    def get_active_contract_tickers(self, product_code, api_key, as_of):
+        return [{"ticker": self._ticker}]
+
+    def get_settlement_histories(self, tickers, api_key):
+        return {t: pd.Series(self._bars) for t in tickers}
+
+
+# Today's row exists from the moment the session opens; it is not a settle.
+INTRADAY = {
+    date(2026, 9, 22): 335.00,
+    date(2026, 9, 23): 336.525,
+    date(2026, 9, 24): 336.80,     # in progress
+}
+
+
+@pytest.fixture
+def _patched(monkeypatch):
+    monkeypatch.setattr(sources, "_massive", lambda: _FuturesApi(INTRADAY))
+
+
+def test_the_evening_letter_takes_todays_settle(_patched):
+    row = sources.fetch_futures("GF", "k", TODAY, 1)[0]
+    assert (row["settle"], row["settle_date"]) == (336.80, "2026-09-24")
+
+
+def test_the_morning_brief_takes_yesterdays(_patched):
+    """
+    The bug reported 2026-09-24: a brief rebuilt mid-session showed live prices
+    under a heading that said "Settlement on 9/24/26". am_cattle_rows promises
+    yesterday's settle and its move, and was getting neither.
+    """
+    row = sources.fetch_futures("GF", "k", TODAY, 1, completed_only=True)[0]
+    assert (row["settle"], row["settle_date"]) == (336.525, "2026-09-23")
+    # ...and the move is yesterday's, measured from the day before.
+    assert row["change_day"] == pytest.approx(336.525 - 335.00)
+
+
+def test_before_the_open_the_two_agree(_patched, monkeypatch):
+    """
+    With no bar for today yet, completed_only changes nothing -- which is why
+    this went unnoticed for as long as the brief was built at 07:30 sharp.
+    """
+    bars = {k: v for k, v in INTRADAY.items() if k < TODAY}
+    monkeypatch.setattr(sources, "_massive", lambda: _FuturesApi(bars))
+    plain = sources.fetch_futures("GF", "k", TODAY, 1)[0]
+    only = sources.fetch_futures("GF", "k", TODAY, 1, completed_only=True)[0]
+    assert plain["settle_date"] == only["settle_date"] == "2026-09-23"
+
+
+def test_the_am_format_is_the_one_that_asks_for_it():
+    """gather() keys this off the kind, so a new AM-like format must opt in."""
+    src = (sources.REPO / "letter" / "build.py").read_text(encoding="utf-8")
+    assert 'settled_only = (kind == "am")' in src
+    assert src.count("completed_only=settled_only") == 2

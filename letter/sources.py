@@ -81,7 +81,8 @@ def contract_month(ticker: str) -> str:
     return _MONTHS.get(m.group(1), ticker) if m else ticker
 
 
-def fetch_futures(product_code: str, api_key: str, as_of: date, n: int = 3) -> list[dict]:
+def fetch_futures(product_code: str, api_key: str, as_of: date, n: int = 3,
+                  completed_only: bool = False) -> list[dict]:
     """
     Front n outright contracts: last settle plus both candidate net changes.
 
@@ -89,6 +90,17 @@ def fetch_futures(product_code: str, api_key: str, as_of: date, n: int = 3) -> l
     settle on or before the prior Friday) for each contract. Both are carried
     because which one the letter quotes is still unconfirmed -- see
     config.CHANGE_BASIS.
+
+    completed_only EXCLUDES TODAY'S BAR, and the AM report needs it. The
+    history's row for today is the session in progress, so a morning brief
+    rebuilt at 09:00 was picking up live prices and calling them a settle --
+    am_cattle_rows promises "yesterday's settle and its move" and was quietly
+    getting neither. Invisible until the heading started printing the date it
+    came from, on 2026-09-24, which is what a date on a number is for.
+
+    The evening letter is built after the close and wants today's settle, so it
+    leaves this off. One flag, because the two reports genuinely differ: at
+    07:30 there is no settle for today and at 17:00 there is.
     """
     api = _massive()
     contracts = api.get_active_contract_tickers(product_code, api_key, as_of)[:n]
@@ -105,7 +117,10 @@ def fetch_futures(product_code: str, api_key: str, as_of: date, n: int = 3) -> l
         # CLIP TO as_of. Without this the settle is always the NEWEST bar, so a
         # letter rebuilt for an earlier date silently carries today's prices --
         # and a stored letter stops being a record of what it printed.
-        s = s[s.index <= as_of]
+        #
+        # STRICTLY BEFORE for the morning report: today's bar exists from the
+        # moment the session opens and is not a settle until it closes.
+        s = s[s.index < as_of] if completed_only else s[s.index <= as_of]
         if s.empty:
             continue
         settle = float(s.iloc[-1])

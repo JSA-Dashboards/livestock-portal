@@ -135,10 +135,17 @@ def gather(issue: date, errors: list, kind: str = "tuesday", cof_guesses: dict =
     }
 
     if api_key:
+        # The morning brief must not read today's in-progress bar as a settle:
+        # it goes out at 07:30, before CME livestock opens, and quotes the prior
+        # session. The evening letter is written after the close and wants
+        # today's. See sources.fetch_futures(completed_only=...).
+        settled_only = (kind == "am")
         ctx["live_cattle"] = _try("live cattle futures", lambda: sources.fetch_futures(
-            config.LIVE_CATTLE_CODE, api_key, issue, config.N_CONTRACTS), errors) or []
+            config.LIVE_CATTLE_CODE, api_key, issue, config.N_CONTRACTS,
+            completed_only=settled_only), errors) or []
         ctx["feeder_cattle"] = _try("feeder cattle futures", lambda: sources.fetch_futures(
-            config.FEEDER_CATTLE_CODE, api_key, issue, config.N_CONTRACTS), errors) or []
+            config.FEEDER_CATTLE_CODE, api_key, issue, config.N_CONTRACTS,
+            completed_only=settled_only), errors) or []
 
         # Technicals run on the front contract of each -- the one the letter names.
         if ctx["live_cattle"]:
