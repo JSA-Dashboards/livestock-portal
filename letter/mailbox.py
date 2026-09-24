@@ -71,12 +71,22 @@ DIGESTS = [
     {"label": "Sterling", "sender": "jnalivka@fmtc.com"},
 ]
 
-# Boilerplate that appears as a link in every marketing email.
+# Boilerplate that appears as a link in every marketing email. Extended
+# 2026-09-24, the first day this saw real messages -- the four below are all
+# things it actually offered Ross as cattle headlines.
 _CHROME = re.compile(
     r"unsubscribe|view (this |it )?in (your )?browser|privacy polic|terms of|"
     r"contact us|advertise|manage (your )?preferences|forward to a friend|"
     r"update profile|follow us|subscribe|log ?in|sign ?in|click here|read more|"
+    # "Customize your Daily Bulletin", "Update your email preferences"
+    r"customi[sz]e your|email preferences|update your|"
     r"^\W*$", re.I)
+
+# A link whose text IS the address it points at -- "newsletters@newsletter.
+# meatingplace.com", "https://emeat.io/dashboard/tables". Long enough to clear
+# the length check and made of letters, so nothing else here catches them, and
+# they are never a headline. One token with an @ or a scheme in it.
+_BARE_LINK = re.compile(r"^\S+$") 
 
 
 def configured() -> bool:
@@ -168,6 +178,8 @@ def parse_headlines(body: str, content_type: str = "html", limit: int = 15) -> l
             continue
         if _CHROME.search(line):
             continue
+        if _BARE_LINK.match(line) and ("@" in line or "://" in line):
+            continue
         if not re.search(r"[A-Za-z]{3}", line):
             continue
         key = line.lower()
@@ -208,17 +220,42 @@ def fetch_digests(max_age_h: int = 72, per_source: int = 10) -> dict:
         # only as a fallback. See the note on DIGESTS -- search reads the body,
         # so it can match mail that has nothing to do with the publication.
         fields = "subject,receivedDateTime,body,from"
+        # NO $orderby ON A SENDER FILTER, AND A DATE CLAUSE INSTEAD.
+        #
+        # Graph rejects $filter on from/emailAddress with $orderby
+        # receivedDateTime outright -- 400 InefficientFilter, every request,
+        # which is how this shipped: the panel said "not signed in" for weeks
+        # and the moment it WAS signed in, all four sources returned HTTP 400.
+        #
+        # Dropping $orderby alone is the trap, and it is a silent one. The
+        # default order on /me/messages is OLDEST FIRST, so a bare sender filter
+        # with $top 5 returns five mails from 2025 -- every one of them outside
+        # the age window, every source reporting "nothing recent", for ever,
+        # while the digests arrive daily. Verified: Sterling came back starting
+        # 2025-12-16 and Meatingplace 2026-08-26.
+        #
+        # The date clause does both jobs. It is legal beside the sender filter,
+        # it bounds the result to the window the caller asked for, and with a
+        # generous $top the newest-picking below has everything it needs. A
+        # date-only filter WOULD take $orderby -- same property -- but this
+        # mailbox runs ~11 messages an hour, so 72 hours is several hundred
+        # messages and hundreds of pages to walk.
+        since_iso = since.strftime("%Y-%m-%dT%H:%M:%SZ")
         if src.get("sender"):
-            query = {"$filter": f"from/emailAddress/address eq '{src['sender']}'",
-                     "$orderby": "receivedDateTime desc", "$top": 5, "$select": fields}
+            query = {"$filter": f"from/emailAddress/address eq '{src['sender']}' "
+                                f"and receivedDateTime ge {since_iso}",
+                     "$top": 25, "$select": fields}
         elif src.get("sender_name"):
-            query = {"$filter": f"startswith(from/emailAddress/name,'{src['sender_name']}')",
-                     "$orderby": "receivedDateTime desc", "$top": 8, "$select": fields}
+            query = {"$filter": f"startswith(from/emailAddress/name,'{src['sender_name']}') "
+                                f"and receivedDateTime ge {since_iso}",
+                     "$top": 25, "$select": fields}
         elif src.get("subject"):
             # KQL property restriction: subject line only, body untouched.
-            query = {"$search": f'subject:"{src["subject"]}"', "$top": 5, "$select": fields}
+            # $search takes no $orderby either -- 400 SearchWithOrderBy -- and
+            # no date clause, so it leans on the client-side age check below.
+            query = {"$search": f'subject:"{src["subject"]}"', "$top": 25, "$select": fields}
         else:
-            query = {"$search": f'"{src["match"]}"', "$top": 5, "$select": fields}
+            query = {"$search": f'"{src["match"]}"', "$top": 25, "$select": fields}
         try:
             r = requests.get(f"{GRAPH}/me/messages", headers=headers,
                              timeout=30, params=query)
