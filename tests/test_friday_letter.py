@@ -502,6 +502,52 @@ def test_am_never_carries_the_evening_rundown():
 
 # -- Headline candidates ------------------------------------------------------
 
+def _am_ctx(contracts: list, issue: date) -> dict:
+    """
+    An AM context that actually reaches the futures band.
+
+    The band is nested inside the FCI guard -- no index value, no Cattle
+    Futures block at all -- so `fci` is not optional scaffolding here.
+    """
+    return {"kind": "am", "session": "am", "issue_date": issue,
+            "change_basis": "day", "live_cattle": contracts, "feeder_cattle": [],
+            "fci": {"value": 337.0, "change": 0.5},
+            "cash": {}, "cutout": {}, "slaughter": {}, "commentary": {}}
+
+
+def test_the_am_futures_heading_names_the_settlement_date():
+    """
+    Added 2026-09-24. The AM block quotes yesterday's settle on a page dated
+    today, so the heading says which session that was.
+    """
+    ctx = _am_ctx([{"month": "Oct", "settle": 220.5, "change_day": 1.0,
+                    "settle_date": "2026-09-23"}], date(2026, 9, 24))
+    html = render.build_html(ctx)
+    assert "Settlement on 9/23/26" in html
+    assert '<h2>Cattle Futures <span class="asof">' in html
+
+
+def test_the_settlement_date_comes_from_the_contract_not_the_calendar():
+    """
+    THE POINT OF READING settle_date. On a Monday the prior session is Friday,
+    and issue-minus-one would print Sunday -- a date on which nothing settled.
+    """
+    monday = date(2026, 9, 21)
+    ctx = _am_ctx([{"month": "Oct", "settle": 220.5, "change_day": 1.0,
+                    "settle_date": "2026-09-18"}], monday)
+    assert render._settle_stamp(ctx) == "9/18/26"
+    assert "Settlement on 9/18/26" in render.build_html(ctx)
+
+
+def test_an_undated_contract_drops_the_label_rather_than_guessing():
+    ctx = _am_ctx([{"month": "Oct", "settle": 220.5, "change_day": 1.0}],
+                  date(2026, 9, 24))
+    assert render._settle_stamp(ctx) == ""
+    html = render.build_html(ctx)
+    assert "<h2>Cattle Futures</h2>" in html
+    assert "Settlement on" not in html
+
+
 def test_headlines_never_reach_the_letter():
     """
     The candidate panel is a pick list on the authoring page. Nothing it fetches

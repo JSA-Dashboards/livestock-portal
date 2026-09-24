@@ -121,6 +121,33 @@ def trim_range(lo, hi) -> str:
 _PM_DAYS = {0: "Mon", 1: "Tues", 2: "Wed", 3: "Thurs", 4: "Fri", 5: "Sat", 6: "Sun"}
 
 
+def _settle_stamp(ctx: dict) -> str:
+    """
+    "9/23/26" for the session the AM report's futures actually settled in.
+
+    READ OFF THE CONTRACTS, NOT COMPUTED FROM THE ISSUE DATE. The prior session
+    is not yesterday on a Monday, and it is not yesterday after a holiday
+    either; subtracting a day would print a date on which nothing settled, on
+    exactly the mornings a reader is most likely to be checking. The rows
+    already carry settle_date, so the heading states it.
+
+    Live Cattle and Feeders settle the same day. If a feed ever disagreed the
+    newer date wins rather than the label being dropped -- which session this is
+    is the whole point of the line, and a day of skew beats no date at all.
+    """
+    dates = []
+    for key in ("live_cattle", "feeder_cattle"):
+        for con in ctx.get(key) or []:
+            try:
+                dates.append(date.fromisoformat(str(con.get("settle_date") or "")[:10]))
+            except ValueError:
+                continue
+    if not dates:
+        return ""
+    d = max(dates)
+    return f"{d.month}/{d.day}/{d.strftime('%y')}"
+
+
 def _pm_label(report_date) -> str:
     """' Tues PM.' from the cutout's own report date, or '' if unknown."""
     if not report_date:
@@ -397,11 +424,21 @@ body {
 }
 .masthead { font-weight: 700; font-size: 13pt; margin: 0 0 14px; }
 table.band { width: 100%; border-collapse: collapse; margin: 0 0 -10px; }
-table.band > tr > td, table.band td { vertical-align: top; width: 50%; padding: 0; }
+/* The two blocks sit TOGETHER on the left, not at opposite edges of the page.
+   A 50/50 split put Cattle Futures at the horizontal midpoint and opened a
+   lane of white space between two short lists. The first cell now shrinks to
+   its own widest line -- width:1% with nowrap is the usual idiom for a
+   shrink-to-fit table cell -- and the second takes the remainder, so the
+   gutter is a deliberate 42px instead of whatever the page had left over. */
+table.band > tr > td, table.band td { vertical-align: top; padding: 0; }
+table.band td:first-child { width: 1%; white-space: nowrap; padding-right: 42px; }
 table.band h2:first-child { margin-top: 0; }
 table.band ul { margin-bottom: 0; }
 .intro { margin: 0 0 14px; }
 h2 { font-size: 11.5pt; font-weight: 700; margin: 16px 0 4px; }
+/* A qualifier on a heading, not part of it: lighter and smaller so the
+   heading still reads as one word at a glance. */
+h2 .asof { font-weight: 400; font-size: 9.5pt; color: #444; }
 h3 { font-size: 11.5pt; font-weight: 400; margin: 10px 0 3px; }
 ul { margin: 0 0 4px; padding-left: 22px; }
 li { margin: 1px 0; }
@@ -487,10 +524,18 @@ def am_blocks(ctx: dict, c: dict) -> list:
         cattle = am_cattle_rows(ctx)
         left = "<h2>JSA FCI Estimate</h2>" + _bullets(rows)
         if cattle:
+            # The heading says WHICH SESSION these settled in. The rows are
+            # yesterday's close and yesterday's move -- see am_cattle_rows --
+            # and on a page dated today that is worth saying once, next to the
+            # numbers, rather than leaving the reader to assume.
+            settled = _settle_stamp(ctx)
+            head = "Cattle Futures"
+            if settled:
+                head += f' <span class="asof">Settlement on {settled}</span>'
             out.append(
                 '<table class="band"><tr>'
                 f'<td>{left}</td>'
-                f'<td><h2>Cattle Futures</h2>{_bullets(cattle)}</td>'
+                f'<td><h2>{head}</h2>{_bullets(cattle)}</td>'
                 "</tr></table>")
         else:
             out.append(left)
