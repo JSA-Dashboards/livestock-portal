@@ -122,9 +122,12 @@ with c2:
     day = st.radio(
         "Letter", config.DAYS, horizontal=True,
         index=config.DAYS.index(default_day.title()),
-        help="Defaults to the weekday of the issue date. Tuesday is the full "
-             "evening letter, Friday the week-in-review, and Mon/Wed/Thu the "
-             "shorter recap. The morning brief is the same every day.",
+        # GENERATED FROM THE MAPPING, never written out. This sentence was a
+        # hardcoded string and went stale the moment Monday and Tuesday swapped
+        # formats -- the caption below had already followed, because it reads
+        # `kind`, so the page stated two different arrangements at once.
+        help="Defaults to the weekday of the issue date. "
+             + config.pm_format_summary(),
     ).lower()
 kind = config.format_for(day, session)
 

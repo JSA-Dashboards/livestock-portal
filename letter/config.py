@@ -166,6 +166,46 @@ FORMAT_FOR_DAY = {
 }
 
 
+# What each layout is called in prose. The ids are historical (see
+# FORMAT_FOR_DAY); these are what a human should be told.
+FORMAT_LABELS = {
+    "tuesday": "the full evening letter",
+    "recap": "the shorter recap",
+    "friday": "the week-in-review",
+}
+
+
+def pm_format_summary() -> str:
+    """
+    "Monday is the full evening letter, Tue/Wed/Thu the shorter recap, ..."
+
+    DERIVED FROM FORMAT_FOR_DAY, NOT WRITTEN OUT. The authoring page used to
+    carry this sentence as a hardcoded string, and when Monday and Tuesday
+    swapped formats on 2026-09-24 the page went on describing the old
+    arrangement -- the caption beside it had already updated, because that one
+    reads `kind`, so the page contradicted itself. Anything that states the
+    mapping in words has to be generated from the mapping.
+    """
+    order = [d.lower() for d in DAYS]
+    groups, seen = [], None
+    for day in order:
+        kind = FORMAT_FOR_DAY.get(day, "tuesday")
+        if kind == seen:
+            groups[-1][0].append(day)
+        else:
+            groups.append(([day], kind))
+            seen = kind
+
+    def name(days):
+        short = [d[:3].title() for d in days]
+        return short[0] if len(short) == 1 else "/".join(short)
+
+    parts = [f"{name(days)} is {FORMAT_LABELS.get(k, k)}" if i == 0
+             else f"{name(days)} {FORMAT_LABELS.get(k, k)}"
+             for i, (days, k) in enumerate(groups)]
+    return ", ".join(parts) + ". The morning brief is the same every day."
+
+
 def format_for(day: str, session: str = "pm") -> str:
     """
     Which layout a (day, session) pair produces.

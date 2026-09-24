@@ -15,7 +15,11 @@ from datetime import date
 
 import pytest
 
+from pathlib import Path as _Path
+
 from letter import cof, commentary, config, render, sources
+
+REPO_ROOT = _Path(__file__).resolve().parent.parent
 
 
 # -- CFTC ---------------------------------------------------------------------
@@ -768,3 +772,38 @@ def test_a_sender_address_is_an_exact_filter_not_a_body_search():
     # afternoon, ~45h old; a 30-hour window dropped it silently.
     import inspect
     assert "max_age_h: int = 72" in inspect.getsource(mailbox.fetch_digests)
+
+
+def test_the_page_never_states_the_mapping_from_memory():
+    """
+    The bug this prevents: the Letter radio's help text was a hardcoded
+    sentence, so when Monday and Tuesday swapped formats it went on describing
+    the old arrangement -- while the caption beside it, which reads `kind`, had
+    already updated. The page contradicted itself, and only a human reading both
+    would notice.
+
+    Anything that states the mapping in words must be generated from it.
+    """
+    from letter import config
+    src = (REPO_ROOT / "apps" / "weekly_reports" / "app.py").read_text(encoding="utf-8")
+    assert "config.pm_format_summary()" in src
+    for stale in ("Tuesday is the full", "Mon/Wed/Thu the shorter",
+                  "the rest share the standard"):
+        assert stale not in src, f"mapping written out by hand: {stale!r}"
+
+
+def test_the_summary_follows_the_mapping(monkeypatch):
+    """Change the mapping and the sentence changes with it, or it is not derived."""
+    from letter import config
+    before = config.pm_format_summary()
+    monkeypatch.setitem(config.FORMAT_FOR_DAY, "monday", "recap")
+    after = config.pm_format_summary()
+    assert before != after
+    assert "Mon/Tue/Wed/Thu the shorter recap" in after or "Mon" in after
+
+
+def test_the_summary_names_every_format_in_use():
+    from letter import config
+    summary = config.pm_format_summary()
+    for kind in set(config.FORMAT_FOR_DAY.values()):
+        assert config.FORMAT_LABELS[kind] in summary, kind
