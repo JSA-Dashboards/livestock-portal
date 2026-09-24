@@ -114,15 +114,17 @@ with c0:
 with c1:
     issue = st.date_input("Issue date", value=date.today(), format="YYYY-MM-DD")
 with c2:
-    # `day` is what you pick; `kind` is which of the two layouts it produces.
-    # Friday is the week-in-review; every other weekday uses the standard
-    # format, unchanged from the Tuesday letter. See letter/config.py.
+    # `day` is what you pick; `kind` is which of the THREE evening layouts it
+    # produces -- Tuesday the full letter, Friday the week-in-review, and
+    # Mon/Wed/Thu the recap. The AM ignores the day entirely.
+    # See config.FORMAT_FOR_DAY.
     default_day = config.day_for_date(issue)
     day = st.radio(
         "Letter", config.DAYS, horizontal=True,
         index=config.DAYS.index(default_day.title()),
-        help="Defaults to the weekday of the issue date. Friday is the "
-             "week-in-review format; the rest share the standard one.",
+        help="Defaults to the weekday of the issue date. Tuesday is the full "
+             "evening letter, Friday the week-in-review, and Mon/Wed/Thu the "
+             "shorter recap. The morning brief is the same every day.",
     ).lower()
 kind = config.format_for(day, session)
 
@@ -130,6 +132,14 @@ if kind == "friday":
     st.caption("**Week-in-review format** — adds regional cash, CFTC, and a Cattle on "
                "Feed block on release weeks. CFTC lands 3:30pm ET, boxed beef about "
                "3pm Central; build after both.")
+elif kind == "recap":
+    # THREE PM FORMATS, THREE CAPTIONS. This branch was missing when the recap
+    # landed, so Mon/Wed/Thu fell through to "Standard format" -- the page
+    # naming a letter you are not writing, while the boxes below it showed the
+    # recap's sections. Wrong labels on an authoring page are worse than none.
+    st.caption("**Recap format** — the session in brief: one technicals read "
+               "covering both products, and no Fundamental Rundown. Boxed beef "
+               "publishes about 3pm Central; build after that.")
 else:
     st.caption("**Standard format** — leads with last week's cash trade. Boxed beef "
                "publishes about 3pm Central; build after that or the cutout is "
