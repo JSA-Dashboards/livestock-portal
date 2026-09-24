@@ -448,7 +448,32 @@ if missing:
     st.warning(f"{missing} value(s) could not be filled. They are marked in the letter "
                "so they cannot be missed — fill them in or fix the source before sending.")
 
-st.components.v1.html(html, height=680, scrolling=True)
+# PRINT FROM THE READER'S OWN BROWSER, which is the one machine in this picture
+# that definitely has one. letter.topdf drives headless Edge on the HOST, so on
+# Streamlit Cloud -- a bare Linux container -- there is nothing to drive and the
+# Build PDF button is disabled. This sidesteps that entirely: the preview below
+# is already an iframe holding the complete letter with its own @page rules, so
+# window.print() inside it prints exactly that document. Same print CSS, same
+# result as Build PDF, and it works on the deployed app.
+#
+# The button hides itself in the print output -- it is chrome, not letter.
+_print_ui = """
+<style>
+  #jsa-print { position: sticky; top: 0; z-index: 99; display: block; width: 100%;
+    padding: 7px 0; font: 600 14px/1.2 "Segoe UI", system-ui, sans-serif;
+    color: #fff; background: #5e7164; border: 0; border-radius: 4px;
+    cursor: pointer; margin: 0 0 10px; }
+  #jsa-print:hover { background: #4d5d52; }
+  @media print { #jsa-print { display: none !important; } }
+</style>
+<button id="jsa-print" onclick="window.focus();window.print();">
+  Print / Save as PDF &nbsp;·&nbsp; uses this browser
+</button>
+"""
+st.components.v1.html(_print_ui + html, height=720, scrolling=True)
+st.caption("**Print / Save as PDF** prints the preview above from your own browser — "
+           "same print CSS as Build PDF, and it works on the deployed app where "
+           "Build PDF cannot. Choose *Save as PDF* as the destination.")
 
 d1, d2 = st.columns(2)
 with d1:
