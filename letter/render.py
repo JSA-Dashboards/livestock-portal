@@ -443,11 +443,23 @@ def cof_block(cof: dict) -> str:
 # -- Page ---------------------------------------------------------------------
 
 CSS = """
-@page { size: letter; margin: 0.9in 0.85in; }
+/* THE PAGE MARGIN IS WHERE THE FRAME GOES, and the text is inset the rest of
+   the way with padding. The obvious construct -- keep a 0.9in margin and push a
+   fixed frame outward with NEGATIVE offsets -- renders in headless
+   --print-to-pdf and is clipped when the same letter prints from inside the
+   preview iframe, because a negative-offset fixed box is only safe in a root
+   context. Printed from the app it simply vanished, with nothing to say why.
+   No negative offsets anywhere now: the frame sits at inset 0, which is the
+   page box, and the text is moved in from it. */
+@page { size: letter; margin: 0.52in; }
 * { box-sizing: border-box; }
 body {
   font-family: Calibri, Carlito, "Segoe UI", system-ui, sans-serif;
   font-size: 11.5pt; line-height: 1.32; color: #000; margin: 0;
+  /* Restores the original 0.9in / 0.85in text block exactly: 0.52 + 0.38 = 0.90
+     down the page, 0.52 + 0.33 = 0.85 across. The measured one-page geometry is
+     therefore unchanged -- 6.8in of text width, 9.2in of height. */
+  padding: 0.38in 0.33in;
   -webkit-print-color-adjust: exact; print-color-adjust: exact;
 }
 /* Masthead is a row now: title left, logo hard right. baseline rather than
@@ -727,9 +739,9 @@ def build_html(ctx: dict) -> str:
     _logo, _mark = _asset_uri("logo-full.png"), _asset_uri("jsa-50-years.png")
     head = []
     if getattr(config, "FRAME", ""):
-        _i = config.FRAME_INSET
+
         head.append(
-            f'<div class="frame" style="top:-{_i};right:-{_i};bottom:-{_i};left:-{_i};'
+            f'<div class="frame" style="top:0;right:0;bottom:0;left:0;'
             f'border:{config.FRAME_WIDTH} solid {config.FRAME};"></div>')
     if _mark:
         head.append(f'<img class="wm" src="{_mark}" alt="">')

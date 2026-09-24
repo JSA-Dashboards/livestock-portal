@@ -74,10 +74,10 @@ def title_for(session: str = DEFAULT_SESSION) -> str:
 # which is the point -- it should be the last thing noticed, not the first.
 FRAME = "#5e7164"
 FRAME_WIDTH = "0.75pt"
-# How far the rule sits OUTSIDE the text block. The page margin is 0.9in top and
-# bottom, 0.85in left and right, so 0.38in puts the rule roughly half way
-# between the text and the paper edge on every side.
-FRAME_INSET = "0.38in"
+# The frame is drawn at the PAGE MARGIN (see @page in render.py, 0.52in) and the
+# text is padded in from there, so there is no inset to set here any more --
+# move the @page margin and the body padding together if the frame should sit
+# further in or out.
 
 # ── Signature block (page 3 of the printed letter) ───────────────────────────
 SIGNATURE = {
