@@ -214,14 +214,91 @@ it down even though it needs no API key. Known, not yet changed.
 
 ## The daily letter generator (`letter/`)
 
-`python -m letter.build [--session am|pm] [--day monday..friday]`, or the
-**JSA Daily Cattle Reports** page. Two reports a day, five weekdays; AM is one
-format all week, PM switches to the week-in-review on Friday. Read the module
-docstrings before changing a source — every one records the way that feed
+`python -m letter.build [--session am|pm] [--day monday..friday] [--kind ...]
+[--chart ...] [--archive]`, or the **JSA Daily Cattle Reports** page. Read the
+module docstrings before changing a source — every one records the way that feed
 fails *quietly*, which is the only failure mode that matters here.
 
 Validated against the letters actually sent on 9/15, 9/18 and 9/22: every
-automated figure reproduces exactly.
+automated figure reproduced exactly **as the letter stood on 2026-09-23**. The
+evening letters were substantially reshaped on 09-24 (below), so that check no
+longer describes what goes out on a Monday.
+
+### The week, as of 2026-09-24
+
+Two reports a day. One morning format all week; **three** evening formats.
+
+| | Format id | Pages | Change quoted | Cash block |
+|---|---|---|---|---|
+| AM, every day | `am` | 1 | prior session | week-to-date by state, + cutout + slaughter |
+| Monday PM | `tuesday` | 3 | prior session | last week's weighted average |
+| Tue/Wed/Thu PM | `recap` | 2 | prior session | week-to-date by state |
+| Friday PM | `friday` | 3 | **week over week** | week-to-date by state |
+
+**THE FORMAT ID `tuesday` RUNS ONLY ON MONDAY.** The ids are historical layout
+names, not days — they are what `render.py`, `commentary.py`, the tests and the
+stored drafts switch on, and renaming one touches thirty-odd places for no
+behaviour change. They never reach a filename or the page: drafts are named by
+the DAY (`commentary_pm_monday_<date>.md`). Read `tuesday` as "the full letter".
+
+Written sections, in render order:
+
+- **AM** — Headlines
+- **Monday** — Headlines, Market Action, Technicals LC, Technicals FC,
+  Fundamental Rundown, Comments
+- **Tue/Wed/Thu** — Headlines, Market Action, Technicals *(one block, both
+  products)*, Comments
+- **Friday** — Key Headlines, Technicals LC, Technicals FC, Cash Trade Recap,
+  Cattle on Feed Commentary, Comments
+
+`Comments` is the catch-all and sits last on every evening letter, above the
+sign-off — **not** literally under the rundown, because the three formats end
+differently and Friday's rundown is mid-letter. It is deliberately absent from
+the morning brief.
+
+The recap's single `technicals` key is NOT `technicals_lc`/`technicals_fc`. The
+computed moving averages for both products print above it; the written read is
+passed to **neither** sub-block, because handing the same bullets to both prints
+it twice, once under each product.
+
+### Only Friday quotes the week, and that was a decision
+
+`config.CHANGE_BASIS_BY_KIND`. Monday through Thursday quote the prior session;
+Friday quotes week over week.
+
+**This departs from verified behaviour and is not a bug fix.** `config.py`
+records that the 9/22 letter — a **Monday** — quoted week-over-week on all six
+contracts, exact to the thousandth. Ross was shown that evidence and asked for
+the change twice. Do not "restore" it.
+
+It also retired a daily nuisance: `change_week` needs the prior **Friday's**
+settle, which Massive has not had since 2026-09-14, so Mon–Thu printed `[[?]]`
+whenever the hand-typed substitute was unavailable. `change_day` needs only the
+previous bar.
+
+**The basis comes from the format, never the cache.** Every
+`data_<slug>_<date>.json` written before 09-24 stores `"week"`; a `--no-fetch`
+re-render would otherwise quote week-over-week on a Monday and mark it `[[?]]`.
+Both `build.main` and the page re-derive it.
+
+### The letter prints itself now
+
+Letterhead, the 50-year watermark and a hairline sage frame are generated, not
+pasted in afterwards — `assets/logo-full.png` and `assets/jsa-50-years.png`,
+both embedded as data URIs so they survive the PDF being emailed.
+
+**Two print paths, and they are not equivalent.** `Build PDF` drives headless
+Edge on the host and only works locally. The **Print / Save as PDF** button
+prints the preview iframe from the reader's own browser and works anywhere,
+including the deployed app. A frame drawn with negative `position: fixed`
+offsets renders in the first and is clipped in the second — that shipped once.
+Verify layout on the path Ross actually uses.
+
+The **chart of the day** is AM only, bottom right, floated into the empty band
+beside the signature so it costs no vertical space. Which market it shows is
+picked from the letter's own text, then the day's candidate headlines, then the
+biggest mover, then a rotation — deterministic per date, never random, because
+the letter is built twice and the PDF must match the preview.
 
 **All three formats now open on headlines.** The standard PM letter gained a
 Headlines section on 2026-09-23, ahead of Market Action, the way Friday leads
@@ -269,18 +346,26 @@ Three places where the obvious simplification is the bug that was just fixed.
   where "squash **beef** after Cold War video" and "China's clean tech
   **exports**" both pass the looser one. A test pins the difference.
 
-### The `[[?]]` on the deployed app is not a bug
+### The `[[?]]` on the deployed app — FRIDAY ONLY now
 
 The hand-entered prior-Friday settles live in `out/weekbase_<friday>.json`, and
 `out/` is gitignored **and** wiped by every Streamlit Cloud reboot. So the
 deployed authoring page shows "No prior-Friday settle for 6 contract(s)" and
-`[[?]]` in the futures block, always, and retyping them there lasts until the
-next reboot. On Ross's desktop the file is present and the block renders
-normally (`Oct: +4.60 at 220.525`). Same for `letter/data/settle_log.json`.
+`[[?]]` in the futures block, and retyping them there lasts until the next
+reboot. On Ross's desktop the file is present and the block renders normally.
+Same for `letter/data/settle_log.json`.
 
-This is only cosmetic because **the letter is built locally** — confirmed
-2026-09-24. If that ever stops being true, this becomes real and the fix is a
-tracked path, not a bigger warning.
+**This used to hit every evening letter and now hits only Friday**, because
+Mon–Thu stopped quoting week-over-week on 2026-09-24 and `change_day` needs
+nothing but the previous bar. Friday still depends on the week base, correctly.
+
+It stays cosmetic only while **the letter is built locally** — confirmed
+2026-09-24. If that stops being true the fix is a tracked path, not a bigger
+warning; see the open call in the in-flight list.
+
+The underlying cause is upstream and unresolved: Massive has had no bar for
+2026-09-14..09-18 since it happened. Once a Friday letter has been built on a
+Friday with an intact prior Friday, this should stop arising at all.
 
 ### Published letters are archived, and only when you say so
 
@@ -316,6 +401,17 @@ exist that morning, and no intro paragraph. Only Sent Items has the real ones.
   line saying the mailbox is not connected. It now also blocks the one thing
   that would back-fill the letters published before 2026-09-24 — Sent Items is
   the only record of those. No code change is needed when it lands.
+- **Two open calls left with Ross on 2026-09-24, neither started.** Whether
+  Friday should print a region that never established a test all week — the
+  shared cash block omits it, where Friday's old block said "South: Undefined",
+  and on a weekly letter that absence is arguably news. And whether to make the
+  week base durable: `weekbase_<friday>.json` and `settle_log.json` live in
+  gitignored `out/`, so the deployed app cannot show a week-over-week change
+  after a reboot. That now only affects Friday.
+- **`render.cash_cattle_block()` and `sources.fetch_regional_cash()` are dead.**
+  No caller since Friday moved to the shared cash block. Kept only because they
+  are the basis for the "Undefined" option above — if that is declined, delete
+  both, or they will read as live code to whoever looks next.
 - **The Sterling Profit Tracker carries the packer margin** the evening letter
   quotes by hand ("Sterling packer margins ... +138.80/hd versus +177.16/hd week
   before"). It arrives from `jnalivka@fmtc.com` and is already fetched for
@@ -327,7 +423,16 @@ exist that morning, and no intro paragraph. Only Sent Items has the real ones.
   product. `render.build_html` returns early for AM rather than opting out
   section by section, so a section added to the evening letter cannot leak into
   the morning one; keep it that way.
-- **Nothing fetched writes itself into a letter.** Headlines are a pick list on
-  the authoring page; `render.py` has no import path to the fetchers and a test
-  asserts it. Every other figure is a USDA or CME number that is either right or
-  marked `[[?]]` — a headline has no `[[?]]`, so it gets a human instead.
+- **No fetched EDITORIAL text writes itself into a letter.** Headlines are a
+  pick list on the authoring page; `render.py` has no import path to the
+  fetchers and a test asserts it. Every other figure is a USDA or CME number
+  that is either right or marked `[[?]]` — a headline has no `[[?]]`, so it gets
+  a human instead.
+
+  Stated as "nothing fetched writes itself into a letter" until 2026-09-24,
+  which the chart of the day made literally false: it is fetched, and it renders
+  without anyone picking it. The distinction that actually matters is
+  editorial-vs-arithmetic. A price series is the same kind of thing as the
+  cutout — right, or marked. Prose written by someone else is not, and that is
+  what the rule is protecting. `letter/chart.py` still cannot fetch; the series
+  comes from `build.gather` like every other number.
