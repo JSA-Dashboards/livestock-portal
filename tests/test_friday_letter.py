@@ -890,3 +890,45 @@ def test_the_recap_actually_fetches_week_to_date_cash():
     src = (REPO_ROOT / "letter" / "build.py").read_text(encoding="utf-8")
     recap = src[src.index('if kind == "recap":'):src.index('if kind == "friday":')]
     assert "fetch_regional_cash_wtd" in recap
+
+
+def test_friday_uses_the_same_cash_block_as_the_recap():
+    """
+    Changed 2026-09-24 at Ross's request. Friday used to print North/South for a
+    SINGLE DAY -- the Friday itself -- under a letter reviewing the week. It now
+    prints the week by state, which is the week the letter is about.
+    """
+    ctx = _cash_ctx("friday")
+    ctx["commentary"] = {"key_headlines": ["x"], "cash_recap": ["y"]}
+    html = render.build_html(ctx)
+    assert "<h2>Cash Trade</h2>" in html
+    assert "221-222.50 live" in html
+    # the written recap section is separate and still there
+    assert "Cash Trade Recap" in html
+
+
+def test_a_region_with_no_test_all_week_is_omitted_on_friday():
+    """
+    THE COST OF SHARING THE BLOCK, recorded rather than hidden. The old Friday
+    block printed "South: Undefined" -- USDA's own answer for too little
+    confirmed trade. The shared block omits a region that did not trade, because
+    on a daily letter naming four so three can say Undefined is wasted lines.
+
+    On a WEEKLY letter that is arguably news: a region that never established a
+    test all week is a fact. Flagged to Ross; if he wants it back, the block
+    takes a flag rather than a second copy.
+    """
+    ctx = _cash_ctx("friday")
+    ctx["commentary"] = {"key_headlines": ["x"]}
+    html = render.build_html(ctx)
+    cash = html.split("<h2>Cash Trade</h2>")[1].split("<h2>")[0]
+    assert "TX/OK/NM" not in cash
+    assert "Undefined" not in cash
+
+
+def test_friday_fetches_the_week_not_the_day():
+    src = (REPO_ROOT / "letter" / "build.py").read_text(encoding="utf-8")
+    friday = src[src.index('if kind == "friday":'):]
+    friday = friday[:friday.index("return ctx")]
+    assert "fetch_regional_cash_wtd" in friday
+    assert "fetch_regional_cash(issue)" not in friday

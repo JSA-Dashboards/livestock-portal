@@ -853,7 +853,10 @@ def build_html(ctx: dict) -> str:
         # current-week regional ranges instead, further down.
         body.append(friday_rundown_block(ctx.get("fci"), ctx["slaughter"], ctx["cutout"],
                                          ctx.get("daily_slaughter"), ctx.get("carcass_weights")))
-        body.append(cash_cattle_block(ctx.get("regional_cash")))
+        # The same block as the recap. Friday used to print North/South for one
+        # day here; it now prints the week by state, which is the week the
+        # letter is reviewing. See wtd_cash_block.
+        body.append(wtd_cash_block(ctx))
         if c.get("cash_recap"):
             body.append("<h2>Cash Trade Recap:</h2>" + _commentary(c["cash_recap"]))
         body.append(cftc_block(ctx.get("cftc")))

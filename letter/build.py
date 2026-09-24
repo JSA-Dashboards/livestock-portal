@@ -203,10 +203,14 @@ def gather(issue: date, errors: list, kind: str = "tuesday", cof_guesses: dict =
 
     if kind == "friday":
         ctx["cftc"] = _try("CFTC managed money", sources.fetch_cftc, errors) or {}
-        # Regional cash is a single trading day, and on a Friday letter that day
-        # is the Friday itself -- the week's last established test.
-        ctx["regional_cash"] = _try("regional cash (AMS daily)",
-                                    lambda: sources.fetch_regional_cash(issue), errors) or {}
+        # WEEK TO DATE, same as the recap and the morning brief. This read a
+        # SINGLE DAY until 2026-09-24 -- the Friday itself, "the week's last
+        # established test" -- which is a defensible number and the wrong one
+        # for a week-in-review: it reported Friday's trade under a letter about
+        # the week. Ross asked for the recap's block here, and week-to-date on a
+        # Friday is the whole week, which is what this letter is for.
+        ctx["regional_cash"] = _try("cash week-to-date (AMS daily)",
+                                    lambda: sources.fetch_regional_cash_wtd(issue), errors) or {}
         ctx["cof"] = _try("Cattle on Feed", lambda: cof.fetch(issue, cof_guesses), errors) or {}
     return ctx
 
