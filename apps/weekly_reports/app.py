@@ -446,9 +446,14 @@ with d2:
             else:
                 st.error(f"PDF failed — {msg}")
     else:
-        st.button("Build PDF", disabled=True, use_container_width=True,
-                  help="No browser on this host. Download the HTML and print it "
-                       "with Ctrl+P — same layout, same result.")
+        # THE REASON IS VISIBLE, NOT A TOOLTIP. This was help= only, and a greyed
+        # button with a hover explanation reads as broken -- it got reported as a
+        # bug on 2026-09-24 by the person who wrote the docstring explaining it.
+        # Someone looking at a disabled control is asking why, and a hover they
+        # have to guess at is not an answer.
+        st.button("Build PDF", disabled=True, use_container_width=True)
+        st.caption("No browser on this host — download the HTML and print with "
+                   "Ctrl+P. Same layout, same result.")
 
 if st.session_state.get("wcr_pdf"):
     st.download_button("Download PDF", data=st.session_state["wcr_pdf"],
