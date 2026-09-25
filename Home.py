@@ -39,7 +39,7 @@ DASHBOARDS = [
     {"title": "Seasonal Futures & Spreads", "page": "apps/livestock_seasonal/app.py", "url_path": "seasonal-futures-spreads",
      "desc": "CME Live Cattle, Feeder Cattle, and Lean Hogs seasonal futures, spreads, and spread matrix."},
     {"title": "Cattle on Feed", "page": "apps/cattle_on_feed/app.py", "url_path": "cattle-on-feed",
-     "desc": "USDA on-feed inventory, placements, marketings, and the quarterly heifers-on-feed share."},
+     "desc": "USDA on-feed inventory, placements, marketings, the quarterly heifers-on-feed share — and Cold Storage stocks back to 1917."},
     {"title": "US Cow Herd", "page": "apps/us_cow_herd/app.py", "url_path": "us-cow-herd",
      "desc": "Herd expansion vs liquidation — bred female values, the retention incentive, and replacement receipts."},
     {"title": "Mexican Feeder Imports", "page": "apps/mexican_feeder_imports/app.py", "url_path": "mexican-feeder-imports",

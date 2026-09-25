@@ -212,6 +212,54 @@ Two things in it look wrong and are not:
 The tab sits behind the page's `st.stop()` guard, so a QuickStats outage takes
 it down even though it needs no API key. Known, not yet changed.
 
+## The Cold Storage view
+
+Added 2026-09-25. The Cattle on Feed page carries a **second USDA report**
+behind an `st.segmented_control` at the top — `Cattle on Feed | Cold Storage` —
+in the same spirit as the Beef Trimmings page's view switch. Fetching and the
+MoM/YoY arithmetic are in `apps/cattle_on_feed/cold_storage.py`; the layout is
+in `app.py` next to the brand helpers it needs, the same split as `cof_recap`.
+
+**A switch, not a thirteenth tab.** A hidden Streamlit tab is hidden, not
+skipped, so as a tab Cold Storage would run its fetches on every Cattle on Feed
+load and vice versa. It also sits **above** the page's `st.stop()` guard, which
+is the other half of the point: an outage on the six Cattle on Feed series no
+longer takes Cold Storage down with it.
+
+**It reads QuickStats, not the monthly PDF, and it goes back to 1917.** The
+release at `esmis.nal.usda.gov/.../cost{MM}{YY}.pdf` is one month with two
+comparison columns. QuickStats carries the same series from **1917** for beef,
+pork, lamb, turkey and cheese (1915 for butter, 1972 for the boneless/bone-in
+beef split), which is the only reason a real history exists here. No new
+secret — it is the `NASS_API_KEY` this page already requires.
+
+Four things that look wrong and are not:
+
+- **`freq_desc` is `POINT IN TIME`, not `MONTHLY`, and the period reads
+  `END OF AUG`.** Filtering on MONTHLY returns nothing, as a 400 that says
+  "bad request - invalid query" and means "no rows".
+- **USDA restates the prior month and QuickStats carries the restatement, so a
+  figure already on this page can move.** Total beef for 31 Jul 2026 was
+  published at 382,714 thousand lb in the August report and restated to
+  398,285 in the September one — +4.1%, essentially all of it in boneless.
+  That one revision moves July's YoY from -3.8% to +0.1%, across zero. A page
+  built on one archived PDF would go on showing a number USDA has withdrawn.
+- **The streak panel counts months above YEAR-AGO, never month-over-month.**
+  Beef stocks fill from September into December and draw down through summer
+  every year, so an MoM rise in October is the calendar, not the market.
+- **`Total red meat (computed)` is computed and labelled so.** QuickStats has no
+  aggregate; it is beef + pork + veal + lamb & mutton, which is an identity —
+  for 31 Aug 2026 those four sum to 862,128 against USDA's printed 862,128,
+  and the report has no fifth bucket. It starts 1944 (veal) rather than 1917.
+  `combine()` inner-joins deliberately: zero-filling veal's missing years would
+  print a "total" that is really beef+pork+lamb with a step change in 1944.
+
+The series has six missing months in 110 years, so `monthly_frame` reindexes
+onto a full monthly grid and blanks any change whose base month is absent. A
+plain `pct_change` bridges those gaps and prints a 13-month move as a "MoM".
+`tests/test_cold_storage.py` pins that, the run-splitting, and the red-meat
+identity.
+
 ## The daily letter generator (`letter/`)
 
 `python -m letter.build [--session am|pm] [--day monday..friday] [--kind ...]
