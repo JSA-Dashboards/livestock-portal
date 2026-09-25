@@ -237,27 +237,48 @@ saved_bases = letter_build.load_week_base(wb_path)
 letter_build.apply_week_base(ctx, saved_bases)
 
 still_missing = letter_build.missing_week_bases(ctx)
-if still_missing:
-    st.warning(
-        f"**No prior-Friday settle for {len(still_missing)} contract(s).** The futures "
-        "history has a hole, so the week-over-week change cannot be computed. Enter "
-        "the settles from your previous letter below and they will be used."
-    )
-    with st.form("week_base"):
-        entered = {}
-        cols = st.columns(min(3, len(still_missing)))
-        for i, (ticker, label) in enumerate(still_missing):
-            with cols[i % len(cols)]:
-                v = st.number_input(label, min_value=0.0, max_value=1000.0,
-                                    value=float(saved_bases.get(ticker, 0.0)),
-                                    step=0.025, format="%.3f", key=f"wb_{ticker}")
-                if v:
-                    entered[ticker] = v
-        if st.form_submit_button("Use these settles", use_container_width=True):
-            merged = dict(saved_bases)
-            merged.update(entered)
-            letter_build.save_week_base(wb_path, merged)
-            st.rerun()
+already_typed = letter_build.hand_entered_bases(ctx)
+
+# THE FORM STAYS AFTER THE LAST BOX IS FILLED. It used to hang entirely off
+# `still_missing`, which empties the moment the six settles are entered -- so
+# finishing the entry made the form disappear and a typo could not be corrected
+# from the page at all. Reported 2026-09-25 with a wrong October already saved.
+#
+# Contracts whose base came from the futures history or a previous letter are
+# deliberately NOT offered: those are real data, and inviting an overwrite is
+# the mistake the [[?]] marking exists to prevent.
+editable = still_missing + [e for e in already_typed if e not in still_missing]
+
+if editable:
+    if still_missing:
+        st.warning(
+            f"**No prior-Friday settle for {len(still_missing)} contract(s).** The futures "
+            "history has a hole, so the week-over-week change cannot be computed. Enter "
+            "the settles from your previous letter below and they will be used."
+        )
+    with st.expander(
+        f"Prior-Friday settles — {len(already_typed)} entered by hand"
+        if already_typed and not still_missing else "Enter the prior-Friday settles",
+        expanded=bool(still_missing),
+    ):
+        st.caption("Labelled by product as well as month: **Oct** is both a Live Cattle "
+                   "and a Feeder contract, and they are stored separately. Type over a "
+                   "value to correct it.")
+        with st.form("week_base"):
+            entered = {}
+            cols = st.columns(min(3, len(editable)))
+            for i, (ticker, label) in enumerate(editable):
+                with cols[i % len(cols)]:
+                    v = st.number_input(f"{label}  ({ticker})", min_value=0.0, max_value=1000.0,
+                                        value=float(saved_bases.get(ticker, 0.0)),
+                                        step=0.025, format="%.3f", key=f"wb_{ticker}")
+                    if v:
+                        entered[ticker] = v
+            if st.form_submit_button("Use these settles", use_container_width=True):
+                merged = dict(saved_bases)
+                merged.update(entered)
+                letter_build.save_week_base(wb_path, merged)
+                st.rerun()
 
 
 # -- What came back -----------------------------------------------------------

@@ -353,6 +353,28 @@ def apply_week_base(ctx: dict, bases: dict) -> list:
     return fixed
 
 
+def hand_entered_bases(ctx: dict) -> list:
+    """
+    (ticker, label) for every contract whose week base was TYPED, not fetched.
+
+    Needed because a typo is invisible otherwise. missing_week_bases() empties
+    as soon as the six settles are entered, and the page hung its whole entry
+    form off that -- so the moment Ross finished typing, the form vanished and
+    a wrong figure could not be corrected from the page at all. Reported
+    2026-09-25 with a wrong October already saved.
+
+    A base that came from the futures history or from a previous letter is NOT
+    in this list. Those are real data and offering to overwrite them invites
+    exactly the mistake the [[?]] marking exists to prevent.
+    """
+    out = []
+    for key, product in (("live_cattle", "Live Cattle"), ("feeder_cattle", "Feeder Cattle")):
+        for c in ctx.get(key) or []:
+            if str(c.get("week_base_source", "")).startswith("entered by hand"):
+                out.append((c["ticker"], f"{product} {c.get('month')}"))
+    return out
+
+
 def missing_week_bases(ctx: dict) -> list:
     """(ticker, label) for every contract still without a prior-Friday settle."""
     out = []
