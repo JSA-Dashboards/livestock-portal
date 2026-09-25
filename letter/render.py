@@ -211,32 +211,26 @@ def futures_block(title: str, contracts: list, basis: str) -> str:
 
 def technicals_block(tech: dict, commentary: list, label: str) -> str:
     """
-    Computed levels first, then the read.
+    The technical read, as Ross writes it. Nothing computed reaches the letter.
 
-    The moving averages are stated as fact because they are arithmetic. Swing
-    highs and lows are offered in the draft but only appear here if the
-    commentary refers to them -- the letter's published support and resistance
-    are a judgement, and printing a computed number in their place would be
-    putting words in Ross's mouth.
+    THE MOVING AVERAGES USED TO PRINT HERE and stopped on 2026-09-25 at Ross's
+    request: he fills the Technicals in himself. They are still fetched and
+    still quoted in the draft under this heading -- see build.hints, where the
+    9-day and 20-day sit beside the swing high/low and the prior session's range
+    as the figures you would otherwise open a dashboard to read. Computed as a
+    writing aid, printed only if he writes them.
+
+    That also retires the int-vs-string key hazard this function carried: the
+    context round-trips through JSON between the fetch and the --no-fetch
+    re-render, so ma[9] came back as ma["9"] and looking up only the int made
+    the averages vanish from the rendered letter with no error.
+
+    `tech` is still read, for the month. The heading says WHICH contract the
+    read is about -- "Oct Live Cattle", not "Live Cattle" -- because the front
+    month rolls, and on 2026-09-25 the feeders rolled from Sep to Oct/Nov/Jan
+    mid-week.
     """
-    lines = []
-    ma = tech.get("ma", {}) if tech else {}
-    # An average over a gapped series is wrong, not approximate -- marked, never
-    # printed as a figure. See technicals.build.
-    trustworthy = tech.get("complete", True) if tech else True
-    for window in config.MA_WINDOWS:
-        # Both key types on purpose. technicals.build() returns int keys, but the
-        # context is cached to JSON between the fetch run and the --no-fetch
-        # re-render, and JSON has no integer keys -- 9 comes back as "9". Looking
-        # up only the int made the moving averages disappear from the re-rendered
-        # letter with no error, which is the one thing this file must not allow.
-        v = ma.get(window)
-        if v is None:
-            v = ma.get(str(window))
-        if v is not None:
-            shown = price(v) if trustworthy else MISSING
-            lines.append(f"{window}-day moving average at {shown}")
-    lines.extend(_esc(c) for c in commentary)
+    lines = [_esc(c) for c in commentary]
     if not lines:
         return ""
     month = tech.get("month", "") if tech else ""
@@ -442,15 +436,19 @@ def cftc_block(cftc: dict) -> str:
     except (ValueError, AttributeError):
         stamp = as_of
 
+    # NESTED, NOT FLAT. These were six bullets at one level, so "Live Cattle:"
+    # and its two figures sat at the same indent as "Feeder Cattle:" and its
+    # two -- nothing but reading order said which pair belonged to which
+    # contract. The product is the bullet; its figures are a list inside it.
     rows = []
     for name in ("Live Cattle", "Feeder Cattle"):
         mk = cftc["markets"].get(name)
         if not mk:
             rows.append(f"{name}: {MISSING}")
             continue
-        rows.append(f"{name}:")
-        rows.append(f"Net Long: {head(mk.get('net_long'))} contracts")
-        rows.append(f"WoW Change: {head(mk.get('wow'))} contracts")
+        inner = _bullets([f"Net Long: {head(mk.get('net_long'))} contracts",
+                          f"WoW Change: {head(mk.get('wow'))} contracts"])
+        rows.append(f"{name}:{inner}")
     return (f"<h2>CFTC Report as of {_esc(stamp)}:</h2>"
             "<div>Managed Money Traders (Futures Only)</div>" + _bullets(rows))
 
@@ -833,15 +831,15 @@ def build_html(ctx: dict) -> str:
             body.append("<h2>Market Action</h2>" + _commentary(c["market_action"]))
 
     if kind == "recap":
-        # The computed averages for BOTH products, then ONE written read under
-        # them. The commentary is passed to neither sub-block: handing the same
-        # bullets to each would print the read twice, once under Live Cattle and
-        # once under Feeders, as though it had been written about each.
-        tech_lc = technicals_block(ctx.get("tech_lc"), [], "Live Cattle")
-        tech_fc = technicals_block(ctx.get("tech_fc"), [], "Feeders")
+        # ONE read covering both products, and no sub-headings for it to sit
+        # under. While the averages printed, this block put them beneath an "Oct
+        # Live Cattle" and an "Oct Feeders" heading and then dropped the single
+        # combined read after the second one -- where it read as though it were
+        # about feeders alone. With nothing computed left to head, the section
+        # is just the read.
         written = _commentary(c.get("technicals", []))
-        if tech_lc or tech_fc or written:
-            body.append("<h2>Technicals</h2>" + tech_lc + tech_fc + written)
+        if written:
+            body.append("<h2>Technicals</h2>" + written)
     else:
         tech_lc = technicals_block(ctx.get("tech_lc"), c.get("technicals_lc", []), "Live Cattle")
         tech_fc = technicals_block(ctx.get("tech_fc"), c.get("technicals_fc", []), "Feeders")

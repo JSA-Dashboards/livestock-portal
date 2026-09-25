@@ -420,13 +420,42 @@ def hints(ctx: dict, kind: str = "tuesday") -> dict:
             add(slot, f"{label}: no bars available")
             continue
         ma = tech.get("ma", {})
-        add(slot, f"{tech.get('month','')} {label} close {tech.get('last_close')}"
-                  f" on {tech.get('last_date')}")
+        # "unavailable", never a bare None. These are the figures Ross writes
+        # from, and "close None on None" in a draft invites a guess where the
+        # printed letter would have shown a [[?]].
+        def _fig(v):
+            return "unavailable" if v is None else v
+
+        add(slot, f"{tech.get('month','')} {label} close {_fig(tech.get('last_close'))}"
+                  f" on {_fig(tech.get('last_date'))}")
+        # A MEAN OVER A GAPPED SERIES IS WRONG, NOT APPROXIMATE. On 2026-09-22 a
+        # "9-day" average was really nine of the last fourteen sessions and read
+        # 216.392 where the true figure was 218.90. The letter used to mark that
+        # [[?]] when it printed the averages; it no longer prints them, so the
+        # warning has to live HERE -- Ross writes his read from these figures,
+        # and a wrong number restated in his own prose carries no [[?]] at all.
+        trustworthy = tech.get("complete", True)
         for w in config.MA_WINDOWS:
-            add(slot, f"{w}-day MA {ma.get(w)}  (printed automatically)")
-        add(slot, f"prior session high/low {tech.get('prior_high')} / {tech.get('prior_low')}")
-        add(slot, f"{tech.get('swing_days')}-day swing high/low "
-                  f"{tech.get('swing_high')} / {tech.get('swing_low')}")
+            # BOTH KEY TYPES. technicals.build returns int keys, but the context
+            # is cached to JSON between the fetch run and the --no-fetch
+            # re-render, and JSON has no integer keys -- 9 comes back as "9".
+            # render.technicals_block carried this same guard until the averages
+            # stopped printing, and removing it there left the hazard here: the
+            # draft quoted "9-day MA None" as the figure to write against.
+            v = ma.get(w)
+            if v is None:
+                v = ma.get(str(w))
+            if v is None:
+                add(slot, f"{w}-day MA unavailable")
+            elif trustworthy:
+                add(slot, f"{w}-day MA {v}")
+            else:
+                add(slot, f"{w}-day MA {v} -- DO NOT QUOTE, the series has a hole "
+                          f"({', '.join(tech.get('gaps') or []) or 'missing sessions'})")
+        add(slot, f"prior session high/low {_fig(tech.get('prior_high'))} / "
+                  f"{_fig(tech.get('prior_low'))}")
+        add(slot, f"{_fig(tech.get('swing_days'))}-day swing high/low "
+                  f"{_fig(tech.get('swing_high'))} / {_fig(tech.get('swing_low'))}")
         add(slot, "support/resistance below are YOUR call -- nothing is printed unless you write it")
 
     # Figures SJ_LS712 does publish but the Tuesday letter does not print. They

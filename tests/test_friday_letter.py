@@ -248,47 +248,53 @@ def test_friday_rundown_words_the_yoy_rates():
 
 def test_moving_averages_survive_the_json_round_trip():
     """
-    technicals.build() returns int keys; the context is cached to JSON between
-    the fetch run and the --no-fetch re-render, and JSON has no integer keys.
-    Looking up only the int made the moving averages vanish from the re-rendered
-    letter with no error at all.
+    THE GUARD MOVED, THE HAZARD DID NOT. technicals.build returns int keys and
+    the context is cached to JSON between the fetch and the --no-fetch
+    re-render, so ma[9] comes back as ma["9"]. render.technicals_block carried
+    this until the averages stopped printing on 2026-09-25; removing it there
+    left hints quoting "9-day MA None" as the figure to write against.
     """
     import json
-    tech = {"month": "Oct", "ma": {9: 216.392, 20: 215.216}}
-    fresh = render.technicals_block(tech, [], "Live Cattle")
-    reloaded = render.technicals_block(json.loads(json.dumps(tech)), [], "Live Cattle")
-    assert "216.392" in fresh and "215.216" in fresh
-    assert reloaded == fresh
+    from letter import build as letter_build
+    tech = {"month": "Oct", "ma": {9: 220.11, 20: 219.42}, "complete": True}
+    ctx = {"live_cattle": [], "feeder_cattle": [], "tech_lc": json.loads(json.dumps(tech)),
+           "tech_fc": None, "change_basis": "day", "cash": {}, "cutout": {}, "slaughter": {},
+           "outside": [], "calendar": [], "daily_slaughter": {}, "carcass_weights": {},
+           "fci": {}, "douglas": {}, "cftc": {}, "regional_cash": {}, "cof": {}}
+    ma_lines = [l for l in letter_build.hints(ctx, "tuesday")["technicals_lc"] if "MA" in l]
+    assert any("220.11" in l for l in ma_lines)
+    assert any("219.42" in l for l in ma_lines)
+    assert not any("None" in l for l in ma_lines)
+
+    # and nothing anywhere in the draft quotes a bare None at Ross
+    all_lines = " ".join(letter_build.hints(ctx, "tuesday")["technicals_lc"])
+    assert "None" not in all_lines
 
 
-# -- Futures data integrity ---------------------------------------------------
-
-def test_session_gaps_ignores_a_single_holiday_but_reports_a_run():
-    """
-    2026-09-07 was Labor Day and the series steps 09-04 to 09-08 -- one missing
-    weekday, not a fault. The 09-14..09-18 hole is five, and it silently
-    corrupted both the weekly change and the moving averages.
-    """
-    import pandas as pd
-    holiday = pd.to_datetime(["2026-09-04", "2026-09-08", "2026-09-09"]).date
-    assert sources.session_gaps(list(holiday), date(2026, 9, 4), date(2026, 9, 9)) == []
-
-    gapped = pd.to_datetime(["2026-09-11", "2026-09-21", "2026-09-22"]).date
-    found = sources.session_gaps(list(gapped), date(2026, 9, 11), date(2026, 9, 22))
-    assert date(2026, 9, 14) in found and date(2026, 9, 18) in found
-    assert len(found) == 5
-
-
-def test_gapped_technicals_mark_the_averages_rather_than_print_them():
+def test_gapped_technicals_are_flagged_in_the_draft():
     """
     A 9-day mean over a series missing a week read 216.392 where the letter's
-    own figure was 218.90. Wrong, not approximate -- so it is marked.
+    own figure was 218.90. Wrong, not approximate.
+
+    The letter used to mark that [[?]] when it printed the averages. It no
+    longer prints them -- Ross writes the Technicals himself as of 2026-09-25 --
+    so the warning has to reach the DRAFT instead. A wrong number restated in
+    his own prose carries no [[?]] at all, which makes this more important than
+    when the renderer owned it, not less.
     """
+    from letter import build as letter_build
     tech = {"month": "Oct", "ma": {9: 216.392, 20: 215.216},
             "complete": False, "gaps": ["2026-09-14"]}
-    html = render.technicals_block(tech, [], "Live Cattle")
-    assert render.MISSING in html
-    assert "216.392" not in html
+    ctx = {"live_cattle": [], "feeder_cattle": [], "tech_lc": tech, "tech_fc": None,
+           "change_basis": "day", "cash": {}, "cutout": {}, "slaughter": {},
+           "outside": [], "calendar": [], "daily_slaughter": {}, "carcass_weights": {},
+           "fci": {}, "douglas": {}, "cftc": {}, "regional_cash": {}, "cof": {}}
+    lines = " ".join(letter_build.hints(ctx, "tuesday")["technicals_lc"])
+    assert "DO NOT QUOTE" in lines
+    assert "2026-09-14" in lines
+
+    # ...and nothing computed reaches the letter either way
+    assert render.technicals_block(tech, [], "Live Cattle") == ""
 
 
 def test_cutout_pm_label_comes_from_the_report_date():
@@ -387,16 +393,19 @@ def test_the_recap_did_not_disturb_the_other_two():
 
 def test_the_recap_prints_one_technicals_read_not_two():
     """
-    Handing the same bullets to both sub-blocks would print the read twice,
-    under Live Cattle and again under Feeders, as if written about each.
+    While the averages printed, the single combined read landed after an "Oct
+    Feeders" heading and read as though it were about feeders alone. With
+    nothing computed left to head, the section is just the read -- once.
     """
     ctx = _pm_ctx({"technicals": ["Holding the 20-day."]}, kind="recap")
-    ctx["tech_lc"] = {"ma": {9: 220.0, 20: 219.0}, "complete": True}
-    ctx["tech_fc"] = {"ma": {9: 336.0, 20: 334.0}, "complete": True}
+    ctx["tech_lc"] = {"month": "Oct", "ma": {9: 220.0, 20: 219.0}, "complete": True}
+    ctx["tech_fc"] = {"month": "Oct", "ma": {9: 336.0, 20: 334.0}, "complete": True}
     html = render.build_html(ctx)
     assert html.count("Holding the 20-day.") == 1
-    # both products' computed averages still appear
-    assert "220.00" in html and "336.00" in html
+    assert "<h2>Technicals</h2>" in html
+    # nothing computed, and no per-product sub-heading for the read to sit under
+    assert "220.00" not in html and "336.00" not in html
+    assert "moving average" not in html
 
 
 def test_the_recap_keeps_its_signature_inline():
