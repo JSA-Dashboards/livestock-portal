@@ -31,8 +31,10 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).parent))
 
 import snowflake_db as db
-from herd import (BASELINE_YEARS, annual_ratio, class_prices, decompose,
-                  latest_date, monthly_ratio, receipts_yoy)
+from herd import (BASELINE_YEARS, LEGACY_LAST_GOOD_WEEK, YTD_CUT, annual_ratio,
+                  class_prices, decompose, heifer_share_annual,
+                  heifer_share_rolling, heifer_share_summary, latest_date,
+                  receipts_yoy)
 
 # ── JSA Brand Colors (shared with the rest of the portal shell) ──────────────
 JPSI_DARK = "#32373c"
@@ -136,10 +138,35 @@ def load_all():
             "latest": latest_date(conn),
             "current": decompose(conn),
             "annual": annual_ratio(conn),
-            "monthly": monthly_ratio(conn),
             "classes": class_prices(conn),
             "receipts": receipts_yoy(conn),
         }
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_heifer_share():
+    """
+    The receipts-mix section, loaded SEPARATELY from load_all() on purpose.
+
+    It reads a different table (`feeder_receipts`, from feeder_sex_mix.py), and
+    folding it into load_all's try/except would mean a missing or empty table
+    there takes down the retention-incentive half of the page too -- which is
+    fed by a different ingest and would be perfectly healthy. Returning None
+    here costs one section instead.
+    """
+    if not db.use_snowflake() and not DB_PATH.exists():
+        return None
+    conn = db.get_conn()
+    try:
+        summary = heifer_share_summary(conn)
+        if not summary:
+            return None
+        return {"summary": summary, "annual": heifer_share_annual(conn),
+                "rolling": heifer_share_rolling(conn)}
     except Exception:
         return None
     finally:
@@ -343,14 +370,188 @@ if _rc:
     )
 
 
+# ── Heifer Share of Feeder Receipts ──────────────────────────────────────────
+# The volume-side read, and the counterpart to everything above it: the ratio
+# section prices the retention DECISION, this shows what producers did about it.
+HS = load_heifer_share()
+if HS:
+    _sum = HS["summary"]
+    _cur, _lo, _hi = _sum["current"], _sum["low"], _sum["high"]
+
+    st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="sec-header">Heifer Share of Feeder Receipts</div>',
+                unsafe_allow_html=True)
+    st.caption(
+        f"Heifers as a share of steer + heifer feeder cattle sold at auction, "
+        f"year-to-date through week {YTD_CUT} of every year. When "
+        f"producers keep heifers back to breed, those heifers stop arriving at the "
+        f"sale barn — so a **falling** share is retention. Unlike the ratio above, "
+        f"this measures what was done rather than what it paid to do."
+    )
+
+    h = st.columns(4)
+    with h[0]:
+        _since = (f'<div class="tile-delta-pos">▼ lowest since {_sum["since"]}</div>'
+                  if _sum["since"] else '<div class="tile-delta-neu">—</div>')
+        st.markdown(tile(f"Heifer Share, {_cur['year']}", f"{_cur['share']:.1f}%", _since),
+                    unsafe_allow_html=True)
+    with h[1]:
+        st.markdown(tile("Cycle Peak", f"{_hi['share']:.1f}%",
+                         f'<div class="tile-delta-neu">{_hi["year"]}</div>'),
+                    unsafe_allow_html=True)
+    with h[2]:
+        st.markdown(tile("Last Rebuild Low", f"{_lo['share']:.1f}%",
+                         f'<div class="tile-delta-neu">{_lo["year"]}</div>'),
+                    unsafe_allow_html=True)
+    with h[3]:
+        st.markdown(tile("Distance To That Low", f"{_sum['gap_to_low']:.2f} pts",
+                         '<div class="tile-delta-pos">▼ closing</div>'),
+                    unsafe_allow_html=True)
+
+    _ann = HS["annual"]
+    _yrs = [r["year"] for r in _ann]
+    _shs = [r["share"] for r in _ann]
+    # The spliced year is drawn in a muted colour rather than hidden: it is a
+    # real reading, but it is the one point built from two archives.
+    _colors = [POS if r["year"] == _cur["year"]
+               else ("#9fb8c8" if r["src"] == "spliced" else JPSI_BLUE) for r in _ann]
+    _sizes = [14 if r["year"] == _cur["year"]
+              else (11 if r["year"] in (_hi["year"], _lo["year"]) else 7) for r in _ann]
+
+    _f1 = go.Figure()
+    _f1.add_trace(go.Scatter(x=_yrs, y=_shs, mode="lines", fill="tozeroy",
+                             fillcolor="rgba(6,147,227,0.08)",
+                             line=dict(color=JPSI_BLUE, width=2.5),
+                             hovertemplate="%{x}<br>heifer share %{y:.2f}%<extra></extra>"))
+    _f1.add_trace(go.Scatter(x=_yrs, y=_shs, mode="markers", hoverinfo="skip",
+                             marker=dict(size=_sizes, color=_colors,
+                                         line=dict(color="#ffffff", width=2))))
+    _f1.add_hline(y=_lo["share"], line_dash="dot", line_color=POS)
+    _f1.add_annotation(x=_hi["year"], y=_hi["share"], xanchor="left", ax=6, ay=-32,
+                       text=f"<b>{_hi['share']:.1f}%</b> peak liquidation",
+                       showarrow=True, arrowhead=0, arrowcolor=MUTED,
+                       font=dict(size=12, color=TEXT))
+    _f1.add_annotation(x=_lo["year"], y=_lo["share"], ax=0, ay=40,
+                       text=f"<b>{_lo['share']:.1f}%</b> last rebuild",
+                       showarrow=True, arrowhead=0, arrowcolor=MUTED,
+                       font=dict(size=12, color=TEXT))
+    _f1.add_annotation(x=_cur["year"], y=_cur["share"], ax=-14, ay=34,
+                       text=f"<b>{_cur['share']:.1f}%</b>", showarrow=True,
+                       arrowhead=0, arrowcolor=POS, font=dict(size=13, color=TEXT))
+    _f1.update_layout(height=380, margin=dict(l=0, r=10, t=30, b=0),
+                      plot_bgcolor="white", paper_bgcolor="white", showlegend=False,
+                      yaxis_title="heifer share of steer + heifer receipts")
+    _f1.update_yaxes(showgrid=True, gridcolor="#f1f5f9", ticksuffix="%",
+                     range=[min(_shs) - 1.2, max(_shs) + 1.1])
+    _f1.update_xaxes(showgrid=False, tickvals=[y for i, y in enumerate(_yrs)
+                                               if i % 2 == 0 or y == _cur["year"]])
+    with st.container(key="wm-heifer-annual"):
+        st.plotly_chart(_f1, use_container_width=True)
+
+    _chg = ""
+    if _sum["heifer_chg"] is not None and _sum["steer_chg"] is not None:
+        _dir = "up" if _sum["steer_chg"] > 0 else "down"
+        _chg = (f" Against {_sum['chg_base_year']}, heifer receipts are down "
+                f"**{abs(_sum['heifer_chg']):,}** head while steer receipts are "
+                f"*{_dir}* **{abs(_sum['steer_chg']):,}** — the decline is females "
+                f"only, which is what retention looks like and what a general "
+                f"contraction in cattle numbers would not.")
+    # Derived, not hard-coded: a deployment without the legacy archive loaded
+    # has no spliced year at all, and the caption should not claim one.
+    _spl = [r["year"] for r in _ann if r["src"] == "spliced"]
+    _spl_txt = ""
+    if _spl:
+        _spl_txt = (
+            f" **{_spl[0]} is spliced** — USDA retired the archive behind the early "
+            f"years mid-year and stood up its replacement in the same weeks, so that "
+            f"point takes the weeks through {LEGACY_LAST_GOOD_WEEK} from one and the "
+            f"rest from the other; the two halves agree to within 0.26 points.")
+    st.caption(
+        f"Each point covers the same weeks of its year, across the same 20 states."
+        f"{_spl_txt}{_chg}"
+    )
+
+    _roll = HS["rolling"]
+    if len(_roll) > 8:
+        _pk = max(_roll, key=lambda r: r["share"])
+        _rc = _roll[-1]
+        st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+        st.markdown('<div class="sec-header">The Current Turn, Week By Week</div>',
+                    unsafe_allow_html=True)
+        _f2 = go.Figure()
+        _f2.add_trace(go.Scatter(x=[r["week"] for r in _roll],
+                                 y=[r["share"] for r in _roll], mode="lines",
+                                 fill="tozeroy", fillcolor="rgba(6,147,227,0.09)",
+                                 line=dict(color=JPSI_BLUE, width=2.5),
+                                 hovertemplate="%{x|%b %Y}<br>%{y:.2f}%<extra></extra>"))
+        _f2.add_trace(go.Scatter(x=[_pk["week"]], y=[_pk["share"]], mode="markers",
+                                 hoverinfo="skip",
+                                 marker=dict(size=11, color=MUTED,
+                                             line=dict(color="#ffffff", width=2))))
+        _f2.add_trace(go.Scatter(x=[_rc["week"]], y=[_rc["share"]], mode="markers",
+                                 hoverinfo="skip",
+                                 marker=dict(size=14, color=POS,
+                                             line=dict(color="#ffffff", width=2))))
+        _f2.add_annotation(x=_pk["week"], y=_pk["share"], ax=-2, ay=-32,
+                           text=f"<b>peak {_pk['share']:.1f}%</b>", showarrow=True,
+                           arrowhead=0, arrowcolor=MUTED, font=dict(size=12, color=TEXT))
+        _f2.add_annotation(x=_rc["week"], y=_rc["share"], ax=0, ay=34,
+                           text=f"<b>{_rc['share']:.1f}%</b>", showarrow=True,
+                           arrowhead=0, arrowcolor=POS, font=dict(size=13, color=TEXT))
+        _f2.update_layout(height=320, margin=dict(l=0, r=10, t=26, b=0),
+                          plot_bgcolor="white", paper_bgcolor="white",
+                          showlegend=False, yaxis_title="rolling 52-week heifer share")
+        # An explicit range, because fill="tozeroy" otherwise drags the axis down
+        # to 0% and squeezes a four-point move into a sliver at the top of the
+        # chart. The fill is there to weight the area, not to imply a zero base.
+        _rs = [r["share"] for r in _roll]
+        _f2.update_yaxes(showgrid=True, gridcolor="#f1f5f9", ticksuffix="%",
+                         range=[min(_rs) - 0.7, max(_rs) + 0.7])
+        _f2.update_xaxes(showgrid=False)
+        st.plotly_chart(_f2, use_container_width=True)
+        st.caption(
+            "A rolling 52-week window, which is seasonally neutral and so puts the "
+            "turn on its actual date rather than in whichever annual bucket the "
+            "calendar assigns it. It stays inside the current data source: a window "
+            "spanning the 2019 handover would mix two archives mid-window, which the "
+            "annual series above avoids by construction."
+        )
+
+    with st.expander("ℹ️  How to read the heifer share"):
+        st.markdown(f"""
+**What it measures.** Every feeder animal sold at auction is a steer or a heifer.
+Steers have one destination — the feedlot. A heifer can go to the feedlot too, or
+she can stay home and be bred. So the heifer share of feeder receipts is a direct
+count of which choice was made, aggregated over {len(_ann)} years and 20 states.
+
+**Falling is rebuilding.** A share of **{_cur['share']:.1f}%** in {_cur['year']}
+against a peak of **{_hi['share']:.1f}%** in {_hi['year']} means heifers are being
+withheld. The benchmark is **{_lo['share']:.1f}%** in {_lo['year']}, the last time
+the national herd genuinely expanded — today sits **{_sum['gap_to_low']:.2f} points**
+above it.
+
+**Why it is not the same as the ratio above.** The retention incentive prices the
+decision; this counts the outcome. They can disagree, and when they do the
+disagreement is the story: an incentive nobody acts on is not a rebuild, and
+retention in the face of a poor incentive says something about expectations.
+
+**What it is not.** Auction receipts only — direct, video and internet sales are
+not included, and roughly half the feeder cattle in the country change hands that
+way. It is a large consistent sample, not a census, and the *level* matters less
+than the direction and where it sits against {_lo['year']}.
+""")
+
+
 # ── Awaiting NASS ────────────────────────────────────────────────────────────
 st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 st.markdown('<div class="sec-header">Herd Inventory — Awaiting Data</div>',
             unsafe_allow_html=True)
 st.warning(
-    "**The head-count half of this page is not wired up yet.** Everything above "
-    "is a price signal: it measures the incentive to retain females, not how many "
-    "were retained. The counts that measure it directly are USDA NASS January 1 "
+    "**The inventory half of this page is still not wired up.** The receipts-mix "
+    "section above is a volume signal — it counts heifers that went to the feedlot "
+    "rather than pricing the choice — but neither it nor the ratio is a head count "
+    "of the breeding herd, and auction receipts miss the direct and video trade "
+    "entirely. The counts that measure it directly are USDA NASS January 1 "
     "inventory — **beef cows** and **beef replacement heifers ≥500 lb** — plus "
     "monthly **beef cow slaughter** for the culling side. Beef cows are already in "
     "the shared NASS cache; replacement heifers and class-level slaughter are not, "
