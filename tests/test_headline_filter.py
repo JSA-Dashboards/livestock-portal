@@ -347,3 +347,57 @@ def test_equal_timestamps_keep_their_source_order(monkeypatch):
         monkeypatch.setattr(headlines, fn, lambda *a, **k: [])
     got = headlines.candidates(include_mailbox=False)
     assert [i["title"] for i in got["items"]] == [f"headline {n}" for n in range(5)]
+
+
+def test_the_usda_narratives_are_pinned_above_everything():
+    """
+    A pure time sort put them at 22 and 41 of 42 on 2026-09-24 -- not because
+    they were stale, but because AMS stamps Eastern with no zone and the border
+    report carries a date with no time. They are also the only two items that
+    are USDA's own prose about this market rather than someone's headline.
+    """
+    items = [
+        {"title": "brand new wire story", "when": "2026-09-24T23:00:00+00:00"},
+        {"title": "AMS narrative", "when": "09/22/2026 11:07:09", "pinned": True},
+        {"title": "older wire story", "when": "2026-09-24T09:00:00+00:00"},
+        {"title": "border narrative", "when": "2026-09-21", "pinned": True},
+    ]
+    ordered = sorted(headlines._dedupe(items),
+                     key=lambda i: (bool(i.get("pinned")), headlines._when_key(i)),
+                     reverse=True)
+    assert [i["title"] for i in ordered] == [
+        "AMS narrative",          # pinned, and the newer of the two pins
+        "border narrative",
+        "brand new wire story",   # then everything else, newest first
+        "older wire story",
+    ]
+
+
+def test_the_pin_is_set_at_the_source_not_matched_on_the_name():
+    """
+    An outlet called "USDA Reports Weekly" arriving from a news search must not
+    pin itself to the top of the panel. Only fetch_usda_narratives sets the flag.
+    """
+    src = (__import__("pathlib").Path(headlines.__file__)).read_text(encoding="utf-8")
+    narratives = src[src.index("def fetch_usda_narratives"):src.index("def candidates")]
+    assert narratives.count('"pinned": True') == 2, "both USDA rows must carry the flag"
+
+    ordering = src[src.index("ordered = sorted"):src.index("ordered = sorted") + 200]
+    assert 'i.get("pinned")' in ordering
+    assert "USDA" not in ordering, "the sort must not match on the source name"
+
+    # an impostor from a search carries no flag and sorts by time like anything else
+    impostor = {"source": "USDA Reports Weekly", "title": "x", "when": "2020-01-01"}
+    assert not impostor.get("pinned")
+
+
+def test_candidates_puts_the_pinned_rows_first(monkeypatch):
+    monkeypatch.setattr(headlines, "fetch_usda_narratives", lambda *a, **k: [
+        {"source": "USDA AMS cash trade", "title": "AMS prose",
+         "when": "09/20/2026 11:07:09", "pinned": True}])
+    monkeypatch.setattr(headlines, "fetch_rss", lambda *a, **k: [
+        {"source": "Beef Magazine", "title": "much newer", "when": "2026-09-24T22:00:00+00:00"}])
+    for fn in ("fetch_packer_news", "fetch_trade_news", "fetch_general_news"):
+        monkeypatch.setattr(headlines, fn, lambda *a, **k: [])
+    got = headlines.candidates(include_mailbox=False)
+    assert [i["title"] for i in got["items"]] == ["AMS prose", "much newer"]

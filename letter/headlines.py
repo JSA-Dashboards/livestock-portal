@@ -368,6 +368,7 @@ def fetch_usda_narratives(as_of: date = None) -> list:
                     out.append({"source": "USDA AMS cash trade",
                                 "title": trend,
                                 "when": row.get("published_date"),
+                                "pinned": True,
                                 "link": ""})
             break
     except Exception as e:
@@ -387,7 +388,7 @@ def fetch_usda_narratives(as_of: date = None) -> list:
             row = df.iloc[0]
             text = _clean(str(row.get("narrative") or ""))
             if text:
-                out.append({"source": "USDA border report",
+                out.append({"source": "USDA border report", "pinned": True,
                             "title": text, "when": str(row.get("report_date")), "link": ""})
     except Exception:
         # Snowflake being unavailable is not worth a panel-wide error; the AMS
@@ -503,14 +504,30 @@ def candidates(as_of: date = None, limit_per_feed: int = 12,
         errors.extend({"source": "", "error": e} for e in got.get("errors", []))
         needs_sign_in = bool(got.get("needs_sign_in"))
 
-    # NEWEST AT THE TOP. Sorted after the dedupe, not before: dedupe keeps the
-    # FIRST occurrence and the source order above is priority order, so the USDA
-    # copy of a story survives over a newsroom's. Ordering is display only and
-    # must not decide which duplicate wins.
+    # USDA FIRST, THEN NEWEST. Sorted after the dedupe, not before: dedupe keeps
+    # the FIRST occurrence and the source order above is priority order, so the
+    # USDA copy of a story survives over a newsroom's. Ordering is display only
+    # and must not decide which duplicate wins.
     #
-    # Stable, so items sharing a timestamp -- or both unparseable -- keep the
-    # source order they arrived in.
-    ordered = sorted(_dedupe(items), key=_when_key, reverse=True)
+    # THE PIN EXISTS BECAUSE A PURE TIME SORT BURIED THE BEST LINE. AMS writes a
+    # paragraph on the day's cash trade every day -- this module's docstring
+    # calls it the single most useful line in the panel most mornings -- and on
+    # 2026-09-24 it landed at 22 of 42, with the border report at 41. Not
+    # because they were stale: AMS stamps in Eastern with no zone, and the
+    # border report carries a date and no time at all, so both read older than
+    # they are. They are also not really headlines -- they are USDA's own prose
+    # about this market, which is why they get a different rule.
+    #
+    # Flagged at the source rather than matched on the name here: an outlet
+    # called "USDA Reports Weekly" arriving from a news search must not pin
+    # itself to the top of Ross's panel.
+    #
+    # reverse=True reads both parts of the key -- pinned (True sorts first),
+    # then the timestamp, newest first within each group. Stable, so the ten
+    # headlines out of one digest keep the order they were parsed in.
+    ordered = sorted(_dedupe(items),
+                     key=lambda i: (bool(i.get("pinned")), _when_key(i)),
+                     reverse=True)
 
     return {"items": ordered,
             "errors": [(f"{e['source']}: {e['error']}" if e.get("source") else e["error"])
