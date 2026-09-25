@@ -408,16 +408,33 @@ def test_the_recap_prints_one_technicals_read_not_two():
     assert "moving average" not in html
 
 
-def test_the_recap_keeps_its_signature_inline():
+def test_no_letter_spends_a_page_on_the_signature():
     """
-    That one page break was the difference between two sheets and three, which
-    is most of what "lighter" was supposed to buy. Tuesday and Friday keep the
-    signature page.
+    Every evening letter used to force the signature and disclaimer onto a
+    sheet of their own. Measured 2026-09-25 on Ross's Friday letter: the break
+    was worth exactly one page, and page four carried nothing but his name and
+    the compliance text.
+
+    config.SIGNATURE_OWN_PAGE puts it back if anyone wants it; the recap
+    ignores the setting and never takes a page for this.
     """
-    recap = render.build_html(_pm_ctx({"market_action": ["x"]}, kind="recap"))
-    tuesday = render.build_html(_pm_ctx({"market_action": ["x"]}, kind="tuesday"))
-    assert "sig own-page" not in recap
-    assert "sig own-page" in tuesday
+    from letter import config
+    assert config.SIGNATURE_OWN_PAGE is False
+    for kind in ("tuesday", "recap", "friday"):
+        html = render.build_html(_pm_ctx({"market_action": ["x"], "key_headlines": ["x"]},
+                                         kind=kind))
+        assert "sig own-page" not in html, kind
+
+
+def test_the_setting_can_put_the_signature_page_back(monkeypatch):
+    """Turned off by preference, not deleted -- Monday and Friday still honour it."""
+    from letter import config
+    monkeypatch.setattr(config, "SIGNATURE_OWN_PAGE", True)
+    assert "sig own-page" in render.build_html(
+        _pm_ctx({"market_action": ["x"]}, kind="tuesday"))
+    # the recap is exempt regardless
+    assert "sig own-page" not in render.build_html(
+        _pm_ctx({"market_action": ["x"]}, kind="recap"))
 
 
 def test_the_am_report_ignores_the_weekday_entirely():

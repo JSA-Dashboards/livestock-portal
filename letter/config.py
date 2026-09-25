@@ -89,6 +89,18 @@ SIGNATURE = {
     "cell": "712-870-0556",
 }
 
+# ── Where the signature sits ─────────────────────────────────────────────────
+# FALSE from 2026-09-25. Every evening letter used to force the signature and
+# disclaimer onto a sheet of their own, which costs a whole page whenever the
+# content happens to end near a boundary -- Ross's Friday letter came out at
+# four pages where three would have held it, with page four carrying nothing
+# but his name and the compliance text. Measured: the break was worth exactly
+# one page.
+#
+# The morning brief never did this, and the recap stopped on 2026-09-24.
+# Set True to put it back on its own sheet.
+SIGNATURE_OWN_PAGE = False
+
 SIGN_OFF_TUESDAY = "Have a good evening,"
 # The morning report's own wording. Never explicitly chosen -- they were neutral
 # stand-ins for "Have a good evening", which is plainly wrong on a 07:30 report

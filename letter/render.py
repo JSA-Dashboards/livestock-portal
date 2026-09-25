@@ -896,5 +896,8 @@ def build_html(ctx: dict) -> str:
     # a clean signature page suits them. On the recap that one page break was
     # the difference between two sheets and three, which is most of what
     # "lighter" was supposed to buy.
-    body.append(_signature_html(issue, own_page=(kind != "recap")))
+    # The recap never takes a page for this; the others follow the setting.
+    # See config.SIGNATURE_OWN_PAGE -- it is False, so nothing does today.
+    body.append(_signature_html(
+        issue, own_page=(kind != "recap") and config.SIGNATURE_OWN_PAGE))
     return _page(title, stamp, body)
