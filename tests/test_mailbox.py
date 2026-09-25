@@ -74,7 +74,10 @@ def test_top_is_generous_enough_to_hold_a_window():
     with an $orderby and is not without one.
     """
     import re
-    tops = {int(m) for m in re.findall(r'"\$top": (\d+)', SRC)}
+    # The DIGEST query only. _never_matched uses $top 1 deliberately -- it is an
+    # existence check and wants one row or none.
+    block = SRC[SRC.index("fields = "):SRC.index("try:", SRC.index("fields = "))]
+    tops = {int(m) for m in re.findall(r'"\$top": (\d+)', block)}
     assert tops and min(tops) >= 25, f"$top too small without an $orderby: {tops}"
 
 
@@ -120,3 +123,78 @@ def test_a_url_inside_a_sentence_is_not_a_bare_link():
 def test_an_address_with_spaces_around_it_still_goes():
     """Chrome wins over the bare-link rule; neither should let this through."""
     assert mailbox.parse_headlines("Contact us at news@example.com today", "text") == []
+
+
+# -- The wrong address that hid as a quiet publisher ---------------------------
+
+def test_global_agritrends_sends_from_agritrends_dot_com():
+    """
+    It was configured as globalagritrends.com and matched nothing from the day
+    this module was written until 2026-09-25. The real sender is agritrends.com.
+    """
+    gat = next(d for d in mailbox.DIGESTS if d["label"] == "Global AgriTrends")
+    assert gat["sender"] == "no-reply@agritrends.com"
+    assert "globalagritrends" not in gat["sender"]
+
+
+def test_only_the_no_reply_address_counts():
+    """
+    bstuart@agritrends.com is a person at the same firm who replies about price
+    moves. Matching the domain would put that correspondence in the panel.
+    """
+    gat = next(d for d in mailbox.DIGESTS if d["label"] == "Global AgriTrends")
+    assert gat["sender"].startswith("no-reply@")
+
+
+def test_a_matcher_that_never_matches_is_reported_differently(monkeypatch):
+    """
+    THE WHOLE POINT. An exact sender filter that is wrong returns zero rows --
+    the same answer a publisher who did not write today gives. "Nothing in the
+    last 72h" was on screen daily for months while the address was wrong.
+    """
+    class _Resp:
+        status_code = 200
+        def json(self):
+            return {"value": []}
+
+    monkeypatch.setattr(mailbox, "token", lambda interactive=False: ("tok", None))
+    monkeypatch.setattr("requests.get", lambda *a, **k: _Resp())
+    monkeypatch.setattr(mailbox, "DIGESTS", [{"label": "Ghost", "sender": "nope@example.com"}])
+
+    got = mailbox.fetch_digests()
+    assert got["items"] == []
+    assert any("NO mail from" in e and "check the address" in e for e in got["errors"]), got["errors"]
+
+
+def test_a_search_matcher_gets_no_verdict():
+    """
+    $search is broad by nature -- zero hits says nothing about the matcher being
+    wrong, so it is not accused of it.
+    """
+    assert mailbox._never_matched({}, {"label": "x", "match": "sterling"}) is False
+
+
+# -- Chrome that reached the panel as cattle headlines -------------------------
+
+@pytest.mark.parametrize("junk", [
+    "View this email in your browser",
+    "View this e-mail in your browser",
+    "view in browser",
+    "update subscription preferences",
+    "Manage your email preferences",
+    "Change preferences",
+    "Customize your Daily Bulletin",
+    "Update your email preferences",
+])
+def test_newsletter_chrome_is_dropped(junk):
+    assert mailbox.parse_headlines(junk, "text") == [], junk
+
+
+@pytest.mark.parametrize("real", [
+    "What We're Watching: Beef & Pork Markets",
+    "ALERT: Uruguay proposes to share unused beef quota",
+    "China's Meat and Poultry Imports Drop -5% in August",
+])
+def test_agritrends_headlines_survive(real):
+    """Real subjects from the digest that was invisible until today."""
+    assert mailbox.parse_headlines(real, "text") == [real], real

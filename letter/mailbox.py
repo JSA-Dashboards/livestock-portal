@@ -62,7 +62,16 @@ DIGESTS = [
     # weekly newsletters and "50% off" promotions -- and does not belong in a
     # market headline panel.
     {"label": "eMeat", "sender_name": "The EMEAT Daily Bulletin"},
-    {"label": "Global AgriTrends", "sender": "no-reply@globalagritrends.com"},
+    # agritrends.com, NOT globalagritrends.com. It was the latter from the day
+    # this was written until 2026-09-25, and matched nothing the whole time --
+    # an exact sender filter that is wrong returns zero messages, which is
+    # exactly what a publisher who did not write today also returns. It only
+    # surfaced because the source had been quiet two days running and that
+    # looked worth checking. See _never_matched below.
+    #
+    # no-reply ONLY. bstuart@agritrends.com is a person at the same firm who
+    # replies about price moves, and that correspondence is not a digest.
+    {"label": "Global AgriTrends", "sender": "no-reply@agritrends.com"},
     # John Nalivka at Sterling Marketing. The address is exact where "sterling"
     # as a word search was not; it also catches every flavour he sends -- Profit
     # Tracker, Monthly, Red Meat Trade, Pork Industry -- which a subject match
@@ -75,11 +84,16 @@ DIGESTS = [
 # 2026-09-24, the first day this saw real messages -- the four below are all
 # things it actually offered Ross as cattle headlines.
 _CHROME = re.compile(
-    r"unsubscribe|view (this |it )?in (your )?browser|privacy polic|terms of|"
-    r"contact us|advertise|manage (your )?preferences|forward to a friend|"
-    r"update profile|follow us|subscribe|log ?in|sign ?in|click here|read more|"
-    # "Customize your Daily Bulletin", "Update your email preferences"
-    r"customi[sz]e your|email preferences|update your|"
+    r"unsubscribe|privacy polic|terms of|contact us|advertise|"
+    r"forward to a friend|update profile|follow us|subscribe|log ?in|sign ?in|"
+    r"click here|read more|"
+    # "View this email in your browser" -- the optional noun in the middle is
+    # why the original "view (this |it )?in browser" missed it.
+    r"view (this |it )?(e-?mail |message )?in (your )?browser|"
+    # "manage/update/change [your] [email|subscription] preferences"
+    r"(manage|update|change|edit) (your )?(e-?mail |subscription |contact )?preferences|"
+    # "Customize your Daily Bulletin"
+    r"customi[sz]e your|update your|"
     r"^\W*$", re.I)
 
 # A link whose text IS the address it points at -- "newsletters@newsletter.
@@ -192,6 +206,36 @@ def parse_headlines(body: str, content_type: str = "html", limit: int = 15) -> l
     return out
 
 
+def _never_matched(headers: dict, src: dict) -> bool:
+    """
+    True when this source's matcher finds NOTHING in the whole mailbox.
+
+    THE POINT IS TO TELL TWO IDENTICAL-LOOKING FAILURES APART. "Global
+    AgriTrends: nothing in the last 72h" was on screen every day from the day
+    this module was written until 2026-09-25, and it was not a quiet publisher
+    -- the address was globalagritrends.com where the sender is agritrends.com.
+    An exact filter that is wrong returns zero rows, which is the same answer a
+    publisher who did not write today gives.
+
+    One extra request, only on the path that already found nothing, and the
+    panel gets to say "check the address" instead of shrugging.
+    """
+    import requests
+    if src.get("sender"):
+        q = {"$filter": f"from/emailAddress/address eq '{src['sender']}'", "$top": 1,
+             "$select": "id"}
+    elif src.get("sender_name"):
+        q = {"$filter": f"startswith(from/emailAddress/name,'{src['sender_name']}')",
+             "$top": 1, "$select": "id"}
+    else:
+        return False          # a $search matcher is broad by nature; no verdict
+    try:
+        r = requests.get(f"{GRAPH}/me/messages", headers=headers, timeout=30, params=q)
+        return r.status_code == 200 and not r.json().get("value")
+    except Exception:
+        return False          # a failed check proves nothing
+
+
 def fetch_digests(max_age_h: int = 72, per_source: int = 10) -> dict:
     """
     {"items": [...], "errors": [...]} from the configured digests.
@@ -278,7 +322,12 @@ def fetch_digests(max_age_h: int = 72, per_source: int = 10) -> dict:
             if newest is None or when > newest[0]:
                 newest = (when, m)
         if not newest:
-            errors.append(f"{src['label']}: nothing in the last {max_age_h}h")
+            if _never_matched(headers, src):
+                who = src.get("sender") or src.get("sender_name")
+                errors.append(f"{src['label']}: NO mail from '{who}' in the whole "
+                              f"mailbox -- check the address, not the calendar")
+            else:
+                errors.append(f"{src['label']}: nothing in the last {max_age_h}h")
             continue
 
         when, msg = newest

@@ -767,7 +767,12 @@ def test_a_sender_address_is_an_exact_filter_not_a_body_search():
     # marketing, and a prefix match keeps it out.
     assert by_label["eMeat"]["sender_name"] == "The EMEAT Daily Bulletin"
     assert "match" not in by_label["eMeat"]
-    assert by_label["Global AgriTrends"]["sender"] == "no-reply@globalagritrends.com"
+    # CORRECTED 2026-09-25. This asserted globalagritrends.com, which is what
+    # the config said and not what the publisher sends from -- so the test
+    # passed every day while the source matched nothing at all. A test that
+    # checks a constant against itself cannot notice the constant is wrong;
+    # tests/test_mailbox.py now also asserts the shape that caught it.
+    assert by_label["Global AgriTrends"]["sender"] == "no-reply@agritrends.com"
     assert "match" not in by_label["Global AgriTrends"]
     # "sterling" alone is far too common a word to search bodies for.
     assert by_label["Sterling"]["sender"] == "jnalivka@fmtc.com"
