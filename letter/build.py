@@ -35,8 +35,8 @@ import warnings
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from . import (archive, chart, cof, commentary, config, render, settle_log,
-               sources, technicals, topdf)
+from . import (archive, chart, cof, commentary, config, draft_store, render,
+               settle_log, sources, technicals, topdf)
 
 # snowflake_db passes a raw DBAPI connection to pd.read_sql, which pandas
 # warns about on every query. That is the shared module's choice, not this
@@ -684,6 +684,12 @@ def main(argv=None) -> int:
 
     # The commentary file is created once and never overwritten -- it holds your draft.
     cpath = commentary.path_for(out_dir, issue, slug)
+    # Pull down anything typed on the deployed page before deciding the file is
+    # empty. Without this the CLI and the page each kept their own draft and
+    # whichever you were not looking at was invisible.
+    restored = draft_store.restore(cpath, issue, slug)
+    if restored:
+        print(f"  {restored}")
     existed = cpath.exists()
     commentary.write_template(cpath, hints(ctx, kind), kind)
     ctx["commentary"] = commentary.read(cpath, kind)

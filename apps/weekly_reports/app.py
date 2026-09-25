@@ -15,8 +15,15 @@ WHAT THIS PAGE CANNOT DO WHEN DEPLOYED. Streamlit Community Cloud runs Linux
 containers with no browser, so letter.topdf finds nothing to drive and the
 one-click PDF is unavailable there -- the page offers the HTML instead and you
 print it with Ctrl+P, which uses the same print CSS and gives the same result.
-The container filesystem is also ephemeral, so a draft written on the deployed
-app does not survive a reboot. Run this locally for the full path.
+
+DRAFTS SURVIVE A REBOOT NOW, and that is new as of 2026-09-25. The container
+filesystem is still ephemeral, so out/ is still destroyed every reboot; what
+changed is that the draft no longer lives only there. Every edit is autosaved
+to JSA.LETTER.DRAFTS as well, append-only, and pulled back on the next load.
+This docstring used to end "a draft written on the deployed app does not
+survive a reboot" -- it said so accurately, and a nearly finished Friday letter
+was lost to exactly that anyway, because a warning in a docstring is not a
+backup. See letter/draft_store.py.
 """
 import os
 import sys
@@ -67,8 +74,8 @@ for _name in _ALLOWED_SECRETS:
         os.environ[_name] = str(_value)
 
 from letter import build as letter_build  # noqa: E402
-from letter import (archive, commentary, config, headlines, mailbox, render,  # noqa: E402
-                    settle_log, topdf)
+from letter import (archive, commentary, config, draft_store, headlines,  # noqa: E402
+                    mailbox, render, settle_log, topdf)
 
 # ...then .env, for anything the secrets did not supply.
 #
@@ -421,9 +428,47 @@ if _head_key:
 st.subheader("Your read")
 st.caption("One bullet per line. Blank sections are left out of the letter entirely.")
 
+# Pull the draft back from Snowflake BEFORE the template is written, because
+# write_template() creates the file when it is missing and a created file would
+# then look like a legitimately empty local draft. On a fresh container -- every
+# reboot is one -- this is the step that makes yesterday's writing reappear.
+_restored = draft_store.restore(cpath, issue, slug)
+
 # Seed the boxes with whatever is on disk so the CLI and this page stay in sync.
 commentary.write_template(cpath, letter_build.hints(ctx, kind), kind)
 saved = commentary.read(cpath, kind)
+
+if _restored:
+    st.info(_restored)
+
+# -- Version history ----------------------------------------------------------
+# The reason JSA.LETTER.DRAFTS is append-only: any earlier version can be put
+# back. Nobody could do that on 2026-09-25, which is what this is for.
+#
+# ABOVE THE TEXT AREAS, for the same reason the headline panel is: restoring
+# writes wcr_<section> in session_state, and Streamlit refuses that once the
+# widget with that key has been instantiated. Below the boxes this raised
+# rather than restoring -- which would have been a poor thing to discover
+# while trying to recover a letter.
+
+_versions = draft_store.history(issue, slug) if draft_store.enabled() else []
+if len(_versions) > 1:
+    with st.expander(f"Version history — {len(_versions)} saved"):
+        st.caption("Newest first. Restoring loads that version into the boxes below; "
+                   "nothing is deleted, so restoring is itself undoable.")
+        for _n, (_at, _by, _body) in enumerate(_versions):
+            v1, v2, v3 = st.columns([2, 3, 1])
+            v1.markdown(f"**{_at:%b %d, %H:%M} UTC**" if _at else "—")
+            _lines = len([ln for ln in _body.splitlines() if ln.strip().startswith("- ")])
+            v2.caption(f"{_lines} bullet{'' if _lines == 1 else 's'} · {_by or ''}")
+            if _n == 0:
+                v3.caption("current")
+            elif v3.button("Restore", key=f"wcr_restore_{_n}", use_container_width=True):
+                cpath.write_text(_body, encoding="utf-8")
+                _back = commentary.read(cpath, kind)
+                for _key, _ in commentary.sections_for(kind):
+                    st.session_state[f"wcr_{_key}"] = "\n".join(_back.get(_key, []))
+                st.rerun()
 
 hints = letter_build.hints(ctx, kind)
 edited = {}
@@ -443,13 +488,42 @@ for key, title in commentary.sections_for(kind):
 sections = {k: [ln.strip() for ln in v.splitlines() if ln.strip()]
             for k, v in edited.items()}
 
+# AUTOSAVE. Streamlit reruns this script whenever a text area loses focus, so
+# every box you tab out of lands on disk and in Snowflake without anyone
+# pressing anything. "Save draft" used to be the ONLY thing that wrote, which
+# meant an unsaved hour was one reboot, one idle timeout or one closed laptop
+# away from nothing -- and on 2026-09-25 it was.
+#
+# write_sections() is cheap and idempotent, so it runs unconditionally; the
+# Snowflake write is the one worth guarding, and draft_store.store() already
+# skips a body identical to the newest row, so a rerun that changed nothing
+# costs one SELECT and no history noise.
+if not commentary.is_empty(sections):
+    commentary.write_sections(cpath, sections, kind)
+    _autosave_err = draft_store.backup(cpath, issue, slug)
+else:
+    _autosave_err = ""
+
 s1, s2 = st.columns([1, 3])
 with s1:
     if st.button("Save draft", use_container_width=True):
         commentary.write_sections(cpath, sections, kind)
-        st.success("Saved.")
+        err = draft_store.backup(cpath, issue, slug)
+        if err:
+            st.warning(f"Saved locally. {err}")
+        else:
+            st.success("Saved — on disk and in Snowflake.")
 with s2:
-    st.caption(f"Draft file: `{cpath.name}` — shared with `python -m letter.build`.")
+    if _autosave_err:
+        # Loud, because the whole point of this block is that the person stops
+        # having to think about whether their writing is safe.
+        st.warning(f"**Autosave to Snowflake is failing.** {_autosave_err}")
+    elif draft_store.enabled():
+        st.caption(f"Autosaves to `JSA.LETTER.DRAFTS` and `{cpath.name}` — "
+                   "every version is kept, nothing overwrites.")
+    else:
+        st.caption(f"Draft file: `{cpath.name}` — shared with `python -m letter.build`. "
+                   "**Snowflake is not configured, so this draft is local only.**")
 
 # -- Build --------------------------------------------------------------------
 

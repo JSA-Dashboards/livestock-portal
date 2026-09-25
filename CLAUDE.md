@@ -415,6 +415,52 @@ The underlying cause is upstream and unresolved: Massive has had no bar for
 2026-09-14..09-18 since it happened. Once a Friday letter has been built on a
 Friday with an intact prior Friday, this should stop arising at all.
 
+### Drafts survive a reboot now — `JSA.LETTER.DRAFTS`
+
+Added 2026-09-25, after a reboot destroyed a nearly finished Friday letter.
+Until then a draft lived in exactly one place: `out/`, which is gitignored and
+which every Streamlit Cloud reboot rebuilds from a fresh clone. **The page's
+own docstring said so accurately and it was lost anyway** — a warning in a
+docstring is not a backup, and that is the lesson worth keeping.
+
+`letter/draft_store.py` writes every edit to `JSA.LETTER.DRAFTS` as well as to
+the file. No new secret: the page already forwards the Snowflake block.
+
+- **The table is APPEND-ONLY.** Every save INSERTs; the current draft is the
+  newest row for its `(issue_date, kind)`. There is no UPDATE and no DELETE, so
+  no save can bury an earlier version and the page's **Version history**
+  expander can always hand one back. Durability alone would still have let a
+  bad paste destroy an hour's writing.
+- **It writes BOTH places, every time.** Snowflake survives the reboot; the
+  file keeps `python -m letter.build` working when Snowflake is unreachable.
+- **Newest wins on read, and that is not "the database is the source of
+  truth".** Hand-editing the `.md` and re-running the build is a supported
+  workflow that `commentary.py` promises, so `restore()` compares the file's
+  mtime against `SAVED_AT` (UTC on both sides) rather than always preferring
+  the row. A database-always-wins rule would silently eat those edits — the
+  same class of quiet loss this exists to stop.
+- **A Snowflake outage must never stop the letter.** Every call returns a
+  status string instead of raising, and the page says loudly when autosave is
+  failing rather than looking fine.
+- **The schema is owned by SYSADMIN**, unlike `JSA.CME_FEEDER_CATTLE` whose
+  tables ACCOUNTADMIN owns and on which SYSADMIN has no MODIFY. A table put
+  there could never have a column added without an admin.
+- **It never reads `SNOWFLAKE_SCHEMA`** — every statement names the table in
+  full, so it takes no part in the five-module collision at the top of this
+  file. A test pins that, and that it never imports `snowflake_db` by bare
+  name; it loads that file under a private name the way `sources.py` does.
+
+Two placement traps, both already paid for:
+
+- **The Version history panel sits ABOVE the text areas**, because restoring
+  writes `wcr_<section>` into session_state and Streamlit refuses that once the
+  widget with that key exists. Below the boxes it raised instead of restoring —
+  a poor thing to discover while trying to recover a letter. Same reason the
+  headline candidate panel is where it is.
+- **`draft_store.restore()` runs BEFORE `commentary.write_template()`**, which
+  creates the file when missing. Afterwards, a freshly created template looks
+  like a legitimately empty local draft and the comparison picks it.
+
 ### Published letters are archived, and only when you say so
 
 `JSA-Dashboards/jsa-letter-archive` — **private**, cloned as a sibling of this
