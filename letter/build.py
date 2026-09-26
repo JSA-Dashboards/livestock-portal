@@ -324,9 +324,15 @@ def load_week_base(path: Path) -> dict:
 
 
 def save_week_base(path: Path, bases: dict) -> None:
+    """
+    sort_keys because this file is mirrored to Snowflake and compared as TEXT.
+    draft_store.store() skips a body identical to the newest row, and dict
+    order alone would make an unchanged set of settles look like a new version
+    and fill the history with rows that differ only in line order.
+    """
     clean = {k: float(v) for k, v in (bases or {}).items() if v}
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    Path(path).write_text(json.dumps(clean, indent=2), encoding="utf-8")
+    Path(path).write_text(json.dumps(clean, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def apply_week_base(ctx: dict, bases: dict) -> list:
@@ -674,10 +680,23 @@ def main(argv=None) -> int:
     # the saved file, then apply. Applied on BOTH paths so a --no-fetch
     # re-render keeps the correction.
     wb_path = week_base_path(out_dir, issue, day)
+    # Same trip the commentary makes below, and for the same reason: these are
+    # typed by hand and out/ does not survive a reboot. Restoring cannot
+    # overwrite real data -- apply_week_base only fills a contract that has no
+    # base at all -- so it is safe to do unconditionally.
+    wb_restored = draft_store.restore(wb_path, prior_friday_of(issue),
+                                      draft_store.WEEK_BASE_KIND,
+                                      label="Prior-Friday settles")
+    if wb_restored:
+        print(f"  {wb_restored}")
     week_base = load_week_base(wb_path)
     if week_base_cli:
         week_base.update(week_base_cli)
         save_week_base(wb_path, week_base)
+        wb_err = draft_store.backup(wb_path, prior_friday_of(issue),
+                                    draft_store.WEEK_BASE_KIND, "cli")
+        if wb_err:
+            print(f"  {wb_err}")
     filled = apply_week_base(ctx, week_base)
     if filled:
         print(f"  weekly change from entered prior-Friday settles: {', '.join(filled)}")

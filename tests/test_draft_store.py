@@ -18,7 +18,7 @@ than a connectivity one.
 
 import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -238,3 +238,135 @@ def test_it_does_not_import_snowflake_db_by_bare_name():
             imported.add(node.module.split(".")[0])
     assert "snowflake_db" not in imported
     assert "_letter_draft_db" in src
+
+
+# ── the prior-Friday settles ────────────────────────────────────────────────
+# Added 2026-09-26. The same table now carries the six settles typed off last
+# week's letter, under KIND = "weekbase". They had exactly the commentary's
+# problem -- hand-entered, only in out/, gone on the next reboot -- and none of
+# the tests above would have caught it, because every one of them is about a
+# markdown draft and the settles are a JSON file keyed by a different date.
+
+from letter import build as letter_build  # noqa: E402
+from letter import config as letter_config  # noqa: E402
+
+FRIDAY = date(2026, 9, 18)
+SETTLES = {"LEV6": 232.55, "GFV6": 355.075, "LEZ6": 230.10}
+
+
+def test_the_kind_does_not_collide_with_a_commentary_slug():
+    """
+    One namespace. If a format were ever named "weekbase" the two would share
+    a row and each would look like a corrupt version of the other.
+    """
+    slugs = set(letter_config.FORMAT_FOR_DAY.values()) | {"am"}
+    assert draft_store.WEEK_BASE_KIND not in slugs
+
+
+def test_the_settles_come_back_on_a_fresh_container(table, tmp_path):
+    """The reboot. out/ is empty and the week's numbers are still typed."""
+    letter_build.save_week_base(tmp_path / "wb.json", SETTLES)
+    draft_store.backup(tmp_path / "wb.json", FRIDAY, draft_store.WEEK_BASE_KIND)
+
+    fresh = tmp_path / "fresh" / "weekbase_2026-09-18.json"
+    msg = draft_store.restore(fresh, FRIDAY, draft_store.WEEK_BASE_KIND,
+                              label="Prior-Friday settles")
+
+    assert letter_build.load_week_base(fresh) == SETTLES
+    assert "restored" in msg.lower()
+
+
+def test_the_restore_line_does_not_call_them_a_draft(table, tmp_path):
+    """
+    "Draft restored" over the settles sends someone looking for writing that
+    never moved. The label is the whole reason restore() takes one.
+    """
+    letter_build.save_week_base(tmp_path / "wb.json", SETTLES)
+    draft_store.backup(tmp_path / "wb.json", FRIDAY, draft_store.WEEK_BASE_KIND)
+
+    msg = draft_store.restore(tmp_path / "gone.json", FRIDAY,
+                              draft_store.WEEK_BASE_KIND,
+                              label="Prior-Friday settles")
+
+    assert msg.startswith("Prior-Friday settles restored")
+    assert "draft" not in msg.lower()
+
+
+def test_monday_and_thursday_share_one_row(table, tmp_path):
+    """
+    Keyed by the FRIDAY, like the filename. Keying by the letter's own date
+    would make every day of the week its own row and the six numbers would be
+    typed again on each one -- which is the thing week_base_path already fixed
+    on disk, and would have been reintroduced in Snowflake.
+    """
+    monday, thursday = date(2026, 9, 21), date(2026, 9, 24)
+    assert letter_build.prior_friday_of(monday) == letter_build.prior_friday_of(thursday)
+
+    letter_build.save_week_base(tmp_path / "mon.json", SETTLES)
+    draft_store.backup(tmp_path / "mon.json",
+                       letter_build.prior_friday_of(monday),
+                       draft_store.WEEK_BASE_KIND)
+
+    thu = tmp_path / "thu.json"
+    draft_store.restore(thu, letter_build.prior_friday_of(thursday),
+                        draft_store.WEEK_BASE_KIND)
+    assert letter_build.load_week_base(thu) == SETTLES
+
+
+def test_a_corrected_settle_does_not_destroy_the_one_it_replaced(table, tmp_path):
+    """
+    2026-09-25: a wrong October was saved and there was no way back to what it
+    replaced. Append-only means the earlier set is still there.
+    """
+    p = tmp_path / "wb.json"
+    letter_build.save_week_base(p, {"GFV6": 999.000})
+    draft_store.backup(p, FRIDAY, draft_store.WEEK_BASE_KIND)
+    letter_build.save_week_base(p, {"GFV6": 355.075})
+    draft_store.backup(p, FRIDAY, draft_store.WEEK_BASE_KIND)
+
+    versions = table.history(FRIDAY, draft_store.WEEK_BASE_KIND)
+    assert len(versions) == 2
+    assert "999.0" in versions[1][2]
+    assert letter_build.load_week_base(p) == {"GFV6": 355.075}
+
+
+def test_the_same_settles_in_a_different_order_are_not_a_new_version(table, tmp_path):
+    """
+    The body is compared as TEXT, so dict order alone would append a row that
+    differs only in line order -- and a history of those is a history of
+    nothing. save_week_base sorts its keys for exactly this.
+    """
+    a, b = tmp_path / "a.json", tmp_path / "b.json"
+    letter_build.save_week_base(a, SETTLES)
+    letter_build.save_week_base(b, dict(reversed(list(SETTLES.items()))))
+    assert a.read_text(encoding="utf-8") == b.read_text(encoding="utf-8")
+
+    draft_store.backup(a, FRIDAY, draft_store.WEEK_BASE_KIND)
+    draft_store.backup(b, FRIDAY, draft_store.WEEK_BASE_KIND)
+    assert len(table.history(FRIDAY, draft_store.WEEK_BASE_KIND)) == 1
+
+
+def test_a_restored_file_cannot_overwrite_a_real_settle(table, tmp_path):
+    """
+    Why the restore can run unconditionally rather than only when a base is
+    missing. apply_week_base fills a contract with NO base; a contract that got
+    one from the futures history keeps it, so a stale typed number from
+    Snowflake can never displace real data.
+    """
+    ctx = {"live_cattle": [{"ticker": "LEV6", "week_base_missing": False,
+                            "change_week": -1.25, "settle": 231.30}],
+           "feeder_cattle": [{"ticker": "GFV6", "week_base_missing": True,
+                              "settle": 356.00}]}
+    filled = letter_build.apply_week_base(ctx, {"LEV6": 999.000, "GFV6": 355.075})
+
+    assert ctx["live_cattle"][0]["change_week"] == -1.25      # the real bar stands
+    assert ctx["feeder_cattle"][0]["change_week"] == 0.925    # 356.00 - 355.075
+    assert len(filled) == 1                                  # only the missing one
+    assert ctx["live_cattle"][0].get("week_base_source") is None
+
+
+def test_the_settles_still_save_locally_when_snowflake_is_down(broken, tmp_path):
+    p = tmp_path / "wb.json"
+    letter_build.save_week_base(p, SETTLES)
+    assert "could not" in draft_store.backup(p, FRIDAY, draft_store.WEEK_BASE_KIND).lower()
+    assert letter_build.load_week_base(p) == SETTLES

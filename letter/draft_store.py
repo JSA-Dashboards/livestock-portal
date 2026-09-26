@@ -31,6 +31,13 @@ A SNOWFLAKE OUTAGE MUST NEVER STOP THE LETTER GOING OUT. Every call here
 returns a status string instead of raising, and every Snowflake failure leaves
 the on-disk path working exactly as it did before this module existed.
 
+IT IS NOT ONLY THE COMMENTARY. store/backup/restore are generic over
+(path, issue, kind) -- they move a text file, and never look inside it. The
+prior-Friday settles ride the same table under KIND = "weekbase", because they
+are the same kind of loss: typed by hand, kept only in out/, and gone on the
+next reboot. Anything else hand-entered that lands in out/ can join them
+without a schema change; see WEEK_BASE_KIND for the one rule about KIND.
+
 IT NEVER READS SNOWFLAKE_SCHEMA. CLAUDE.md records that five bundled modules
 each default that variable to the schema they own, so setting it for one
 silently empties the other four. This module takes no part in that: every
@@ -50,6 +57,16 @@ REPO = Path(__file__).resolve().parent.parent
 APPS = REPO / "apps"
 
 TABLE = "JSA.LETTER.DRAFTS"
+
+# KIND shares one namespace with the commentary slugs -- "am", "tuesday",
+# "recap", "friday" (config.FORMAT_FOR_DAY). A new kind must not collide with
+# one, or two unrelated things overwrite each other's newest row.
+#
+# Its ISSUE_DATE is the PRIOR FRIDAY, not the letter's date, exactly as
+# weekbase_<friday>.json is named: that Friday's settle is a property of the
+# week, so Monday's letter and Thursday's letter are the same row and the six
+# numbers are typed once.
+WEEK_BASE_KIND = "weekbase"
 
 # Schema, created 2026-09-25 and owned by SYSADMIN rather than living in
 # JSA.CME_FEEDER_CATTLE, on purpose: ACCOUNTADMIN owns that schema and SYSADMIN
@@ -251,14 +268,18 @@ def backup(path: Path, issue, kind: str, source: str = "app") -> str:
     return store(issue, kind, body, source)
 
 
-def restore(path: Path, issue, kind: str) -> str:
+def restore(path: Path, issue, kind: str, label: str = "Draft") -> str:
     """
-    Reconcile disk and Snowflake before the draft is read. Newest wins.
+    Reconcile disk and Snowflake before the file is read. Newest wins.
 
     Returns a short line for the page to show, or "" when there was nothing to
     do. The three outcomes it reports are the three a person would want to
-    know about: the draft came back from Snowflake, the local file was newer
+    know about: the file came back from Snowflake, the local copy was newer
     and was pushed up, or Snowflake could not be reached at all.
+
+    `label` names the thing in that line. It is not decoration: "Draft
+    restored" over the prior-Friday settles would read as the commentary
+    coming back and send someone looking for writing that never moved.
     """
     path = Path(path)
     if not enabled():
@@ -276,7 +297,7 @@ def restore(path: Path, issue, kind: str) -> str:
     if local_at is None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(remote_body, encoding="utf-8")
-        return f"Draft restored from Snowflake (saved {remote_at:%b %d %H:%M} UTC)."
+        return f"{label} restored from Snowflake (saved {remote_at:%b %d %H:%M} UTC)."
 
     try:
         local_body = path.read_text(encoding="utf-8")
@@ -288,7 +309,7 @@ def restore(path: Path, issue, kind: str) -> str:
 
     if remote_at is not None and local_at is not None and remote_at > local_at:
         path.write_text(remote_body, encoding="utf-8")
-        return f"Draft restored from Snowflake (saved {remote_at:%b %d %H:%M} UTC)."
+        return f"{label} restored from Snowflake (saved {remote_at:%b %d %H:%M} UTC)."
 
     err = store(issue, kind, local_body or "", "app")
     return err or ""

@@ -24,6 +24,11 @@ This docstring used to end "a draft written on the deployed app does not
 survive a reboot" -- it said so accurately, and a nearly finished Friday letter
 was lost to exactly that anyway, because a warning in a docstring is not a
 backup. See letter/draft_store.py.
+
+THE PRIOR-FRIDAY SETTLES GO WITH THEM, as of 2026-09-26. They are the only
+other thing on this page typed in by hand, they lived in the same doomed out/,
+and they cost the same six numbers off last week's letter to re-enter. Same
+table, KIND = "weekbase", keyed by the Friday rather than by the letter.
 """
 import os
 import sys
@@ -236,12 +241,28 @@ if errors:
 # -- Prior-Friday settles -----------------------------------------------------
 # Only appears when the futures history has no bar for the prior Friday, which
 # is when the week-over-week change cannot be computed. The numbers are on your
-# own last letter. Saved to out/weekbase_<kind>_<date>.json so the CLI and a
-# later re-render use the same ones.
+# own last letter. Saved to out/weekbase_<friday>.json so the CLI and a later
+# re-render use the same ones -- and mirrored to JSA.LETTER.DRAFTS, because
+# out/ is gitignored and a reboot rebuilds the container from a fresh clone.
+# Six settles typed off last week's letter are exactly as expensive to lose as
+# an hour's writing, and were lost the same way.
 
 wb_path = letter_build.week_base_path(OUT, issue, day)
+_wb_friday = letter_build.prior_friday_of(issue)
+
+# BEFORE load_week_base, for the reason the commentary restore sits before
+# write_template: read the reconciled file, not the one this container happens
+# to have. Restoring can never overwrite a real number -- apply_week_base only
+# fills a contract with no base at all -- so it runs unconditionally.
+_wb_restored = draft_store.restore(wb_path, _wb_friday,
+                                   draft_store.WEEK_BASE_KIND,
+                                   label="Prior-Friday settles")
+
 saved_bases = letter_build.load_week_base(wb_path)
 letter_build.apply_week_base(ctx, saved_bases)
+
+if _wb_restored:
+    st.info(_wb_restored)
 
 still_missing = letter_build.missing_week_bases(ctx)
 already_typed = letter_build.hand_entered_bases(ctx)
@@ -285,6 +306,13 @@ if editable:
                 merged = dict(saved_bases)
                 merged.update(entered)
                 letter_build.save_week_base(wb_path, merged)
+                # Only when there is something to save. An empty form writes
+                # "{}", which store() would happily keep as a version.
+                if merged:
+                    _wb_err = draft_store.backup(wb_path, _wb_friday,
+                                                 draft_store.WEEK_BASE_KIND)
+                    if _wb_err:
+                        st.warning(f"Saved locally. {_wb_err}")
                 st.rerun()
 
 
