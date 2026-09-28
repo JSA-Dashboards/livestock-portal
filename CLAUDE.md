@@ -44,6 +44,8 @@ with no reboot involved. The Manage app log for every one of them:
     [16:15:09] Updated app!
 
 against pushes at 14:40, 15:05, 15:23 and 16:13 UTC. The webhook works.
+Two more that evening behaved identically — `bf4f92c` at 22:02 and
+`71f7e96` at 22:06, neither rebooted, both live within minutes.
 
 **Reboot after pushing regardless, and the reason is concrete rather than
 superstitious.** Auto-deploy lands the code by HOT RELOAD, and hot reload is
@@ -87,6 +89,12 @@ The check that cannot lie either way is still to **look for a feature that only
 exists in the new code** — a caption, a label, a figure you just changed. The
 page cannot fake that.
 
+A worked example, 2026-09-28: the US Cow Herd benchmark tile had to move from
+38.3% to 42.9% (see the `feeder_receipts` section below for why). Reading 42.9%
+on the live page settled it in one glance, with no reliance on the log at all.
+**Prefer a figure you can predict exactly beforehand** — it beats a caption,
+because a wrong value is as informative as a missing one.
+
 ### `KeyError: 'letter.archive'` in the app log is not a bug — diagnosed
 
 It appears at `letter/build.py:38`, on the
@@ -123,19 +131,6 @@ across 8 threads raise nothing.
 **It is also an argument for the reboot habit below.** A reboot restarts the
 process and never goes down the hot-reload path, so it cannot hit this. The
 race needs a code change to land while a session is mid-rerun.
-
-**A BARE PUSH DOES AUTO-DEPLOY — tested 2026-09-28.** Pushed `bf4f92c` to
-`master`, clicked nothing, and the live page was serving the new figures inside
-~4 minutes; the log panel read `[22:02:00] 🔄 Updated app!` with timestamps
-ticking live. So the webhook works and the "registered under the old owner
-path" story above was wrong, or has been fixed since — that whole explanation
-was already in doubt once the app turned out to be in the org workspace.
-
-Rebooting is still harmless and still the way to force a clone, but it is no
-longer required to ship. What has NOT changed is the verification rule below:
-check for something only the new code produces. That is how this was confirmed
-— the page's own benchmark figure moved 38.3% → 42.9%, which no cached log or
-stale timestamp can counterfeit.
 
 ## Required secrets
 
