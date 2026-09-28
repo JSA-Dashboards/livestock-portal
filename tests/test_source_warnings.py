@@ -194,3 +194,28 @@ def test_the_checks_are_not_also_printed_in_main():
     assert src.count("LM_XB403 PM releases") == 1
     assert src.count("These AMS endpoints always") == 1
     assert "! Boxed beef is the" not in src
+
+
+def test_the_pages_reload_path_reports_both_health_checks():
+    """
+    THE HALF THAT WAS MISSED. The structural test above pins gather(), which is
+    the FETCH path -- and that half worked from the start. The page also has a
+    cached-reload path (_load_ctx), which re-derives the warnings because
+    st.session_state does not survive a refresh or a second browser tab. That
+    path called only report_futures_health for a few hours on 2026-09-28, so
+    pressing Fetch showed the full panel and reloading silently dropped the
+    boxed-beef 3pm trap, the AMS 3208 PRELIMINARY note, the back-dated-build
+    check and Friday's CFTC warning.
+
+    Reading the page's source rather than importing it: apps/weekly_reports/app.py
+    is a Streamlit script and executes on import.
+    """
+    from pathlib import Path
+
+    app = (Path(__file__).resolve().parent.parent
+           / "apps" / "weekly_reports" / "app.py").read_text(encoding="utf-8")
+    start = app.index("def _load_ctx(")
+    body = app[start:app.index("\nif fetch", start)]
+    assert "report_futures_health" in body
+    assert "report_source_health" in body, \
+        "a reloaded page would show no source warnings over stale numbers"

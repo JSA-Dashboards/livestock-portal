@@ -227,11 +227,21 @@ def _load_ctx():
         # RE-DERIVED, NOT REMEMBERED. The fetch run put its errors in
         # st.session_state, which does not survive a page reload or a second
         # browser session -- so the page showed a completely clean bill of
-        # health over stale numbers to anyone who refreshed. These three
-        # warnings are a property of the data, so they can simply be asked of
-        # the cached ctx again.
+        # health over stale numbers to anyone who refreshed. These warnings are
+        # a property of the data, so they can simply be asked of the cached ctx
+        # again; every check is a pure read of the saved context plus the
+        # environment, with no network.
+        #
+        # BOTH REPORTERS, and the second one was missed when the source
+        # warnings were routed to the page earlier the same day. For a few
+        # hours a reload showed the three futures warnings and silently dropped
+        # the boxed-beef 3pm trap, the AMS 3208 PRELIMINARY note, the
+        # back-dated-build check and Friday's CFTC staleness -- which is the
+        # very bug the paragraph above describes, reintroduced one function
+        # over while fixing it.
         errs = []
         letter_build.report_futures_health(ctx, issue, errs)
+        letter_build.report_source_health(ctx, issue, kind, errs)
         return ctx, errs
     return None, []
 
