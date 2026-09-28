@@ -39,7 +39,9 @@ TOKEN_CACHE = Path(__file__).resolve().parent / "data" / "graph_token.json"
 # looks at sender, subject and body, so a publication name is enough.
 # THREE WAYS TO FIND A DIGEST, in descending order of precision:
 #
-#   sender      exact From address. Cannot match anything else. Best.
+#   sender      exact From address. Best at proving it is really them, and on
+#               its own NOT the tightest option -- a publisher sends several
+#               products from one address. Pair it with sender_name.
 #   sender_name From display name, matched with startswith, for publishers
 #               whose address is not visible in the mail client. Prefix rather
 #               than equals because these names vary: eMeat sends as both "The
@@ -52,16 +54,21 @@ TOKEN_CACHE = Path(__file__).resolve().parent / "data" / "graph_token.json"
 #            "sterling" then also matches a client email about sterling silver,
 #            and that message's text surfaces in the panel. Fallback only.
 #
-# Each entry should move up this list as its first real digest arrives and the
-# From address becomes visible.
+# Each entry should GAIN the fields above it as its first real digest arrives
+# and the From address becomes visible -- gain, not move. Meatingplace and
+# eMeat were switched from name to address on 2026-09-28 and it had to be
+# reverted the same hour: both addresses also carry a second product the name
+# filter was deliberately excluding. See from_clause().
 DIGESTS = [
     # Two a day, Morning Update and Afternoon Update, and the SUBJECT is the
     # lead headline rather than a title for a list of them.
-    {"label": "Meatingplace", "sender_name": "Meatingplace Editorial"},
+    {"label": "Meatingplace", "sender": "newsletters@newsletter.meatingplace.com",
+     "sender_name": "Meatingplace Editorial"},
     # The Bulletin only. "The EMEAT Team" is the same publisher's marketing --
     # weekly newsletters and "50% off" promotions -- and does not belong in a
     # market headline panel.
-    {"label": "eMeat", "sender_name": "The EMEAT Daily Bulletin"},
+    {"label": "eMeat", "sender": "marketing@emeat.io",
+     "sender_name": "The EMEAT Daily Bulletin"},
     # agritrends.com, NOT globalagritrends.com. It was the latter from the day
     # this was written until 2026-09-25, and matched nothing the whole time --
     # an exact sender filter that is wrong returns zero messages, which is
@@ -206,6 +213,39 @@ def parse_headlines(body: str, content_type: str = "html", limit: int = 15) -> l
     return out
 
 
+def from_clause(src: dict) -> str:
+    """
+    The $filter that identifies a digest's sender, or "" for a $search matcher.
+
+    BOTH WHEN BOTH ARE GIVEN, and that is the whole point of this function.
+    An exact address looks like the tightest possible matcher and for these two
+    publishers it is the LOOSEST: on 2026-09-28 the mailbox held, from one
+    address each, 22 "The EMEAT Team" marketing mails beside the 47 Daily
+    Bulletins on marketing@emeat.io, and 36 "Meatingplace Blogs" beside the 87
+    "Meatingplace Editorial" digests on newsletters@newsletter.meatingplace.com.
+    Moving those two entries from the display name to the address, which is
+    what the docstring above told you to do, would have put promotions and blog
+    posts into a market headline panel.
+
+    One publisher, one address, several products. The address answers "is this
+    really them", the display name answers "is this the product we want", and
+    neither question is the other. Requiring both is strictly tighter than
+    either alone -- a spoofed display name now fails the address, and the
+    marketing still fails the name.
+
+    Graph accepts the conjunction: address eq ... and startswith(name, ...) and
+    receivedDateTime ge ... returns 200. Verified before this was written,
+    because a $filter on from/emailAddress is exactly the shape that 400s --
+    see the $orderby note in fetch_digests.
+    """
+    bits = []
+    if src.get("sender"):
+        bits.append(f"from/emailAddress/address eq '{src['sender']}'")
+    if src.get("sender_name"):
+        bits.append(f"startswith(from/emailAddress/name,'{src['sender_name']}')")
+    return " and ".join(bits)
+
+
 def _never_matched(headers: dict, src: dict) -> bool:
     """
     True when this source's matcher finds NOTHING in the whole mailbox.
@@ -221,14 +261,10 @@ def _never_matched(headers: dict, src: dict) -> bool:
     panel gets to say "check the address" instead of shrugging.
     """
     import requests
-    if src.get("sender"):
-        q = {"$filter": f"from/emailAddress/address eq '{src['sender']}'", "$top": 1,
-             "$select": "id"}
-    elif src.get("sender_name"):
-        q = {"$filter": f"startswith(from/emailAddress/name,'{src['sender_name']}')",
-             "$top": 1, "$select": "id"}
-    else:
+    clause = from_clause(src)
+    if not clause:
         return False          # a $search matcher is broad by nature; no verdict
+    q = {"$filter": clause, "$top": 1, "$select": "id"}
     try:
         r = requests.get(f"{GRAPH}/me/messages", headers=headers, timeout=30, params=q)
         return r.status_code == 200 and not r.json().get("value")
@@ -285,13 +321,9 @@ def fetch_digests(max_age_h: int = 72, per_source: int = 10) -> dict:
         # mailbox runs ~11 messages an hour, so 72 hours is several hundred
         # messages and hundreds of pages to walk.
         since_iso = since.strftime("%Y-%m-%dT%H:%M:%SZ")
-        if src.get("sender"):
-            query = {"$filter": f"from/emailAddress/address eq '{src['sender']}' "
-                                f"and receivedDateTime ge {since_iso}",
-                     "$top": 25, "$select": fields}
-        elif src.get("sender_name"):
-            query = {"$filter": f"startswith(from/emailAddress/name,'{src['sender_name']}') "
-                                f"and receivedDateTime ge {since_iso}",
+        clause = from_clause(src)
+        if clause:
+            query = {"$filter": f"{clause} and receivedDateTime ge {since_iso}",
                      "$top": 25, "$select": fields}
         elif src.get("subject"):
             # KQL property restriction: subject line only, body untouched.

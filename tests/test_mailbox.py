@@ -198,3 +198,68 @@ def test_newsletter_chrome_is_dropped(junk):
 def test_agritrends_headlines_survive(real):
     """Real subjects from the digest that was invisible until today."""
     assert mailbox.parse_headlines(real, "text") == [real], real
+
+
+# -- One publisher, one address, several products ------------------------------
+
+def test_both_matchers_are_required_when_both_are_known():
+    """
+    THE ADDRESS ALONE IS THE LOOSER FILTER for these two, which is the reverse
+    of what the module docstring used to say. On 2026-09-28 the mailbox held,
+    from ONE address each: 22 "The EMEAT Team" marketing mails beside 47 Daily
+    Bulletins on marketing@emeat.io, and 36 "Meatingplace Blogs" beside 87
+    "Meatingplace Editorial" on newsletters@newsletter.meatingplace.com.
+
+    So "tighten these to exact addresses" would have widened them, and put
+    50%-off promotions into a market headline panel.
+    """
+    src = {"sender": "marketing@emeat.io", "sender_name": "The EMEAT Daily Bulletin"}
+    clause = mailbox.from_clause(src)
+    assert "address eq 'marketing@emeat.io'" in clause
+    assert "startswith(from/emailAddress/name,'The EMEAT Daily Bulletin')" in clause
+    assert " and " in clause, "both, or the marketing comes with it"
+
+
+def test_the_two_multi_product_publishers_carry_both_fields():
+    """A regression guard on the data, not the code: dropping either field
+    silently changes what lands in the panel."""
+    for label, addr in (("Meatingplace", "newsletters@newsletter.meatingplace.com"),
+                        ("eMeat", "marketing@emeat.io")):
+        src = next(d for d in mailbox.DIGESTS if d["label"] == label)
+        assert src.get("sender") == addr, label
+        assert src.get("sender_name"), f"{label} needs the product name too"
+
+
+def test_an_address_only_source_still_filters_on_the_address():
+    """Sterling and AgriTrends send one product each; no name needed."""
+    for label in ("Sterling", "Global AgriTrends"):
+        src = next(d for d in mailbox.DIGESTS if d["label"] == label)
+        clause = mailbox.from_clause(src)
+        assert clause == f"from/emailAddress/address eq '{src['sender']}'"
+
+
+def test_a_search_matcher_produces_no_from_clause():
+    """$search sources have no From predicate, and must not get an empty one."""
+    assert mailbox.from_clause({"label": "x", "match": "sterling"}) == ""
+    assert mailbox.from_clause({"label": "x", "subject": "Profit Tracker"}) == ""
+
+
+def test_the_from_clause_is_built_in_one_place():
+    """
+    It is used by the digest query AND by _never_matched, whose whole job is
+    to tell "wrong address" from "quiet publisher". If those two ever disagree
+    about who a source is, the diagnosis is worse than useless.
+    """
+    import re
+    assert SRC.count("def from_clause(") == 1
+    # OUTSIDE THE BUILDER ITSELF. The one legitimate occurrence of this string
+    # is inside from_clause, so searching the whole file asserts against the
+    # very line being pinned -- the same trap as matching "$orderby" in the
+    # comment that explains why $orderby is absent.
+    start = SRC.index("def from_clause(")
+    end = SRC.index("def _never_matched(")
+    elsewhere = SRC[:start] + SRC[end:]
+    assert not re.search(r"address eq '\{", elsewhere), \
+        "an inline From filter has come back; build it with from_clause()"
+    assert not re.search(r"startswith\(from/emailAddress/name,'\{", elsewhere), \
+        "an inline display-name filter has come back"
