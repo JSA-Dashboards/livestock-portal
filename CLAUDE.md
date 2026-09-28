@@ -492,10 +492,85 @@ the published artifact either. Re-rendering is not archiving: rebuild the 9/23
 brief today and you get different futures, a settlement-date line that did not
 exist that morning, and no intro paragraph. Only Sent Items has the real ones.
 
+### The cattle futures feed, and why the letter no longer trusts it
+
+On 2026-09-28 the Monday AM brief printed **"Settlement on 9/11/26"** and meant
+it: Oct feeders at 332.50 when Friday had settled 335.00, a "+4.95 daily move"
+on a session that moved 0.075, and a JSA basis of +5.29 where the real figure
+was +2.79. `gather()` returned an **empty error list** the whole time.
+
+**Nothing caught it because every check asked whether data came back, and it
+had.** The newest bar of a stale series is a perfectly good bar. Staleness is
+not an exception, so nothing raised, so nothing was said. That is the lesson;
+the rest is detail.
+
+What is actually wrong upstream, verified by direct probe that morning:
+
+| what | state |
+|---|---|
+| `/aggs` LE, GF at `1session` and `1day` | **ends 2026-09-11** (343 bars, nothing after) |
+| `/aggs` LE, GF at `1hour` | has 09-11, then **09-25** — nothing for 09-14..09-24 |
+| `/aggs` CL, ZC, ES at every resolution | current, same morning |
+| `/snapshot` LE, GF | current |
+
+So the trades exist and only the daily roll-up stopped, the hole is
+cattle-only, and the documented 09-14..09-18 gap had grown to **09-14..09-24**.
+Worse, **bars already served were retracted**: `settle_log.json` still held
+09-23 and 09-24 values the API no longer returns, which is why "the newest bar"
+can never be read as "the last session".
+
+`sources.fetch_futures` now does three things, and each one has a test:
+
+- **Detects.** It asks whether the series is behind the last weekday it could
+  have a bar for, not whether it parsed. **The recovery trigger is tighter than
+  the staleness alarm on purpose** — trying the hourly bars costs one request,
+  while a warning nobody believes is the state this began in. A day count loose
+  enough for the nine exchange holidays a year is also loose enough to hide a
+  feed one session behind, which on a Monday quotes Thursday as Friday. The
+  trigger therefore fires harmlessly on holidays; `MAX_SETTLE_AGE_DAYS` stays
+  loose and drives only the loud "do not send" message.
+- **Recovers**, from the hourly bars, and **only sessions the real history
+  lacks**. An hourly close is a last trade and a settlement is a closing range:
+  on 09-11 they differed by up to 0.30. The snapshot upgrades a recovered close
+  to the official settlement only when its own close proves it describes that
+  same session, and is refused once the next session opens — otherwise a live
+  price enters a morning brief, the bug `completed_only` exists to prevent.
+- **Never subtracts across the hole.** The bar before 09-25 is 09-11 and that
+  difference is a fortnight dressed as a day. A missing change marks itself
+  `[[?]]`; a wrong one looks exactly like a right one.
+
+Three things that look like oversights and are not:
+
+- **The snapshot's `change` and `previous_settlement` are never read.** They
+  are derived from the same broken daily series. At 08:52 that morning, Friday
+  having settled 335.00, GFV6's snapshot reported `previous_settlement 332.50`
+  and `change +2.25` — the 09-11 bar and a seventeen-day move, under the
+  exchange's own field names. Taking `change` because it looked authoritative
+  would have restored the bug wearing a different hat.
+- **`settle_log.record()` skips a contract whose `settle_source` is
+  `"hourly close"`.** That file is the authority for the prior-Friday base once
+  a value lands in it, so a last trade written there makes a later
+  week-over-week change quietly wrong by a few ticks. A snapshot settlement is
+  a settlement and is kept.
+- **Recovery is judged on the freshest contract, not on every one.** A back
+  month that did not trade yesterday has no bar for ordinary reasons, and
+  "is any contract behind" would fetch hourly bars every day of the year on a
+  January feeder nobody quoted.
+
+**Thursday 2026-09-24 was never recovered.** It sits inside the retracted
+stretch, so Friday's daily moves in that day's letter were marked rather than
+computed. Massive's snapshot claimed 334.925 for GFV6 and our own settle log
+claimed 331.75, recorded from bars since withdrawn; they disagree by 3.175 and
+neither is corroborated. If a settle for 09-14..09-24 is ever needed, it has to
+come from outside Massive.
+
 ### In flight as of 2026-09-24
 
-- **Massive's futures history has no bars for 2026-09-14..09-18.** Not a fetch
-  bug — the week is absent upstream. It leaves the PM moving averages marked
+- **Massive's futures history has no bars for 2026-09-14..09-24** (widened from
+  09-18 on 2026-09-28, and bars already served were retracted — see "The cattle
+  futures feed" above, which supersedes this bullet for everything but the
+  moving averages). Not a fetch
+  bug — the weeks are absent upstream. It leaves the PM moving averages marked
   `[[?]]`, because an average over a gapped series is wrong rather than
   approximate. `letter/settle_log.py` now records the front-month settles on
   every build, so the weekly change stops depending on their history once a
