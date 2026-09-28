@@ -394,22 +394,33 @@ Three places where the obvious simplification is the bug that was just fixed.
   where "squash **beef** after Cold War video" and "China's clean tech
   **exports**" both pass the looser one. A test pins the difference.
 
-### The `[[?]]` on the deployed app — FRIDAY ONLY now
+### The `[[?]]` on the deployed app — FIXED 2026-09-26/28
 
-The hand-entered prior-Friday settles live in `out/weekbase_<friday>.json`, and
-`out/` is gitignored **and** wiped by every Streamlit Cloud reboot. So the
-deployed authoring page shows "No prior-Friday settle for 6 contract(s)" and
-`[[?]]` in the futures block, and retyping them there lasts until the next
-reboot. On Ross's desktop the file is present and the block renders normally.
-Same for `letter/data/settle_log.json`.
+**Both halves of this are now in Snowflake and the section is kept for the
+history rather than as a live warning.**
 
-**This used to hit every evening letter and now hits only Friday**, because
+It read: the hand-entered prior-Friday settles live in
+`out/weekbase_<friday>.json`, `out/` is gitignored and wiped by every Streamlit
+Cloud reboot, so the deployed page showed "No prior-Friday settle for 6
+contract(s)" and `[[?]]`, and retyping them lasted until the next reboot. The
+same was true of `letter/data/settle_log.json` — gitignored beside the code,
+which turned out to be no safer, because a reboot is a fresh clone and a
+gitignored directory arrives empty.
+
+The week base moved to `JSA.LETTER.DRAFTS` under `KIND = "weekbase"` on
+2026-09-26, and the settle log on 2026-09-28 under `KIND = "settlelog"`. See
+**Drafts survive a reboot now** above and `letter/settle_log.py`.
+
+**This had already narrowed from every evening letter to Friday only**, because
 Mon–Thu stopped quoting week-over-week on 2026-09-24 and `change_day` needs
-nothing but the previous bar. Friday still depends on the week base, correctly.
+nothing but the previous bar.
 
-It stays cosmetic only while **the letter is built locally** — confirmed
-2026-09-24. If that stops being true the fix is a tracked path, not a bigger
-warning; see the open call in the in-flight list.
+One consequence of the history: the settles for **Friday 2026-09-25** were
+recorded only on the deployed container, before the mirror existed, so they went
+with it. The first build on any machine after that Friday re-records them from
+Massive, since a Monday morning build's last completed session IS that Friday —
+but if Friday 2026-10-02 asks for a week base and does not have one, that is
+why, and it is the last time it can happen.
 
 The underlying cause is upstream and unresolved: Massive has had no bar for
 2026-09-14..09-18 since it happened. Once a Friday letter has been built on a
@@ -488,20 +499,19 @@ exist that morning, and no intro paragraph. Only Sent Items has the real ones.
   `[[?]]`, because an average over a gapped series is wrong rather than
   approximate. `letter/settle_log.py` now records the front-month settles on
   every build, so the weekly change stops depending on their history once a
-  letter has been built on a Friday. Delete `letter/data/` and that restarts.
+  letter has been built on a Friday. Deleting `letter/data/` no longer restarts
+  it — the log is mirrored to Snowflake and `settle_log.sync()` pulls it back.
 - **Azure admin consent is pending** for the app registration "JSA Letter -
   email read" (delegated `Mail.Read`). Until it is granted, the headline
   candidate panel runs without the four subscription digests, which show one
   line saying the mailbox is not connected. It now also blocks the one thing
   that would back-fill the letters published before 2026-09-24 — Sent Items is
   the only record of those. No code change is needed when it lands.
-- **Two open calls left with Ross on 2026-09-24, neither started.** Whether
-  Friday should print a region that never established a test all week — the
-  shared cash block omits it, where Friday's old block said "South: Undefined",
-  and on a weekly letter that absence is arguably news. And whether to make the
-  week base durable: `weekbase_<friday>.json` and `settle_log.json` live in
-  gitignored `out/`, so the deployed app cannot show a week-over-week change
-  after a reboot. That now only affects Friday.
+- **One open call left with Ross.** Whether Friday should print a region that
+  never established a test all week — the shared cash block omits it, where
+  Friday's old block said "South: Undefined", and on a weekly letter that
+  absence is arguably news. (The second call, making the week base durable, was
+  decided and done: see the `[[?]]` section above.)
 - **`render.cash_cattle_block()` and `sources.fetch_regional_cash()` are dead.**
   No caller since Friday moved to the shared cash block. Kept only because they
   are the basis for the "Undefined" option above — if that is declined, delete

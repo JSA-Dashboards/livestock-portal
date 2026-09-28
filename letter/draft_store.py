@@ -68,6 +68,13 @@ TABLE = "JSA.LETTER.DRAFTS"
 # numbers are typed once.
 WEEK_BASE_KIND = "weekbase"
 
+# The settle log, one row per SETTLE DATE rather than one row for the whole
+# log. That is not tidiness: the desktop and the deployed container each build
+# letters and each record what they fetched, so a single whole-file row would
+# mean whichever saved last silently discarded the other's days. Per-date rows
+# merge instead of clobbering, and `settle_log.sync()` folds them.
+SETTLE_LOG_KIND = "settlelog"
+
 # Schema, created 2026-09-25 and owned by SYSADMIN rather than living in
 # JSA.CME_FEEDER_CATTLE, on purpose: ACCOUNTADMIN owns that schema and SYSADMIN
 # was never granted MODIFY on its tables, so a table put there could never be
@@ -226,6 +233,49 @@ def history(issue, kind: str, limit: int = 25) -> list:
         if saved_at is not None and saved_at.tzinfo is None:
             saved_at = saved_at.replace(tzinfo=timezone.utc)
         out.append((saved_at, saved_by, body))
+    return out
+
+
+def rows_for_kind(kind: str, limit: int = 5000) -> list:
+    """
+    Every row of one kind across all dates, OLDEST FIRST, as
+    [(issue_date, saved_at_utc, body)].
+
+    Oldest first because the only caller folds them in order to get
+    last-write-wins, which is settle_log's own documented rule for a repeated
+    (ticker, date) -- a letter rebuilt after the close corrects an intraday
+    value recorded that morning. Reverse the order and the correction loses.
+
+    The limit is generous rather than tuned: a build writes one or two rows a
+    day, so 5,000 is years of them, and the fold is over a few hundred KB at
+    worst. It exists so a runaway cannot pull the whole table into a page
+    render, not because the real number is near it.
+
+    IT TAKES THE NEWEST ROWS AND THEN REVERSES THEM, rather than selecting
+    ASC directly. Those are the same list only while the table is under the
+    limit; past it, ASC would return the OLDEST 5,000 and quietly drop every
+    recent settle -- the newest data disappearing first, which is the wrong way
+    round for a log whose whole job is to answer "what did this settle at last
+    Friday".
+    """
+    if not enabled():
+        return []
+    try:
+        def go(cur):
+            cur.execute(
+                f"SELECT ISSUE_DATE, SAVED_AT, BODY FROM {TABLE} "
+                "WHERE KIND = %s ORDER BY SAVED_AT DESC LIMIT %s",
+                (kind, int(limit)),
+            )
+            return cur.fetchall() or []
+        rows = _run(go)
+    except Exception:
+        return []
+    out = []
+    for issue_date, saved_at, body in reversed(rows):
+        if saved_at is not None and saved_at.tzinfo is None:
+            saved_at = saved_at.replace(tzinfo=timezone.utc)
+        out.append((issue_date, saved_at, body))
     return out
 
 

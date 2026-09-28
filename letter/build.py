@@ -233,6 +233,15 @@ def backfill_week_base(ctx: dict, out_dir: Path, issue: date) -> list:
     """
     prior_friday = issue - timedelta(days=(issue.weekday() - 4) % 7 or 7)
 
+    # PULL THE LOG DOWN FIRST. letter/data/ is gitignored, so a fresh container
+    # starts with nothing and every previous build's record is in Snowflake
+    # rather than on this disk. Placed here, before the read below, so both
+    # callers get it -- the CLI and the authoring page -- rather than only
+    # whichever one remembered to ask.
+    synced = settle_log.sync()
+    if synced:
+        print(f"  {synced}")
+
     # OUR OWN LOG FIRST. Every previous build recorded what it fetched, so once
     # a letter has been built on a Friday this needs nothing from Massive's
     # history -- which is the whole point, that history having had a week-long
