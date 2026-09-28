@@ -219,3 +219,89 @@ def test_the_pages_reload_path_reports_both_health_checks():
     assert "report_futures_health" in body
     assert "report_source_health" in body, \
         "a reloaded page would show no source warnings over stale numbers"
+
+
+# ── gaps the source audit found, 2026-09-28 ────────────────────────────────
+
+def test_the_friday_letter_demands_that_fridays_kill_be_fridays():
+    """
+    sj_ls712.txt is a static "newest report" URL with no date filter, and
+    fetch_slaughter takes the top week row of whatever it is served. On
+    2026-09-25 an unrefreshed file would have printed 529,000 against a true
+    484,000 -- a 45,000 head error flipping the week from -8.5% to +4.8%, with
+    nothing on the page to suggest it.
+    """
+    friday = date(2026, 9, 25)
+    ctx = healthy()
+    ctx["cutout"]["report_date"] = "2026-09-25"
+    ctx["daily_slaughter"]["report_date"] = "2026-09-25"
+    ctx["cash"]["report_date"] = "2026-09-21"
+
+    ctx["slaughter"] = {"report_date": "2026-09-25"}
+    assert not any("Weekly slaughter" in e for e in warn(ctx, "friday", issue=friday))
+
+    ctx["slaughter"] = {"report_date": "2026-09-18"}
+    hits = [e for e in warn(ctx, "friday", issue=friday) if "Weekly slaughter" in e]
+    assert len(hits) == 1
+    assert "2026-09-18" in hits[0]
+
+
+def test_only_friday_demands_equality():
+    """
+    On every other weekday the newest file IS last Friday's, and that is
+    correct. Demanding equality there would fire four mornings out of five.
+    """
+    ctx = healthy()
+    ctx["slaughter"] = {"report_date": "2026-09-25"}
+    for kind in ("am", "recap", "tuesday"):
+        assert not any("Weekly slaughter" in e for e in warn(ctx, kind))
+
+
+def test_a_frozen_weekly_feed_is_caught_on_any_day():
+    """The equality check is Friday-only, so the lag table covers the rest."""
+    ctx = healthy()
+    ctx["slaughter"] = {"report_date": "2026-09-11"}
+    hits = [e for e in warn(ctx, "am") if "Built for" in e]
+    assert len(hits) == 1
+    assert "weekly slaughter is from 2026-09-11" in hits[0]
+
+
+def test_grading_last_week_comes_from_usdas_own_field():
+    """
+    Pct_Choice_PW sits on the same row as Pct_Choice_CW. The old code took the
+    previous ROW of the fetched window instead, which is only the prior week
+    while the series is contiguous -- and the live LSWFEDCC history has a
+    561-day hole between 2024-09-16 and 2026-03-31. Replaying the old code at
+    that boundary printed "89.3 versus 82.6 LW", a fabricated 6.7-point swing
+    where USDA's own field on that row said flat.
+    """
+    import pandas as pd
+
+    rows = [  # the hole, as the API actually serves it
+        {"report_date": "09/16/2024", "Pct_Choice_CW": "82.6", "Pct_Choice_PW": "82.4"},
+        {"report_date": "03/31/2026", "Pct_Choice_CW": "89.3", "Pct_Choice_PW": "89.3"},
+    ]
+    g = pd.DataFrame(rows)
+    g["report_date"] = pd.to_datetime(g["report_date"], errors="coerce")
+    g["pct"] = pd.to_numeric(g.get("Pct_Choice_CW"), errors="coerce")
+    g["pct_pw"] = pd.to_numeric(g.get("Pct_Choice_PW"), errors="coerce")
+    g = g.dropna(subset=["report_date", "pct"]).sort_values("report_date")
+
+    last = g.iloc[-1]
+    assert round(float(last["pct_pw"]), 1) == 89.3, "USDA says flat"
+    assert round(float(g.iloc[-2]["pct"]), 1) == 82.6, "the previous ROW is 18 months back"
+
+
+def test_the_previous_row_is_no_longer_read_for_grading():
+    """Structural: iloc[-2] was the whole bug and must not come back."""
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parent.parent / "letter" / "sources.py").read_text(
+        encoding="utf-8")
+    block = src[src.index('if sec.get("reportSection")'):src.index("# -- Slaughter and")]
+    # COMMENTS STRIPPED FIRST. The explanation of the bug names iloc[-2], so a
+    # raw substring search matches the prose that documents the fix and fails.
+    # Exactly the trap tests/test_mailbox.py records for "$orderby".
+    code = "\n".join(ln.split("#", 1)[0] for ln in block.splitlines())
+    assert "Pct_Choice_PW" in code
+    assert "iloc[-2]" not in code, "grading is reading the previous row again"

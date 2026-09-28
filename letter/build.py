@@ -184,7 +184,14 @@ def report_futures_health(ctx: dict, issue: date, errors: list) -> None:
 # the PRIOR week, so it is seven days behind on a Monday BY DESIGN -- warning
 # about that every morning would make this panel noise, and a warning nobody
 # reads is how the futures outage went unnoticed for a whole letter.
-MAX_REPORT_LAG_DAYS = {"boxed beef": 3, "daily slaughter": 3, "cash trade": 10}
+MAX_REPORT_LAG_DAYS = {"boxed beef": 3, "daily slaughter": 3, "cash trade": 10,
+                       # SJ_LS712 posts Friday for the week ending Saturday, so
+                       # the longest honest lag is Thursday's six days. Seven
+                       # catches a feed frozen for more than a week on any day;
+                       # the Friday-only equality check below catches the case
+                       # seven days cannot, which is a Friday letter built on
+                       # last Friday's file.
+                       "weekly slaughter": 7}
 
 
 def report_source_health(ctx: dict, issue: date, kind: str, errors: list) -> None:
@@ -231,7 +238,8 @@ def report_source_health(ctx: dict, issue: date, kind: str, errors: list) -> Non
     stale = []
     for label, rd in (("boxed beef", cut_date),
                       ("daily slaughter", ds.get("report_date")),
-                      ("cash trade", (ctx.get("cash") or {}).get("report_date"))):
+                      ("cash trade", (ctx.get("cash") or {}).get("report_date")),
+                      ("weekly slaughter", (ctx.get("slaughter") or {}).get("report_date"))):
         if rd and abs((date.fromisoformat(rd) - issue).days) > MAX_REPORT_LAG_DAYS[label]:
             stale.append(f"{label} is from {rd}")
     if stale:
@@ -241,6 +249,24 @@ def report_source_health(ctx: dict, issue: date, kind: str, errors: list) -> Non
             "not reconstruct that day.")
 
     if kind == "friday":
+        # THE WEEK-IN-REVIEW'S HEADLINE KILL, AND THE ONE DAY IT CAN BE PINNED
+        # EXACTLY. sj_ls712.txt is a static "newest report" URL with no date
+        # filter, and fetch_slaughter takes the top week row of whatever it is
+        # served without ever comparing it to the issue. On any other weekday
+        # the newest file IS last Friday's and that is correct, so only Friday
+        # can demand equality.
+        #
+        # What it costs when it is wrong: on 2026-09-25 an unrefreshed file
+        # would have printed "Weekly slaughter: 529,000 compared to 505,000
+        # head LW" against a true 484,000 -- a 45,000 head error that flips the
+        # week from -8.5% to +4.8%, with nothing on the page to suggest it.
+        wk_rd = (ctx.get("slaughter") or {}).get("report_date")
+        if wk_rd and issue.weekday() == 4 and date.fromisoformat(wk_rd) != issue:
+            errors.append(
+                f"Weekly slaughter is the {wk_rd} report, not {issue}'s. SJ_LS712 posts "
+                "Friday and the URL always serves the newest file, so the week-in-review "
+                "would quote LAST week's kill as this week's. Re-run once it lands.")
+
         cftc = ctx.get("cftc") or {}
         if cftc.get("as_of") and not sources.cftc_is_current(cftc, issue):
             errors.append(

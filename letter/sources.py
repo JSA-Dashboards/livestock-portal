@@ -486,12 +486,32 @@ def fetch_cutout() -> dict:
             g = pd.DataFrame(sec["results"])
             g["report_date"] = pd.to_datetime(g["report_date"], errors="coerce")
             g["pct"] = pd.to_numeric(g.get("Pct_Choice_CW"), errors="coerce")
+            # USDA'S OWN PRIOR WEEK, NOT THE PREVIOUS ROW WE HAPPEN TO HOLD.
+            #
+            # Pct_Choice_PW sits on the same row as Pct_Choice_CW and is the
+            # figure USDA is comparing against. Taking g.iloc[-2] instead meant
+            # "last week" was whatever row came before in the fetched window,
+            # which is only the prior week while the series is contiguous --
+            # and this one is not. The live LSWFEDCC history has a 561-day hole
+            # between report dates 2024-09-16 and 2026-03-31, and replaying the
+            # old code as of 2026-03-31 printed "89.3 versus 82.6 LW", a
+            # fabricated 6.7-point weekly swing where USDA's own field on that
+            # very row said flat.
+            #
+            # Same error as the futures block's: a difference taken across a
+            # hole, plausible on its face, with nothing marking it. Here the
+            # right answer was already in the response.
+            g["pct_pw"] = pd.to_numeric(g.get("Pct_Choice_PW"), errors="coerce")
             g = g.dropna(subset=["report_date", "pct"]).sort_values("report_date")
             if not g.empty:
+                last = g.iloc[-1]
+                pw = last.get("pct_pw")
                 out["grading"] = {
-                    "pct": round(float(g.iloc[-1]["pct"]), 1),
-                    "pct_last_week": round(float(g.iloc[-2]["pct"]), 1) if len(g) > 1 else None,
-                    "report_date": g.iloc[-1]["report_date"].date().isoformat(),
+                    "pct": round(float(last["pct"]), 1),
+                    # None rather than a neighbour when USDA withholds it: a
+                    # marked gap beats a number measured from the wrong week.
+                    "pct_last_week": round(float(pw), 1) if pd.notna(pw) else None,
+                    "report_date": last["report_date"].date().isoformat(),
                 }
             break
     return out
