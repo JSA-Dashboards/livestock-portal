@@ -507,7 +507,16 @@ if _head_key:
         # Mailbox sign-in, only when it is actually needed. Device-code flow:
         # no password is typed here or stored anywhere by this app.
         if not mailbox.configured():
-            st.caption("To include the Meatingplace and eMeat digests, set "
+            # NAMED FROM mailbox.DIGESTS, not typed out here. The hardcoded
+            # version said "the Meatingplace and eMeat digests" and had done
+            # since before Global AgriTrends and Sterling were added, so the
+            # page understated what connecting the mailbox actually brings in
+            # -- Sterling being the one that carries the packer margin the
+            # evening letter quotes by hand.
+            _digests = [d["label"] for d in mailbox.DIGESTS]
+            _named = ", ".join(_digests[:-1]) + f" and {_digests[-1]}" \
+                if len(_digests) > 1 else _digests[0]
+            st.caption(f"To include the {_named} digests from your inbox, set "
                        "`GRAPH_CLIENT_ID` and `GRAPH_TENANT_ID` in `.env`.")
         elif (st.session_state.get("wcr_heads") or {}).get("needs_sign_in"):
             flow = st.session_state.get("wcr_graph_flow")

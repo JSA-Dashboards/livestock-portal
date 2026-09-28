@@ -28,11 +28,31 @@ Setting it to any one value overrides all five and silently breaks the others.
 Pages load, queries miss, charts come back empty, nothing raises. **Unset is the
 only working configuration.** `SNOWFLAKE_DATABASE = "JSA"` is safe to set.
 
-## Pushing to GitHub does not deploy
+## Pushing DOES deploy — but reboot anyway
 
-This repo moved from a personal account into the `JSA-Dashboards` org. Streamlit
-has the app registered under the old owner path, so the webhook fires, returns
-`200 OK`, and does nothing — no error anywhere.
+**This section said the opposite until 2026-09-28, and it was wrong.** It read
+"Pushing to GitHub does not deploy", explaining that the app was registered
+under the old owner path so the webhook fired, returned `200 OK` and did
+nothing. A note added 09-24 said the stated cause was in doubt. It is now
+settled, in the other direction.
+
+Four separate pushes on 2026-09-28 each auto-deployed within about two minutes,
+with no reboot involved. The Manage app log for every one of them:
+
+    [16:15:06] Pulling code changes from Github...
+    [16:15:08] Processing dependencies...
+    [16:15:09] Updated app!
+
+against pushes at 14:40, 15:05, 15:23 and 16:13 UTC. The webhook works.
+
+**Reboot after pushing regardless, and the reason is concrete rather than
+superstitious.** Auto-deploy lands the code by HOT RELOAD, and hot reload is
+what produces the `KeyError: 'letter.archive'` documented below — Streamlit's
+watcher evicting a module from `sys.modules` while another session's thread is
+mid-import. The first of those four auto-deploys threw exactly that, at
+14:48:27. A reboot restarts the process and cannot hit it. Rebooting also
+gives a clean cache and a fresh `letter/data/`, which is when `settle_log.sync()`
+pulls the banked settles back down.
 
 To ship: push, then **Manage app → ⋮ → Reboot app** on the live URL. Allow 2–5
 minutes; the "not found" page partway through provisioning is normal. The app
@@ -42,17 +62,30 @@ about this until 2026-09-24.
 A reboot does a full fresh clone, so it always takes current `master` — the
 startup log says `Cloning repository... Pulling code changes from Github`.
 
-**DO NOT TRUST THAT LOG'S TIMESTAMP TO TELL YOU WHETHER A REBOOT LANDED.**
-Manage app → the log panel serves a CACHED view, and in a browser session left
-open across several reboots it freezes: on 2026-09-24 it read `[14:20:35]`
-through five further reboots that had all in fact succeeded. Reloading the app
-URL, even cache-busted, does not refresh it. That stale reading nearly produced
-a delete-and-redeploy of a perfectly healthy app.
+**CLAUDE CAN DO THE REBOOT** as of 2026-09-28, through the Claude in Chrome
+extension driving Ross's signed-in Streamlit session. **"Delete app" sits
+directly below "Reboot app" in that menu** — click by element reference, never
+by coordinate. The confirm dialog says "This will disrupt all current users".
+Ask before rebooting: Ross writes the letter on that app.
 
-The reliable check is to **look for a feature that only exists in the new code**
-— a button, a caption, a label you just added. The page cannot fake that. Use
-the log for what it is good at, which is seeing whether the dependency install
-failed, not for which commit is live.
+### Checking whether a reboot landed
+
+**The log timestamp froze once and nearly cost a healthy app.** In a browser
+session left open across several reboots the panel serves a cached view: on
+2026-09-24 it read `[14:20:35]` through five further reboots that had all
+succeeded, and reloading the app URL did not refresh it. That nearly produced
+a delete-and-redeploy.
+
+Refined 2026-09-28: the log advanced correctly all day — 14:48, 15:07, 15:25,
+15:33, 16:15, 16:20, 17:0x — across four auto-deploys and four reboots, every
+reading taken in a **freshly opened tab**. So the freeze is a stale *browser
+session*, not a stale server. Open a new tab and the log is current and
+trustworthy, which makes it genuinely useful for watching `Cloning
+repository... / Cloned repository! / Processed dependencies!` go by.
+
+The check that cannot lie either way is still to **look for a feature that only
+exists in the new code** — a caption, a label, a figure you just changed. The
+page cannot fake that.
 
 ### `KeyError: 'letter.archive'` in the app log is not a bug — diagnosed
 
