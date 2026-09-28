@@ -549,10 +549,12 @@ if HS:
     st.caption(
         f"Each point covers the same weeks of its year, across the "
         f"{min(r['states'] for r in _ann)}–{max(r['states'] for r in _ann)} panel "
-        f"states reporting in it — a year covered by fewer is left off rather "
-        f"than drawn thin, which is why the series starts in "
-        f"{_ann[0]['year']} and not with the archive in 2000."
-        f"{_spl_txt}{_chg}"
+        f"states reporting in it."
+        + (f" The grey {_tyrs[0]}–{_tyrs[-1]} segment is drawn apart because only "
+           f"{min(r['states'] for r in _thin)}–{max(r['states'] for r in _thin)} "
+           f"states reported then: each year is sound on its own, but the level "
+           f"is not comparable with the rest, so no line joins them." if _thin else "")
+        + f"{_spl_txt}{_chg}"
     )
 
     _roll = HS["rolling"]
