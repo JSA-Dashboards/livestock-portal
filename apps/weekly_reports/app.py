@@ -164,7 +164,24 @@ elif kind == "recap":
     st.caption("**Recap format** — the session in brief: one technicals read "
                "covering both products, and no Fundamental Rundown. Boxed beef "
                "publishes about 3pm Central; build after that.")
+elif kind == "am":
+    # FOUR FORMATS, FOUR CAPTIONS. The AM brief fell through to "Standard
+    # format" -- the same miss the recap branch above was added to fix, one
+    # radio further up: the page named the Monday evening letter while the box
+    # below it offered the morning brief's single section.
+    #
+    # The two facts a reader could get wrong are DERIVED, not typed: how many
+    # sections there are to write, and which change the figures quote. Both
+    # have already moved once.
+    st.caption("**Morning brief** — one page, under three minutes, "
+               f"{commentary.sections_summary('am')} to write. Quotes "
+               f"{config.change_basis_label(kind)}, and reads the last "
+               "COMPLETED session rather than the newest bar — at 07:30 "
+               "today's row is the session opening, not a settle — so "
+               "rebuilding after the open is safe.")
 else:
+    # Monday's full evening letter, and the fallback for a format with no
+    # caption of its own. Check this reads true before adding a fifth.
     st.caption("**Standard format** — leads with last week's cash trade. Boxed beef "
                "publishes about 3pm Central; build after that or the cutout is "
                "yesterday's (the letter labels it honestly either way).")

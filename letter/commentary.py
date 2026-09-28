@@ -109,6 +109,26 @@ SECTIONS = SECTIONS_BY_KIND["tuesday"]
 def sections_for(kind: str = "tuesday") -> list:
     return SECTIONS_BY_KIND[kind]
 
+
+_COUNT_WORDS = {1: "one", 2: "two", 3: "three", 4: "four",
+                5: "five", 6: "six", 7: "seven"}
+
+
+def sections_summary(kind: str = "tuesday") -> str:
+    """
+    "one written section (Headlines)" -- COUNTED AND NAMED FROM SECTIONS_BY_KIND.
+
+    For the authoring page's captions, and derived for the same reason
+    config.pm_format_summary() is: a caption that states what a format contains
+    goes stale the first time a section moves, and nothing makes it fail. The
+    evening letter gained a Headlines section on 2026-09-23 and the morning
+    brief is one section by design -- count them here, do not type them out.
+    """
+    labels = [label for _key, label in sections_for(kind)]
+    n = _COUNT_WORDS.get(len(labels), str(len(labels)))
+    noun = "section" if len(labels) == 1 else "sections"
+    return f"{n} written {noun} ({', '.join(labels)})"
+
 _HEADING = re.compile(r"^##\s+(.*?)\s*$", re.MULTILINE)
 
 
