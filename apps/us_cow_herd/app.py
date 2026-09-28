@@ -35,7 +35,6 @@ from herd import (BASELINE_YEARS, LEGACY_LAST_GOOD_WEEK, YTD_CUT, annual_ratio,
                   class_prices, decompose, heifer_share_annual,
                   heifer_share_rolling, heifer_share_summary, latest_date,
                   receipts_yoy)
-from dairy_mix import adjust as dm_adjust
 from dairy_mix import implied_dairy_share as dm_implied
 from inventory import inventory_summary
 from on_feed import on_feed_summary
@@ -749,103 +748,91 @@ classes in the auction summaries — is **0.68% of auction feeder head** and
 unrepresentative, because those calves move dairy → calf ranch → feedyard on
 contract and rarely cross a sale barn.
 
-So the sliders below are **assumptions, not measurements**, and the output is a
-sensitivity, not a correction.
+So rather than let anyone dial in a dairy share and read off whatever follows,
+this asks the one question the data can settle: **how much dairy would there have
+to be?** The answer needs a single assumption, shown across its plausible range.
 """)
 
-        d1, d2, d3 = st.columns(3)
-        with d1:
-            _d_then = st.slider(f"Dairy-origin share on feed, {_bench['year'] if _bench else 'benchmark'}",
-                                0.0, 40.0, 10.0, 0.5, format="%.1f%%", key="dm_then")
-        with d2:
-            _d_now = st.slider(f"Dairy-origin share on feed, {_ocur['year']}",
-                               0.0, 40.0, 18.0, 0.5, format="%.1f%%", key="dm_now")
-        with d3:
-            _h_d = st.slider("Heifer share of that stream", 30.0, 70.0, 50.0, 1.0,
-                             format="%.0f%%", key="dm_hd")
+        # No inputs. The crush pages let the reader set numbers because those are
+        # things the reader knows and this page does not -- their cost of gain,
+        # their freight. The dairy-origin share of national cattle on feed is not
+        # one of those: nobody knows it, which is the whole premise here. Sliders
+        # would have let a reader dial in whatever supported the view they arrived
+        # with, and pose it for a screenshot. So the assumption is stated and its
+        # whole plausible range is shown instead.
+        _gap_rep = _ocur["trailing"] - _bench["trailing"]
 
-        _adj_now = dm_adjust(_ocur["trailing"], _d_now, _h_d)
-        _adj_then = dm_adjust(_bench["trailing"], _d_then, _h_d) if _bench else None
+        _rows_html = [("On feed, as reported", "all heifers in a feedlot",
+                       _bench["trailing"], _ocur["trailing"], _gap_rep)]
+        if _rec_then and _rdrop is not None:
+            _rows_html.append(("Receipts", "breed-clean, excludes dairy classes",
+                               _rec_then["share"],
+                               HS["summary"]["current"]["share"], _rdrop))
 
-        if _adj_now is None or _adj_then is None:
-            st.warning(
-                "Those assumptions leave no beef-only herd to speak of — a stream "
-                "that heifer-rich at that share implies more dairy heifers than "
-                "there are heifers. That is the assumption failing, not the market."
-            )
-        else:
-            # A table, not tiles. Tiles showed the adjusted CURRENT figure beside
-            # a change that was measured against the adjusted BENCHMARK -- a
-            # number never displayed -- so the change matched neither value on
-            # screen. Every term in the arithmetic is visible here.
-            _adrop = _adj_now - _adj_then
-            _rrep = _ocur["trailing"] - _bench["trailing"]
-            _rows_html = [
-                ("As reported", "all heifers on feed",
-                 _bench["trailing"], _ocur["trailing"], _rrep, False),
-                ("Beef-only", "dairy stream removed",
-                 _adj_then, _adj_now, _adrop, True),
-            ]
-            if _rec_then and _rdrop is not None:
-                _rows_html.append(
-                    ("Receipts", "breed-clean, for comparison",
-                     _rec_then["share"], HS["summary"]["current"]["share"],
-                     _rdrop, False))
-
-            _tbl = [
-                f'<table style="width:100%;border-collapse:collapse;font-size:0.9rem;">',
+        _tbl = ['<table style="width:100%;border-collapse:collapse;font-size:0.9rem;">',
                 f'<tr style="color:{MUTED};font-size:0.7rem;text-transform:uppercase;'
                 f'letter-spacing:0.08em;text-align:right;">'
                 f'<th style="text-align:left;padding:6px 8px;">Heifer share</th>'
                 f'<th style="padding:6px 8px;">{_bench["year"]}</th>'
                 f'<th style="padding:6px 8px;">{_ocur["year"]}</th>'
                 f'<th style="padding:6px 8px;">Change</th></tr>']
-            for _lbl, _sub, _a, _b, _c, _hi in _rows_html:
-                _bg = f"background:{SURFACE2};" if _hi else ""
-                _wt = "700" if _hi else "400"
-                _tbl.append(
-                    f'<tr style="{_bg}border-top:1px solid {BORDER};text-align:right;">'
-                    f'<td style="text-align:left;padding:8px;font-weight:{_wt};">{_lbl}'
-                    f'<div style="color:{MUTED};font-size:0.72rem;font-weight:400;">{_sub}</div></td>'
-                    f'<td style="padding:8px;">{_a:.1f}%</td>'
-                    f'<td style="padding:8px;font-weight:{_wt};">{_b:.1f}%</td>'
-                    f'<td style="padding:8px;font-weight:700;color:{POS if _c < 0 else NEG};">'
-                    f'{_c:+.1f} pts</td></tr>')
-            _tbl.append("</table>")
-            st.markdown("".join(_tbl), unsafe_allow_html=True)
-            st.caption(
-                f"Read the **Change** column. Removing an assumed dairy stream takes "
-                f"the reported fall of {_rrep:+.1f} pts to {_adrop:+.1f} — moving it "
-                f"toward the {_rdrop:+.1f} pts the breed-clean receipts series "
-                f"actually fell." if _rdrop is not None else
-                "Read the Change column: it is the fall in each measure between the "
-                "two years, not the gap between the rows."
-            )
+        for _lbl, _sub, _a, _b, _c in _rows_html:
+            _tbl.append(
+                f'<tr style="border-top:1px solid {BORDER};text-align:right;">'
+                f'<td style="text-align:left;padding:8px;">{_lbl}'
+                f'<div style="color:{MUTED};font-size:0.72rem;">{_sub}</div></td>'
+                f'<td style="padding:8px;">{_a:.1f}%</td>'
+                f'<td style="padding:8px;">{_b:.1f}%</td>'
+                f'<td style="padding:8px;font-weight:700;color:{POS if _c < 0 else NEG};">'
+                f'{_c:+.1f} pts</td></tr>')
+        if _rdrop is not None:
+            _tbl.append(
+                f'<tr style="background:{SURFACE2};border-top:2px solid {BORDER};'
+                f'text-align:right;font-weight:700;">'
+                f'<td style="text-align:left;padding:8px;">Gap to explain</td>'
+                f'<td colspan="2"></td>'
+                f'<td style="padding:8px;">{abs(_gap_rep - _rdrop):.1f} pts</td></tr>')
+        _tbl.append("</table>")
+        st.markdown("".join(_tbl), unsafe_allow_html=True)
 
-            if _rdrop is not None:
-                _target = _adj_then + _rdrop
-                _implied = dm_implied(_ocur["trailing"], _target, _h_d)
-                if _implied is None:
-                    st.info(
-                        f"**No dairy share reconciles the two on these assumptions.** "
-                        f"Holding {_bench['year']} at {_d_then:.1f}% and the stream at "
-                        f"{_h_d:.0f}% heifers, there is no share between 0 and 100% "
-                        f"that makes this series fall as far as receipts did "
-                        f"({_rdrop:+.1f} pts). Mix cannot be the whole story — the "
-                        f"remainder is the feeding-period lag, or something neither "
-                        f"series is showing."
-                    )
-                else:
-                    st.info(
-                        f"**Dairy-origin cattle would have to be about "
-                        f"{_implied:.0f}% of cattle on feed today** — against "
-                        f"{_d_then:.1f}% in {_bench['year']}, with that stream "
-                        f"{_h_d:.0f}% heifers — for this series to have fallen as far "
-                        f"as receipts did. Whether that is credible is a judgement "
-                        f"about the dairy herd, not something this page can settle, "
-                        f"and it moves a long way on the heifer-fraction assumption: "
-                        f"try 45% and 55% and watch it swing."
-                    )
+        if _rdrop is None:
+            st.caption(
+                f"The receipts series does not reach {_bench['year']}, so there is "
+                f"nothing breed-clean to compare against and no gap to explain.")
+        else:
+            # Solved on the MOST GENEROUS assumption available -- that the
+            # benchmark year carried no dairy-origin heifers at all. It certainly
+            # carried some, which would push every figure below UP. So these are
+            # floors: if the required share is implausible even here, mix cannot
+            # be the explanation.
+            _target = _bench["trailing"] + _rdrop
+            _sens = [(h, dm_implied(_ocur["trailing"], _target, h))
+                     for h in (45, 50, 55, 60)]
+            _s = ['<table style="width:100%;border-collapse:collapse;'
+                  'font-size:0.9rem;margin-top:14px;">',
+                  f'<tr style="color:{MUTED};font-size:0.7rem;text-transform:uppercase;'
+                  f'letter-spacing:0.08em;">'
+                  f'<th style="text-align:left;padding:6px 8px;">If the dairy stream is</th>'
+                  f'<th style="text-align:right;padding:6px 8px;">Dairy-origin share of '
+                  f'cattle on feed that would be needed</th></tr>']
+            for _h, _d in _sens:
+                _txt = f"{_d:.0f}%" if _d is not None else "no share does it"
+                _cred = _d is not None and _d <= 20.0
+                _s.append(
+                    f'<tr style="border-top:1px solid {BORDER};">'
+                    f'<td style="padding:8px;">{_h}% heifers</td>'
+                    f'<td style="padding:8px;text-align:right;font-weight:700;'
+                    f'color:{TEXT if _cred else NEG};">{_txt}</td></tr>')
+            _s.append("</table>")
+            st.markdown("".join(_s), unsafe_allow_html=True)
+            st.caption(
+                f"Solved on the most generous assumption available — that "
+                f"{_bench['year']} carried **no** dairy-origin heifers at all. It "
+                f"certainly carried some, which would push every figure above "
+                f"upward, so these are floors. Industry estimates put "
+                f"dairy-influenced cattle at roughly **15–20% of fed cattle**; "
+                f"figures at or under 20% are shown in black, above it in red."
+            )
 
         st.caption(
             "**Why the direction across a decade is genuinely unknown.** Straight "
