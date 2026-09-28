@@ -28,6 +28,8 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from . import settle_log
+
 REPO = Path(__file__).resolve().parent.parent
 APPS = REPO / "apps"
 
@@ -168,30 +170,58 @@ def fetch_futures(product_code: str, api_key: str, as_of: date, n: int = 3,
                 for ser in series.values() if len(ser) and ser.index[-1] == freshest)
     history_stale = freshest is None or freshest < last_weekday or holey
 
-    hourly, snaps = {}, {}
+    # THREE TIERS, AND THE SNAPSHOT IS NOT ONE OF THEM. It was, for about an
+    # hour on 2026-09-28, and it was wrong in the most expensive way: its
+    # session block reported settlement_price 335.00 for GFV6 when Friday
+    # settled 334.925. That 335.00 is Friday's LAST TRADE. CME settles live and
+    # feeder cattle on a weighted average of the closing range, so the last
+    # trade and the settlement differ routinely -- by 0.025 to 0.075 across the
+    # four contracts that day. Reading it as a settlement produced a wrong
+    # number wearing the word "settlement", which is worse than no number.
+    #
+    # Its previous_settlement is no better: pre-open it read 334.925, which IS
+    # Friday's settle, and by 08:52 the same field read 332.50 -- the 09-11
+    # bar -- because once the session went active Massive recomputed it off the
+    # broken daily series. A field that is right at 07:30 and wrong at 08:52 is
+    # not a source, and the morning brief is built in that window.
+    hourly, logged = {}, {}
     if history_stale:
         hourly = {t: _clip(session_closes_from_hourly(t, api_key)) for t in tickers}
+        # OUR OWN BANKED SETTLES, which are real settlements and outrank an
+        # hourly close. They also outlived Massive: the 09-23 and 09-24 values
+        # here were recorded from bars the API has since retracted, and public
+        # market reports confirm them to the half cent. See letter/settle_log.py.
         try:
-            snaps = api.get_snapshots(tickers, api_key)
+            logged = settle_log.load()
         except Exception:
-            snaps = {}
+            logged = {}
 
     out = []
     for c in contracts:
         ticker = c["ticker"]
         s = series.get(ticker, pd.Series(dtype=float))
 
-        # RECOVERY FILLS ONLY SESSIONS THE REAL HISTORY DOES NOT HAVE. Splicing
-        # an hourly close over a session that already carries a settlement would
-        # swap a settlement for a last trade and gain nothing -- they are not
-        # the same number, and on 2026-09-11 they differed by up to 0.30.
-        recovered_dates = set()
-        h = hourly.get(ticker)
-        if h is not None and len(h):
-            fill = h[~h.index.isin(s.index)] if len(s) else h
+        # RECOVERY FILLS ONLY SESSIONS THE REAL HISTORY DOES NOT HAVE, in order
+        # of how good the number is: a banked settlement first, an hourly close
+        # only where there is nothing better. Splicing over a session that
+        # already carries a settlement would swap it for a last trade and gain
+        # nothing -- on 2026-09-11 those differed by 0.30.
+        origin = {d: SETTLED for d in s.index}
+        banked = _clip(pd.Series({
+            pd.to_datetime(d).date(): float(v)
+            for d, v in (logged.get(ticker) or {}).items()
+        })) if logged.get(ticker) else pd.Series(dtype=float)
+
+        for label, src in ((SETTLED, banked), (CLOSE_ONLY, hourly.get(ticker))):
+            if src is None or not len(src):
+                continue
+            fill = src[~src.index.isin(s.index)] if len(s) else src
             if len(fill):
-                recovered_dates = set(fill.index)
-                s = pd.concat([s, fill]).sort_index()
+                # Concat only when there is something to concat to: pandas
+                # deprecated inferring a dtype across empty entries, and an
+                # empty settlement history is the normal case here.
+                s = pd.concat([s, fill]).sort_index() if len(s) else fill.copy()
+                origin.update({d: label for d in fill.index})
 
         if s.empty:
             continue
@@ -200,40 +230,27 @@ def fetch_futures(product_code: str, api_key: str, as_of: date, n: int = 3,
         settle = float(s.iloc[-1])
         prev = float(s.iloc[-2]) if len(s) > 1 else None
         prev_date = s.index[-2] if len(s) > 1 else None
-        source = "hourly close" if last_date in recovered_dates else "settlement history"
+        basis = origin.get(last_date, SETTLED)
+        source = "settlement history" if last_date in series.get(
+            ticker, pd.Series(dtype=float)).index else (
+            "banked settlement" if basis == SETTLED else "hourly close")
 
-        if source == "hourly close":
-            # THE SNAPSHOT CARRIES THE OFFICIAL SETTLEMENT, AND NO DATE. So it
-            # is used only where it demonstrably describes the session just
-            # recovered, and its own close against that session's close is the
-            # test -- a date check needing no timezone arithmetic. The moment
-            # the next session opens the snapshot moves and stops matching,
-            # which is exactly when trusting it would drop a live price into a
-            # morning brief: the bug completed_only exists to prevent. Failing
-            # closed here costs a marked figure and never a wrong one.
-            sess = (snaps.get(ticker) or {}).get("session") or {}
-            snap_close = _num(sess.get("close"))
-            snap_settle = _num(sess.get("settlement_price")) or snap_close
-            if snap_close is not None and snap_settle and abs(snap_close - settle) < 1e-6:
-                settle = float(snap_settle)
-                source = "snapshot settlement"
-
-        # NOTHING HERE READS THE SNAPSHOT'S change OR previous_settlement, and
-        # that is deliberate. They are derived from the same daily series that
-        # is broken: at 08:52 on 2026-09-28, with Friday having settled 335.00,
-        # GFV6's snapshot reported previous_settlement 332.50 and change +2.25
-        # -- the 09-11 bar and a seventeen-day move, offered as yesterday's
-        # settle and today's change. Taking `change` because the exchange
-        # published it would have reintroduced this very bug wearing a
-        # different field name.
-
-        # NEVER SUBTRACT ACROSS A HOLE. With no bars for 09-14..09-24 the bar
-        # before 09-25 is 09-11, so settle - prev prints a fortnight's move as a
-        # daily change: +4.95 on Oct feeders, on a day the market moved 0.075.
-        # The same error the prior-Friday base makes by reaching further back,
-        # and just as invisible. No change is a marked gap; a wrong one is not.
+        # NEVER SUBTRACT ACROSS A HOLE, AND NEVER ACROSS A CHANGE OF BASIS.
+        #
+        # The hole first: with no bars for 09-14..09-24 the bar before 09-25 is
+        # 09-11, so settle - prev prints a fortnight's move as a daily change --
+        # +4.95 on Oct feeders, on a day the market moved 3.175.
+        #
+        # The basis second, and it is subtler. Once the settle log fills 09-24
+        # the two ends are adjacent again, but they are different KINDS of
+        # number: Friday's last trade against Thursday's settlement gives +3.25
+        # where the true settle-to-settle move is +3.175. That is a wrong figure
+        # with every appearance of a right one, which is the whole family of
+        # error this module keeps rediscovering. Mixed basis yields None and
+        # the letter marks it.
         change_day = None
-        if prev is not None and (last_date - prev_date).days <= MAX_SETTLE_AGE_DAYS:
+        if prev is not None and (last_date - prev_date).days <= MAX_SETTLE_AGE_DAYS \
+                and origin.get(prev_date) == basis:
             change_day = round(settle - prev, 4)
 
         # THE PRIOR FRIDAY'S BAR MUST EXIST. Reaching further back when it is
@@ -252,7 +269,9 @@ def fetch_futures(product_code: str, api_key: str, as_of: date, n: int = 3,
             "settle_source": source,
             "settle_recovered": source != "settlement history",
             "settle_stale": (as_of - last_date).days > MAX_SETTLE_AGE_DAYS,
-            "change_recovered": prev_date in recovered_dates if prev_date is not None else False,
+            "settle_basis": basis,
+            "change_recovered": (origin.get(prev_date) != SETTLED
+                                 if prev_date is not None else False),
             "change_missing": change_day is None,
             "change_day": change_day,
             "change_week": round(settle - base_week, 4) if base_week is not None else None,
@@ -299,6 +318,14 @@ def session_gaps(index, start: date, end: date) -> list:
 # MAX_PRIOR_SETTLE_AGE_DAYS allows an outside market: the cattle block IS the
 # letter, and a marked gap is the safe failure.
 MAX_SETTLE_AGE_DAYS = 4
+
+# What KIND of number a value is, which matters as much as its date. A
+# settlement is CME's weighted average of the closing range; a close is the
+# last trade. They differ routinely -- by 0.025 to 0.075 across the four cattle
+# contracts on 2026-09-25 -- so a move measured from one to the other is wrong
+# in a way that looks entirely plausible.
+SETTLED = "settled"
+CLOSE_ONLY = "close"
 
 
 def session_closes_from_hourly(ticker: str, api_key: str) -> pd.Series:
@@ -991,6 +1018,28 @@ def fetch_front_history(product_code: str, api_key: str, as_of: date,
         s = s.tail(int(sessions))
         if len(s) < 5:
             return {}
+
+        # A STALE OR HOLED SERIES IS WORSE THAN NO CHART, because the chart is
+        # printed beside the numbers it is supposed to illustrate. On
+        # 2026-09-28 this returned GFV6's 60 sessions ending 2026-09-11 at
+        # 332.50, and it would have been drawn on the same page as "Oct
+        # feeders: 334.925" -- a picture quietly contradicting the text, with
+        # the whole 09-12..09-25 move simply absent from it.
+        #
+        # Returning {} rather than recovering, deliberately: the hole is
+        # unrecoverable at any resolution (Massive's /trades has zero ticks for
+        # every day of it), so the best a filled series could do is join 09-11
+        # to 09-25 with a straight line through a fortnight that is not there.
+        # build_chart falls through to the next market in the pool, and corn,
+        # crude and the S&P were all current throughout.
+        last_weekday = as_of - timedelta(days=1) if completed_only else as_of
+        while last_weekday.weekday() >= 5:
+            last_weekday -= timedelta(days=1)
+        if s.index[-1] < last_weekday - timedelta(days=MAX_SETTLE_AGE_DAYS):
+            return {}
+        if session_gaps(s.index, s.index[0], s.index[-1]):
+            return {}
+
         return {"ticker": ticker,
                 "month": contract_month(ticker),
                 "dates": list(s.index),

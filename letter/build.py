@@ -199,6 +199,14 @@ def gather(issue: date, errors: list, kind: str = "tuesday", cof_guesses: dict =
         # by the front feeder settle, so a stale future silently becomes a
         # wrong basis printed beside a correct index -- on 2026-09-28 that was
         # a basis of +5.29 where the real figure was +2.79.
+        # HERE, INSIDE gather(), because the Streamlit page calls gather()
+        # directly and never goes through build.main -- hanging this off main
+        # alone silently left the authoring page with no staleness warning at
+        # all, which is where the letter is actually written.
+        #
+        # The FCI basis line divides the index by the front feeder settle, so a
+        # stale future quietly becomes a wrong basis printed beside a correct
+        # index: on 2026-09-28 that was +5.29 where the real figure was +2.87.
         report_futures_health(ctx, issue, errors)
 
         # The chart of the day, morning brief only. Which market it shows is
@@ -466,8 +474,28 @@ def hints(ctx: dict, kind: str = "tuesday") -> dict:
     # that lacks them cannot KeyError. The AM report has only a Morning Note,
     # and assuming "market_action" existed killed the build before it wrote
     # anything -- after a full fetch, which is the expensive half.
-    lead = next((k for k in ("morning_note", "key_headlines", "market_action") if k in keys), None)
+    #
+    # "headlines" IS LAST FOR A REASON. Every evening format has a headlines
+    # section too, and their figures belong under Market Action; only the AM
+    # brief, whose sole written section IS Headlines, falls through to it.
+    #
+    # Leaving it out of this tuple is why the morning draft has never carried a
+    # figure block. The AM key shipped as "headlines" in the same commit that
+    # wrote these tuples (786546e), so `lead` resolved to None every time and
+    # add() discarded all six contract settles, the slaughter, the cash and the
+    # YTD -- silently, because add() skips a slot the format lacks. The guard
+    # that stopped a KeyError turned the crash into silence, and no test ever
+    # called hints() with kind="am". Found 2026-09-28, the morning the futures
+    # were wrong and the draft said nothing about it.
+    lead = next((k for k in ("morning_note", "key_headlines", "market_action",
+                             "headlines") if k in keys), None)
     tail = next((k for k in ("cash_recap", "fundamental", "morning_note") if k in keys), None)
+    if tail is None and len(keys) == 1:
+        # Only the AM brief has a single written section, so only it sends the
+        # tail figures to the same place. Every other format keeps its current
+        # behaviour exactly -- a busy Monday is no time to move the evening
+        # letter's furniture.
+        tail = lead
 
     def add(slot, text):
         """Append only to a slot this format actually has."""
@@ -724,6 +752,12 @@ def main(argv=None) -> int:
         ctx["kind"] = kind
         ctx["session"] = session
         print(f"reusing {data_path.name}")
+        # THE RE-RENDER IS THE RUN THAT MAKES THE PDF THAT GETS EMAILED, and
+        # it never calls gather(), so the warning raised on the fetching run
+        # would be absent from the one that actually produces the letter.
+        # report_futures_health only reads the ctx, so a cached ctx answers it
+        # just as well.
+        report_futures_health(ctx, issue, errors)
     else:
         print(f"fetching {session.upper()} {day} letter for {issue} ({fmt} format) ...")
         ctx = gather(issue, errors, kind, cof_guesses)

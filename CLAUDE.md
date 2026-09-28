@@ -557,12 +557,90 @@ Three things that look like oversights and are not:
   "is any contract behind" would fetch hourly bars every day of the year on a
   January feeder nobody quoted.
 
-**Thursday 2026-09-24 was never recovered.** It sits inside the retracted
-stretch, so Friday's daily moves in that day's letter were marked rather than
-computed. Massive's snapshot claimed 334.925 for GFV6 and our own settle log
-claimed 331.75, recorded from bars since withdrawn; they disagree by 3.175 and
-neither is corroborated. If a settle for 09-14..09-24 is ever needed, it has to
-come from outside Massive.
+**THE GAP IS UNRECOVERABLE, AND THAT IS SETTLED.** `/trades/LEV6` and
+`/trades/GFV6` return **zero ticks** for every one of 09-14..09-24, so the hole
+is in the raw trade table and no aggregate can rebuild it. Ten `/aggs`
+resolutions were probed, plus every date-range grammar the cursor reveals
+(`window_start.gte/gt/lte/lt`; `from`/`to`/`start`/`end`/`date.gte` are
+accepted and silently ignored, returning the full unfiltered series). The
+weekly and monthly bars are aggregates of the surviving dailies, not
+independent data, so they do not even bound it. Do not go looking again.
+
+Two independent corroborations that it is cattle-only, neither of which uses
+`/aggs`: `JSA.BASIS_TRACKER.FUTURES_PRICES` took 59-72 rows of grain from the
+same provider on every business day straight through the hole, and
+`JSA.RISK_ANALYZER.EXTERNAL_FETCH_LOG` shows `/futures/v1/snapshot` returning
+200 throughout. So it is not a credential, a quota or a fetch-path problem.
+
+**Snowflake holds no CME cattle futures at all** — checked exhaustively on
+2026-09-28 across every schema. `CME_FEEDER_CATTLE` is the cash index plus
+auction data; `CME_FTP_DAILY` is CME's published *index* file and has no
+contract column. The futures that do exist (`BASIS_TRACKER`, `COST_OF_CARRY`,
+`RISK_ANALYZER`) are grain and oilseed only. It is not a fallback for this.
+
+### A settlement is not a close, and the snapshot knows neither reliably
+
+The first fix read the snapshot's `settlement_price` and shipped for about an
+hour. It was wrong in the most expensive way.
+
+| 2026-09-25 | Oct LC | Dec LC | Oct FC | Nov FC |
+|---|---|---|---|---|
+| official **settlement** | 218.875 | 222.150 | **334.925** | 331.975 |
+| last trade (hourly close, snapshot `session`) | 218.85 | 222.10 | 335.00 | 332.00 |
+
+CME settles live and feeder cattle on a weighted average of the **closing
+range**, so the last trade and the settlement differ routinely — here by 0.025
+to 0.075 on all four. The snapshot's `settlement_price` carries the *last
+trade*, so reading it as a settlement produces a wrong number wearing the word
+"settlement".
+
+**`previous_settlement` is right before the open and wrong after it.** At 07:30
+it read 334.925 for GFV6, which is Friday's settle; by 08:52, once the Monday
+session went active, the same field read 332.50 — the 09-11 bar — because
+Massive recomputes it off the broken daily series. The morning brief is built
+inside that window, which is exactly what makes it a trap. Nothing in
+`fetch_futures` reads `change` or `previous_settlement` any more.
+
+How Friday's settles were established, since it is worth being able to redo:
+`previous_settlement` pre-open cannot be Thursday's, because the settle log has
+Thursday at 331.75 and they disagree; the only settled session between Thursday
+and Monday pre-open is Friday. Public market reports (Brownfield's 09-24 and
+09-25 closes, the WLJ wrap-ups) agree to the half cent. **USDA's own
+`lsddcbs.pdf` does NOT confirm it** — its CME table prints `APR/JUN/AUG — N/A`
+and never carries the front months, so do not send anyone there.
+
+**The settle log was right and Massive was wrong.** Its 09-23 and 09-24 values
+were recorded from bars the API has since retracted, and public reports confirm
+them. The retraction is Massive's fault, not evidence against our record. So
+the log is now a recovery TIER in `fetch_futures`, ranked above an hourly close
+because it holds real settlements.
+
+**Mixed basis yields no change at all.** Once the log fills 09-24 the two ends
+are adjacent again, but Friday's last trade against Thursday's settlement gives
++3.25 where the true settle-to-settle move is +3.175 — adjacent, plausible and
+wrong. `settle_basis` exists to refuse that.
+
+### Three quieter things the same morning turned up
+
+- **The chart of the day was drawing the stale series.** `fetch_front_history`
+  had no staleness test at all, so it returned GFV6's 60 sessions ending 09-11
+  at 332.50 — to be printed beside "Oct feeders: 334.925". It now returns `{}`
+  for a series that is stale or has a weekday run missing, and `build_chart`
+  falls through to corn, crude or the S&P, all current throughout. Not
+  recovered, because a filled series would join 09-11 to 09-25 with a straight
+  line through a fortnight that does not exist.
+- **`hints()` discarded every figure for the AM format, and always had.** The
+  morning brief's only section key is `headlines`, which was missing from the
+  `lead` tuple, so `add()` dropped all six settles, the slaughter, the cash and
+  the YTD. The guard that stopped a `KeyError` turned the crash into silence,
+  and no test called `hints()` with `kind="am"` until 2026-09-28. `headlines`
+  is now last in that tuple so the evening formats keep their figures under
+  Market Action.
+- **The staleness warning did not reach the page or the PDF.** It lived only in
+  `st.session_state`, so any reload showed a clean bill of health over stale
+  numbers, and `build.main --no-fetch` — the run that makes the emailed PDF —
+  starts a fresh error list and never calls `gather()`. `report_futures_health`
+  only reads the ctx, so both now re-derive it.
 
 ### In flight as of 2026-09-24
 

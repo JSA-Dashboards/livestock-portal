@@ -224,7 +224,15 @@ def _load_ctx():
         ctx["issue_date"] = issue
         ctx["kind"] = kind
         ctx["session"] = session
-        return ctx, []
+        # RE-DERIVED, NOT REMEMBERED. The fetch run put its errors in
+        # st.session_state, which does not survive a page reload or a second
+        # browser session -- so the page showed a completely clean bill of
+        # health over stale numbers to anyone who refreshed. These three
+        # warnings are a property of the data, so they can simply be asked of
+        # the cached ctx again.
+        errs = []
+        letter_build.report_futures_health(ctx, issue, errs)
+        return ctx, errs
     return None, []
 
 
@@ -243,8 +251,10 @@ if fetch:
         st.session_state["wcr_errors"] = errors
     st.rerun()
 
-ctx, _ = _load_ctx()
-errors = st.session_state.get("wcr_errors", [])
+ctx, _cached_warnings = _load_ctx()
+# The fetch run's errors when there was one this session, otherwise the ones
+# re-derived from the saved data. Never nothing.
+errors = st.session_state.get("wcr_errors") or _cached_warnings
 
 if ctx is None:
     st.info("Press **Fetch latest data** to pull this issue's numbers.")
