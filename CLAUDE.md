@@ -124,12 +124,18 @@ across 8 threads raise nothing.
 process and never goes down the hot-reload path, so it cannot hit this. The
 race needs a code change to land while a session is mid-rerun.
 
-THE STATED CAUSE ABOVE IS NOW IN DOUBT. It was written when this app was
-believed to live in the personal workspace, and that turned out to be false, so
-"registered under the old owner path" may no longer be the reason — or may no
-longer be true at all. Nobody has tested whether a bare push now auto-deploys.
-The reboot step is still correct and still the safe habit; only the explanation
-is unverified.
+**A BARE PUSH DOES AUTO-DEPLOY — tested 2026-09-28.** Pushed `bf4f92c` to
+`master`, clicked nothing, and the live page was serving the new figures inside
+~4 minutes; the log panel read `[22:02:00] 🔄 Updated app!` with timestamps
+ticking live. So the webhook works and the "registered under the old owner
+path" story above was wrong, or has been fixed since — that whole explanation
+was already in doubt once the app turned out to be in the org workspace.
+
+Rebooting is still harmless and still the way to force a clone, but it is no
+longer required to ship. What has NOT changed is the verification rule below:
+check for something only the new code produces. That is how this was confirmed
+— the page's own benchmark figure moved 38.3% → 42.9%, which no cached log or
+stale timestamp can counterfeit.
 
 ## Required secrets
 
@@ -186,6 +192,31 @@ The same applies to `app.py` for CME Feeder Cattle Index, which also lives in
 the cme-feeder-cattle-index repo. The two are deliberately NOT identical (the
 standalone calls `set_page_config`, loads `.env`, and uses its own palette), so
 diff before copying — but a layout or logic fix belongs in both.
+
+## `feeder_receipts` is multi-channel; the herd page is not
+
+`JSA.CME_FEEDER_CATTLE.FEEDER_RECEIPTS` carries a `channel` column — `auction`,
+`direct`, `video`. `herd.py` reads **`auction` only**, via a `CHANNEL` constant,
+and that filter is load-bearing.
+
+Direct and video were loaded from the legacy archives to test whether sale-barn
+receipts fairly proxy the national trade. They do: across 2011–2020 the auction
+and all-channel series agreed on direction **9 years out of 9**, r = +0.92, with
+auction running a mean **3.5 points high** and damping the amplitude about 40%
+(mean |YoY| 0.86 vs 1.22). Auction is 74% of the three-channel head.
+
+But those archives stop in 2020/21 and 2021–2026 is not backfilled, so summing
+every channel does not widen the series — it **breaks** it: three channels
+through 2019, auction alone after, with a 3.5-point step at the seam sitting
+directly under the 2015 benchmark the page compares today against. `herd.py`
+predated the column and selected every row, so this shipped for a day: the 2015
+low read 38.3% instead of 42.9%, putting today +5.3 points above rebuild
+conditions when it is really **+0.6**. Nothing raised — every value stayed a
+plausible heifer share, so a magnitude check would have passed it.
+
+`tests/test_heifer_share_channel.py` in the cme repo pins it. Drop the filter
+only together with a backfill carrying all three channels to the present — which
+means ~6,000 ESMIS PDFs back to Nov 2018, and is not started.
 
 ## Deployment facts
 
