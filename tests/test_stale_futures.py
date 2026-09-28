@@ -539,3 +539,44 @@ def test_banking_restores_the_daily_change_the_hourly_bars_could_not(fake):
     assert con["settle"] == 334.925
     assert con["change_day"] == 3.175
     assert without is not None
+
+# ── the log has to be pulled down BEFORE anything reads it ─────────────────
+
+def test_gather_syncs_the_settle_log_before_fetching_futures():
+    """
+    ORDER, NOT PRESENCE, and only a structural test catches it.
+
+    fetch_futures reads letter/data/settle_log.json as a recovery tier, and
+    letter/data/ is gitignored -- so on Streamlit Cloud, where every reboot
+    rebuilds the container from a fresh clone, that file starts EMPTY.
+    backfill_week_base() has always called sync(), but it runs AFTER gather(),
+    so the first fetch after a reboot missed every banked settle and fell back
+    to an hourly close: 335.00 on the Oct feeder with 334.925 sitting in
+    Snowflake the whole time. Only a second fetch would have come out right,
+    and nothing would have said why.
+
+    Both calls exist either way, so nothing but their order distinguishes the
+    bug from the fix.
+    """
+    import ast
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parent.parent / "letter" / "build.py").read_text(
+        encoding="utf-8")
+    gather = next(n for n in ast.walk(ast.parse(src))
+                  if isinstance(n, ast.FunctionDef) and n.name == "gather")
+
+    def _first_line(pred):
+        return min((n.lineno for n in ast.walk(gather)
+                    if isinstance(n, ast.Call) and pred(n)), default=None)
+
+    sync_at = _first_line(
+        lambda c: isinstance(c.func, ast.Attribute) and c.func.attr == "sync")
+    fetch_at = _first_line(
+        lambda c: isinstance(c.func, ast.Attribute) and c.func.attr == "fetch_futures")
+
+    assert sync_at is not None, "gather() must pull the settle log down itself"
+    assert fetch_at is not None, "gather() should still fetch futures"
+    assert sync_at < fetch_at, (
+        f"settle_log.sync() is at line {sync_at} and fetch_futures at {fetch_at} -- "
+        "the log must be synced before anything reads it")

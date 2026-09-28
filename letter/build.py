@@ -182,6 +182,21 @@ def gather(issue: date, errors: list, kind: str = "tuesday", cof_guesses: dict =
         "regional_cash": {},
     }
 
+    # SYNC BEFORE ANYTHING READS THE LOG, which is the whole reason this line
+    # is here and not left to backfill_week_base().
+    #
+    # sources.fetch_futures now reads letter/data/settle_log.json as a recovery
+    # tier, and letter/data/ is gitignored -- so on Streamlit Cloud, where every
+    # reboot rebuilds the container from a fresh clone, that file starts EMPTY.
+    # backfill_week_base() does call sync(), but it runs after gather(), so the
+    # first fetch of the day would miss every banked settle and fall back to an
+    # hourly close: 335.00 on the Oct feeder where 334.925 was sitting in
+    # Snowflake the whole time. Only a second fetch would have been right, and
+    # nothing would have said why.
+    synced = settle_log.sync()
+    if synced and not synced.startswith("Settle log:"):
+        errors.append(f"settle log: {synced}")
+
     if api_key:
         # The morning brief must not read today's in-progress bar as a settle:
         # it goes out at 07:30, before CME livestock opens, and quotes the prior
