@@ -513,7 +513,11 @@ if HS:
             f"point takes the weeks through {LEGACY_LAST_GOOD_WEEK} from one and the "
             f"rest from the other; the two halves agree to within 0.26 points.")
     st.caption(
-        f"Each point covers the same weeks of its year, across the same 20 states."
+        f"Each point covers the same weeks of its year, across the "
+        f"{min(r['states'] for r in _ann)}–{max(r['states'] for r in _ann)} panel "
+        f"states reporting in it — a year covered by fewer is left off rather "
+        f"than drawn thin, which is why the series starts in "
+        f"{_ann[0]['year']} and not with the archive in 2000."
         f"{_spl_txt}{_chg}"
     )
 
