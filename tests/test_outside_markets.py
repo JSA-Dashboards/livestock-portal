@@ -165,3 +165,47 @@ def test_the_am_format_is_the_one_that_asks_for_it():
     src = (sources.REPO / "letter" / "build.py").read_text(encoding="utf-8")
     assert 'settled_only = (kind == "am")' in src
     assert src.count("completed_only=settled_only") == 2
+
+
+# ── which markets, and in what order ────────────────────────────────────────
+
+def test_soybeans_sit_directly_under_corn():
+    """
+    THE LIST ORDER IS THE PAGE ORDER. render.am_blocks walks ctx["outside"] as
+    it comes, so the only thing putting Soybeans under Corn is its position
+    here -- there is no sort anywhere downstream to restore it. Added
+    2026-09-28 at Ross's request; the two are read together.
+    """
+    codes = [c for c, _label, _style in sources.OUTSIDE_MARKETS]
+    assert codes.index("ZS") == codes.index("ZC") + 1, codes
+
+
+def test_the_grains_quote_in_eighths_and_the_rest_do_not():
+    """
+    1283.75 must print as 1283'6, not 1283.75. Corn, wheat, oats and soybeans
+    trade in eighths; equities and crude are plain decimals, and giving beans
+    the wrong style would print a grain quote in a shape nobody at a desk
+    reads.
+    """
+    style = {code: st for code, _label, st in sources.OUTSIDE_MARKETS}
+    assert style["ZS"] == "eighths"
+    assert style["ZC"] == "eighths"
+    assert style["ES"] == "decimal" and style["CL"] == "decimal"
+
+
+def test_soybeans_stay_out_of_the_chart_rotation():
+    """
+    Adding a market to the overnight block does NOT add it to the chart of the
+    day. build.chart_movers maps only the codes that have a CHART_POOL entry,
+    and a mover key with no pool entry can never be picked -- so the two lists
+    have to stay consistent on purpose rather than by accident.
+    """
+    import inspect
+
+    from letter import build as letter_build
+    from letter import config
+
+    pool_keys = {e["key"] for e in config.CHART_POOL}
+    src = inspect.getsource(letter_build.chart_movers)
+    assert '"ZS"' not in src, "ZS was mapped into chart_movers without a pool entry"
+    assert "beans" not in pool_keys

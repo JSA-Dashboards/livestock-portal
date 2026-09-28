@@ -909,6 +909,10 @@ def fetch_regional_cash(on: date) -> dict:
 # plain decimals.
 OUTSIDE_MARKETS = [
     ("ZC", "Corn", "eighths"),
+    # Directly under corn, because the order here IS the order on the page and
+    # the two are read together -- beans set the acreage fight that decides
+    # next year's corn crop, and the meal side of the board is a feed cost.
+    ("ZS", "Soybeans", "eighths"),
     ("ES", "S&P", "decimal"),
     ("CL", "Crude", "decimal"),
 ]
