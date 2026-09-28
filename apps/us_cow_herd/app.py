@@ -35,6 +35,8 @@ from herd import (BASELINE_YEARS, LEGACY_LAST_GOOD_WEEK, YTD_CUT, annual_ratio,
                   class_prices, decompose, heifer_share_annual,
                   heifer_share_rolling, heifer_share_summary, latest_date,
                   receipts_yoy)
+from dairy_mix import adjust as dm_adjust
+from dairy_mix import implied_dairy_share as dm_implied
 from inventory import inventory_summary
 from on_feed import on_feed_summary
 
@@ -675,17 +677,129 @@ if OF:
         st.plotly_chart(_f3, use_container_width=True)
 
     st.caption(
-        f"**The two measures agree on direction and differ on distance, which is "
-        f"what you would expect.** Both peaked in 2023 and both are falling. But "
-        f"the receipts share sits within a point of its rebuild low while this one "
-        f"is still **{_ocur['trailing'] - _olo['trailing']:.1f} points** above "
-        f"{_olo['year']}'s. Receipts are a *flow* — what is being sold this week. "
-        f"Cattle on feed are a *stock*, and heifers already placed stay on feed for "
-        f"months, so the feedlot number lags the sale barn by roughly a feeding "
-        f"period. Receipts turning hard through 2026 should show up here over the "
-        f"next several quarters; if it does not, one of the two is wrong and that "
-        f"is worth knowing."
+        f"**The two measures agree on direction and differ on distance, and there "
+        f"are two reasons for that, not one.** Both peaked in 2023 and both are "
+        f"falling, but the receipts share sits within a point of its rebuild low "
+        f"while this one is still **{_ocur['trailing'] - _olo['trailing']:.1f} "
+        f"points** above {_olo['year']}'s.\n\n"
+        f"**Timing.** Receipts are a *flow* — what is being sold this week. Cattle "
+        f"on feed are a *stock*, and heifers already placed stay on feed for months, "
+        f"so the feedlot number lags the sale barn by roughly a feeding period.\n\n"
+        f"**Mix.** This series counts every heifer in a feedlot, including "
+        f"dairy-origin ones that were never a beef-herd retention decision. The "
+        f"receipts series excludes them by construction — AMS reports Dairy and "
+        f"Beef/Dairy as their own classes — but NASS publishes no breed split for "
+        f"cattle on feed, so they cannot be removed here. That composition has "
+        f"changed since {_olo['year']} in both directions, which is why the *level* "
+        f"is less comparable across a decade than the direction is within recent "
+        f"years. The panel below puts numbers on how much it would take to matter."
     )
+
+    # Not a correction -- there is no breed split to correct WITH. The inverse
+    # question: the receipts series IS breed-clean, so ask how much dairy there
+    # would have to be for the two measures to be telling the same story.
+    with st.expander("⚖️  Adjusting for dairy-origin cattle — what would it take?"):
+        _bench = None
+        _rdrop = None
+        if HS:
+            _rs = HS["summary"]
+            _rdrop = _rs["current"]["share"] - _rs["high"]["share"]
+            _py = _rs["high"]["year"]
+            _same_q = [r for r in _orows
+                       if r["year"] == _py and r["quarter"] == _ocur["quarter"]]
+            _bench = (_same_q or [r for r in _orows if r["year"] == _py] or [None])[-1]
+
+        st.markdown(f"""
+This series counts **every** heifer in a feedlot. Straight Holstein heifers and
+beef-on-dairy crossbreds are in there, and neither was a female a rancher chose
+not to keep. They cannot be removed: NASS publishes 21 cattle-on-feed series and
+**none carries a breed split**, AMS's Direct Cattle Reports are narrative text
+with no line items, and the only breed detail anywhere — the Dairy and Beef/Dairy
+classes in the auction summaries — is **0.68% of auction feeder head** and
+unrepresentative, because those calves move dairy → calf ranch → feedyard on
+contract and rarely cross a sale barn.
+
+So the sliders below are **assumptions, not measurements**, and the output is a
+sensitivity, not a correction.
+""")
+
+        d1, d2, d3 = st.columns(3)
+        with d1:
+            _d_then = st.slider(f"Dairy-origin share on feed, {_bench['year'] if _bench else 'benchmark'}",
+                                0.0, 40.0, 10.0, 0.5, format="%.1f%%", key="dm_then")
+        with d2:
+            _d_now = st.slider(f"Dairy-origin share on feed, {_ocur['year']}",
+                               0.0, 40.0, 18.0, 0.5, format="%.1f%%", key="dm_now")
+        with d3:
+            _h_d = st.slider("Heifer share of that stream", 30.0, 70.0, 50.0, 1.0,
+                             format="%.0f%%", key="dm_hd")
+
+        _adj_now = dm_adjust(_ocur["trailing"], _d_now, _h_d)
+        _adj_then = dm_adjust(_bench["trailing"], _d_then, _h_d) if _bench else None
+
+        if _adj_now is None or _adj_then is None:
+            st.warning(
+                "Those assumptions leave no beef-only herd to speak of — a stream "
+                "that heifer-rich at that share implies more dairy heifers than "
+                "there are heifers. That is the assumption failing, not the market."
+            )
+        else:
+            m1, m2, m3 = st.columns(3)
+            with m1:
+                st.markdown(tile(f"As Reported, {_ocur['year']}",
+                                 f"{_ocur['trailing']:.1f}%",
+                                 f'<div class="tile-delta-neu">all heifers on feed</div>'),
+                            unsafe_allow_html=True)
+            with m2:
+                st.markdown(tile("Beef-Only, Implied", f"{_adj_now:.1f}%",
+                                 f'<div class="tile-delta-neu">dairy stream removed</div>'),
+                            unsafe_allow_html=True)
+            with m3:
+                _adrop = _adj_now - _adj_then
+                st.markdown(tile(f"Fall Since {_bench['year']}", f"{_adrop:+.1f} pts",
+                                 f'<div class="tile-delta-neu">receipts: '
+                                 f'{_rdrop:+.1f} pts</div>' if _rdrop is not None
+                                 else '<div class="tile-delta-neu">—</div>'),
+                            unsafe_allow_html=True)
+
+            if _rdrop is not None:
+                _target = _adj_then + _rdrop
+                _implied = dm_implied(_ocur["trailing"], _target, _h_d)
+                if _implied is None:
+                    st.info(
+                        f"**No dairy share reconciles the two on these assumptions.** "
+                        f"Holding {_bench['year']} at {_d_then:.1f}% and the stream at "
+                        f"{_h_d:.0f}% heifers, there is no share between 0 and 100% "
+                        f"that makes this series fall as far as receipts did "
+                        f"({_rdrop:+.1f} pts). Mix cannot be the whole story — the "
+                        f"remainder is the feeding-period lag, or something neither "
+                        f"series is showing."
+                    )
+                else:
+                    st.info(
+                        f"**Dairy-origin cattle would have to be about "
+                        f"{_implied:.0f}% of cattle on feed today** — against "
+                        f"{_d_then:.1f}% in {_bench['year']}, with that stream "
+                        f"{_h_d:.0f}% heifers — for this series to have fallen as far "
+                        f"as receipts did. Whether that is credible is a judgement "
+                        f"about the dairy herd, not something this page can settle, "
+                        f"and it moves a long way on the heifer-fraction assumption: "
+                        f"try 45% and 55% and watch it swing."
+                    )
+
+        st.caption(
+            "**Why the direction across a decade is genuinely unknown.** Straight "
+            "Holstein heifers used to be scarce in feedlots — the legacy AMS archive "
+            "carries Feeder Holstein *steers* and no Holstein heifer class at all, "
+            "because those heifers became dairy replacements. Sexed semen then "
+            "produced a surplus that did go on feed, peaking around the same years "
+            "this page uses as its rebuild benchmark, before beef-on-dairy displaced "
+            "it. Our own auction data shows that changeover: straight-Holstein "
+            "heifers were 100% of dairy-class heifers through 2023 and are 69% now. "
+            "So the benchmark year may carry its own dairy inflation. The two "
+            "effects partly offset, neither is measurable, and anyone who tells you "
+            "the net sign with confidence is guessing."
+        )
 
 
 # ── Herd Inventory ───────────────────────────────────────────────────────────
