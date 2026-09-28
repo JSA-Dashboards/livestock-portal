@@ -438,9 +438,15 @@ if HS:
                          f'<div class="tile-delta-neu">{_lo["year"]}</div>'),
                     unsafe_allow_html=True)
     with h[3]:
-        st.markdown(tile("Distance To That Low", f"{_sum['gap_to_low']:.2f} pts",
-                         '<div class="tile-delta-pos">▼ closing</div>'),
-                    unsafe_allow_html=True)
+        # The basis is in the label, not a footnote. This number says the herd is
+        # within a point of the last rebuild, and the feedlot survey two sections
+        # below disagrees by nearly four -- so the qualifier has to travel with
+        # the figure. A footnote gets separated from it the moment someone
+        # screenshots the tiles.
+        st.markdown(tile(f"Distance To {_lo['year']} — Receipts Basis",
+                         f"{_sum['gap_to_low']:.2f} pts",
+                         '<div class="tile-delta-neu">feedlot survey reads '
+                         'further</div>'), unsafe_allow_html=True)
 
     _ann = HS["annual"]
     _yrs = [r["year"] for r in _ann]
@@ -569,7 +575,14 @@ count of which choice was made, aggregated over {len(_ann)} years and 20 states.
 against a peak of **{_hi['share']:.1f}%** in {_hi['year']} means heifers are being
 withheld. The benchmark is **{_lo['share']:.1f}%** in {_lo['year']}, the last time
 the national herd genuinely expanded — today sits **{_sum['gap_to_low']:.2f} points**
-above it.
+above it *on this measure*.
+
+**Do not read that gap as settled.** It is the sale-barn view. The NASS feedlot
+survey further down reads considerably further from {_lo['year']} — and stays
+further even after allowing for dairy-origin cattle, which is the obvious
+explanation and does not stretch far enough to cover it. Two independent datasets
+agree the herd is retaining and disagree about how close that is to a rebuild.
+Set the year selector in that panel to {_lo['year']} to see the size of it.
 
 **Why it is not the same as the ratio above.** The retention incentive prices the
 decision; this counts the outcome. They can disagree, and when they do the
