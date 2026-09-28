@@ -41,6 +41,24 @@ direction across a decade is genuinely unknown.
 """
 
 
+# The assumption the beef-only row is drawn at. Stated here rather than handed to
+# the reader as a control: this is not a figure anyone knows, so a slider would
+# only have let someone dial in the answer they arrived with. The sensitivity
+# table beside it shows how far the conclusion moves across the plausible range.
+#
+#   DAIRY_NOW    mid-point of credible industry estimates, which put
+#                dairy-influenced cattle at roughly 15-20% of fed cattle.
+#   DAIRY_THEN   zero. The benchmark year certainly carried SOME dairy-origin
+#                heifers, and allowing for them would widen every gap the table
+#                reports -- so this is the generous footing, and understating the
+#                gap is the safer error when the gap is the finding.
+#   HEIFER_FRAC  a beef-on-dairy cross is about 50/50 by sex and essentially all
+#                of both sexes are fed, neither being wanted as a replacement.
+ASSUMED_DAIRY_NOW = 18.0
+ASSUMED_DAIRY_THEN = 0.0
+ASSUMED_HEIFER_FRAC = 50.0
+
+
 def adjust(share_pct, dairy_share_pct, heifer_frac_pct):
     """Beef-only heifer share implied by removing a dairy-origin stream.
 
