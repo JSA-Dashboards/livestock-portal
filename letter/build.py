@@ -107,6 +107,52 @@ def _try(label: str, fn, errors: list):
 
 # -- Assembly -----------------------------------------------------------------
 
+def report_futures_health(ctx: dict, issue: date, errors: list) -> None:
+    """
+    Say so when the futures are not what they look like.
+
+    WHY THIS IS NOT PART OF _try(). _try reports a source that RAISED. Every
+    check in the build asked whether data came back, and on 2026-09-28 the
+    answer was yes: the Monday brief printed 2026-09-11 settles as that
+    morning's futures -- Oct feeders at 332.50 against a Friday settle of
+    335.00 -- and gather() returned an empty error list, because the newest bar
+    in a stale series is still a perfectly good bar. Staleness is not an
+    exception, so nothing raised, so nothing was said.
+
+    The three things worth saying are separate on purpose: a stale settle must
+    stop the letter going out, a recovered one is usable but should be known
+    about, and a missing move is already marked in the text and only needs
+    explaining.
+    """
+    cons = (ctx.get("live_cattle") or []) + (ctx.get("feeder_cattle") or [])
+    if not cons:
+        return
+
+    stale = sorted({c.get("settle_date") for c in cons if c.get("settle_stale")})
+    if stale:
+        errors.append(
+            f"FUTURES ARE STALE. The newest cattle settlement available is {stale[0]}, "
+            f"more than {sources.MAX_SETTLE_AGE_DAYS} days before {issue}. The prices in "
+            "the futures block are NOT current -- do not send this letter without "
+            "replacing them.")
+
+    recovered = [c for c in cons if c.get("settle_recovered")]
+    if recovered:
+        srcs = ", ".join(sorted({c.get("settle_source") or "?" for c in recovered}))
+        errors.append(
+            f"{len(recovered)} cattle contract(s) recovered from {srcs}: the daily "
+            "settlement series has a hole and the hourly bars were used to fill it. An "
+            "hourly close is the last trade, not the official settlement -- usually "
+            "identical, occasionally a few ticks out.")
+
+    missing = [c.get("month") for c in cons if c.get("change_missing")]
+    if missing:
+        errors.append(
+            f"No daily change for {', '.join(str(m) for m in missing)}. The previous "
+            "session is absent from the feed, so the move would be measured across the "
+            "gap; it is marked in the letter instead of computed across it.")
+
+
 def gather(issue: date, errors: list, kind: str = "tuesday", cof_guesses: dict = None) -> dict:
     api_key = os.environ.get("MASSIVE_API_KEY", "").strip()
     if not api_key:
@@ -148,6 +194,12 @@ def gather(issue: date, errors: list, kind: str = "tuesday", cof_guesses: dict =
         ctx["feeder_cattle"] = _try("feeder cattle futures", lambda: sources.fetch_futures(
             config.FEEDER_CATTLE_CODE, api_key, issue, config.N_CONTRACTS,
             completed_only=settled_only), errors) or []
+
+        # BEFORE ANYTHING ELSE READS THEM. The FCI basis line divides the index
+        # by the front feeder settle, so a stale future silently becomes a
+        # wrong basis printed beside a correct index -- on 2026-09-28 that was
+        # a basis of +5.29 where the real figure was +2.79.
+        report_futures_health(ctx, issue, errors)
 
         # The chart of the day, morning brief only. Which market it shows is
         # decided further down, once the commentary and the day's moves are

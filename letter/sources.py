@@ -111,20 +111,130 @@ def fetch_futures(product_code: str, api_key: str, as_of: date, n: int = 3,
     # should compare against the PREVIOUS Friday, not itself, hence the "or 7".
     prior_friday = as_of - timedelta(days=(as_of.weekday() - 4) % 7 or 7)
 
-    out = []
-    for c in contracts:
-        s = hist.get(c["ticker"], pd.Series(dtype=float)).dropna()
+    def _clip(ser):
         # CLIP TO as_of. Without this the settle is always the NEWEST bar, so a
         # letter rebuilt for an earlier date silently carries today's prices --
         # and a stored letter stops being a record of what it printed.
         #
         # STRICTLY BEFORE for the morning report: today's bar exists from the
         # moment the session opens and is not a settle until it closes.
-        s = s[s.index < as_of] if completed_only else s[s.index <= as_of]
+        ser = ser.dropna()
+        return ser[ser.index < as_of] if completed_only else ser[ser.index <= as_of]
+
+    series = {t: _clip(hist.get(t, pd.Series(dtype=float))) for t in tickers}
+
+    # IS THE SETTLEMENT HISTORY BEHIND? Asked once for the whole curve, because
+    # it is a property of the feed rather than of any one month, and because
+    # the recovery below costs two extra requests per contract.
+    #
+    # THIS CHECK IS THE ACTUAL FIX. On 2026-09-28 the Monday brief printed
+    # 09-11 settles as that morning's futures -- Oct feeders at 332.50 when
+    # Friday had settled 335.00 -- and gather() returned no errors at all,
+    # because "the newest bar" is always a perfectly good bar. Seventeen days
+    # of staleness is invisible to every check that only asks whether data came
+    # back. Nothing below trusts recency again.
+    # THE TRIGGER IS TIGHTER THAN THE ALARM, deliberately, and they are not the
+    # same question. Being wrong about whether to TRY the hourly bars costs one
+    # request per contract. Being wrong about whether to shout "do not send"
+    # costs the alarm its meaning, and a warning nobody believes is the state
+    # this whole failure began in. So recovery starts the moment the series is
+    # behind the last weekday it could have had a bar for, while settle_stale
+    # below keeps the looser MAX_SETTLE_AGE_DAYS tolerance.
+    #
+    # The trigger fires needlessly on the nine or so exchange holidays a year,
+    # when the last weekday has no bar because nothing traded. That is harmless:
+    # the hourly bars have no bar for a holiday either, so nothing is filled and
+    # nothing changes. A day-count tolerance loose enough to cover those
+    # holidays is also loose enough to hide a feed that is one session behind,
+    # which is this same bug in miniature -- on a Monday it would quote
+    # Thursday's settle as Friday's and only the date line would say otherwise.
+    last_weekday = as_of - timedelta(days=1) if completed_only else as_of
+    while last_weekday.weekday() >= 5:
+        last_weekday -= timedelta(days=1)
+
+    # TWO WAYS TO BE BEHIND, and the letter needs both. The newest bar can be
+    # old (the morning brief's failure on 2026-09-28), or the newest bar can be
+    # today while the one BEFORE it is three weeks back -- the evening letter's
+    # version of the same hole, which leaves it a settle and no move. Checking
+    # only the first fixes the AM report and leaves the PM report changeless.
+    #
+    # Judged on the FRESHEST contract, not on every one: a back month that did
+    # not trade yesterday has no bar for perfectly ordinary reasons, and asking
+    # "is any contract behind" would fetch hourly bars every day of the year
+    # for a January feeder nobody quoted.
+    newest = [ser.index[-1] for ser in series.values() if len(ser)]
+    freshest = max(newest) if newest else None
+    holey = any(len(ser) > 1 and (ser.index[-1] - ser.index[-2]).days > MAX_SETTLE_AGE_DAYS
+                for ser in series.values() if len(ser) and ser.index[-1] == freshest)
+    history_stale = freshest is None or freshest < last_weekday or holey
+
+    hourly, snaps = {}, {}
+    if history_stale:
+        hourly = {t: _clip(session_closes_from_hourly(t, api_key)) for t in tickers}
+        try:
+            snaps = api.get_snapshots(tickers, api_key)
+        except Exception:
+            snaps = {}
+
+    out = []
+    for c in contracts:
+        ticker = c["ticker"]
+        s = series.get(ticker, pd.Series(dtype=float))
+
+        # RECOVERY FILLS ONLY SESSIONS THE REAL HISTORY DOES NOT HAVE. Splicing
+        # an hourly close over a session that already carries a settlement would
+        # swap a settlement for a last trade and gain nothing -- they are not
+        # the same number, and on 2026-09-11 they differed by up to 0.30.
+        recovered_dates = set()
+        h = hourly.get(ticker)
+        if h is not None and len(h):
+            fill = h[~h.index.isin(s.index)] if len(s) else h
+            if len(fill):
+                recovered_dates = set(fill.index)
+                s = pd.concat([s, fill]).sort_index()
+
         if s.empty:
             continue
+
+        last_date = s.index[-1]
         settle = float(s.iloc[-1])
         prev = float(s.iloc[-2]) if len(s) > 1 else None
+        prev_date = s.index[-2] if len(s) > 1 else None
+        source = "hourly close" if last_date in recovered_dates else "settlement history"
+
+        if source == "hourly close":
+            # THE SNAPSHOT CARRIES THE OFFICIAL SETTLEMENT, AND NO DATE. So it
+            # is used only where it demonstrably describes the session just
+            # recovered, and its own close against that session's close is the
+            # test -- a date check needing no timezone arithmetic. The moment
+            # the next session opens the snapshot moves and stops matching,
+            # which is exactly when trusting it would drop a live price into a
+            # morning brief: the bug completed_only exists to prevent. Failing
+            # closed here costs a marked figure and never a wrong one.
+            sess = (snaps.get(ticker) or {}).get("session") or {}
+            snap_close = _num(sess.get("close"))
+            snap_settle = _num(sess.get("settlement_price")) or snap_close
+            if snap_close is not None and snap_settle and abs(snap_close - settle) < 1e-6:
+                settle = float(snap_settle)
+                source = "snapshot settlement"
+
+        # NOTHING HERE READS THE SNAPSHOT'S change OR previous_settlement, and
+        # that is deliberate. They are derived from the same daily series that
+        # is broken: at 08:52 on 2026-09-28, with Friday having settled 335.00,
+        # GFV6's snapshot reported previous_settlement 332.50 and change +2.25
+        # -- the 09-11 bar and a seventeen-day move, offered as yesterday's
+        # settle and today's change. Taking `change` because the exchange
+        # published it would have reintroduced this very bug wearing a
+        # different field name.
+
+        # NEVER SUBTRACT ACROSS A HOLE. With no bars for 09-14..09-24 the bar
+        # before 09-25 is 09-11, so settle - prev prints a fortnight's move as a
+        # daily change: +4.95 on Oct feeders, on a day the market moved 0.075.
+        # The same error the prior-Friday base makes by reaching further back,
+        # and just as invisible. No change is a marked gap; a wrong one is not.
+        change_day = None
+        if prev is not None and (last_date - prev_date).days <= MAX_SETTLE_AGE_DAYS:
+            change_day = round(settle - prev, 4)
 
         # THE PRIOR FRIDAY'S BAR MUST EXIST. Reaching further back when it is
         # missing is what made this quietly wrong: on 2026-09-22 the Massive
@@ -134,13 +244,17 @@ def fetch_futures(product_code: str, api_key: str, as_of: date, n: int = 3,
         # worse than a marked gap, so a missing base yields None.
         base_week = float(s.loc[prior_friday]) if prior_friday in s.index else None
 
-        last_date = s.index[-1]
         out.append({
-            "ticker": c["ticker"],
-            "month": contract_month(c["ticker"]),
+            "ticker": ticker,
+            "month": contract_month(ticker),
             "settle": settle,
             "settle_date": last_date.isoformat() if hasattr(last_date, "isoformat") else str(last_date),
-            "change_day": round(settle - prev, 4) if prev is not None else None,
+            "settle_source": source,
+            "settle_recovered": source != "settlement history",
+            "settle_stale": (as_of - last_date).days > MAX_SETTLE_AGE_DAYS,
+            "change_recovered": prev_date in recovered_dates if prev_date is not None else False,
+            "change_missing": change_day is None,
+            "change_day": change_day,
             "change_week": round(settle - base_week, 4) if base_week is not None else None,
             "week_base_date": prior_friday.isoformat(),
             "week_base_missing": base_week is None,
@@ -177,6 +291,58 @@ def session_gaps(index, start: date, end: date) -> list:
     if len(run) >= 2:
         runs.extend(run)
     return runs
+
+
+# HOW STALE IS TOO STALE. Friday to Monday is three days, and a Monday holiday
+# makes Friday to Tuesday four, so four tolerates every ordinary weekend and
+# flags anything beyond one. Deliberately tighter than the five days
+# MAX_PRIOR_SETTLE_AGE_DAYS allows an outside market: the cattle block IS the
+# letter, and a marked gap is the safe failure.
+MAX_SETTLE_AGE_DAYS = 4
+
+
+def session_closes_from_hourly(ticker: str, api_key: str) -> pd.Series:
+    """
+    Daily closes rebuilt from the HOURLY bars, indexed by trading date.
+
+    WHAT THIS IS FOR. Massive's own daily aggregation is the thing that breaks.
+    On 2026-09-28 /aggs at resolution 1session AND 1day ended at 2026-09-11 for
+    every CME cattle contract -- 343 bars, nothing after -- while 1hour on the
+    same ticker carried 2026-09-25. Same trades, same API; only the job that
+    rolls them up daily had stopped. CL, ZC and ES were current at every
+    resolution that morning, so the hole is cattle-only and upstream.
+
+    It is worse than a gap: bars that were served on Friday were RETRACTED over
+    the weekend. letter/data/settle_log.json still holds 09-23 and 09-24 values
+    that this endpoint no longer returns, which is why nothing downstream can
+    treat "the newest bar" as meaning "the last session".
+
+    A LAST HOURLY CLOSE IS NOT A SETTLEMENT PRICE. CME settles on a closing
+    range, not the last trade; on 2026-09-11 the two differed by up to 0.30
+    (GFX6 closed 328.475 and settled 328.175). So this is a recovery source and
+    never a replacement -- fetch_futures prefers the real settlement history,
+    then the snapshot's official settlement, and only then this.
+    """
+    api = _massive()
+    try:
+        data = api._get(f"/aggs/{ticker}", api_key,
+                        params={"resolution": "1hour", "limit": 50000})
+    except Exception:
+        return pd.Series(dtype=float)
+
+    rows = [b for b in data.get("results", []) if b.get("session_end_date")]
+    # SORT BY window_start. These bars carry no "timestamp" field, and sorting
+    # on a key that is always None is not an error -- it silently leaves the
+    # API's own order, which is not chronological. That cost an hour.
+    rows.sort(key=lambda b: b.get("window_start") or 0)
+
+    closes: dict = {}
+    for b in rows:
+        price = b.get("close")
+        if not price:
+            continue
+        closes[pd.to_datetime(b["session_end_date"]).date()] = float(price)
+    return pd.Series(closes).sort_index() if closes else pd.Series(dtype=float)
 
 
 def fetch_settlement_series(ticker: str, api_key: str) -> pd.Series:

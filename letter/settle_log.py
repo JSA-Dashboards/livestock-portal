@@ -176,6 +176,15 @@ def record(ctx: dict, path: Path = None, source: str = "app") -> int:
     container it was made in. A Snowflake failure is swallowed here rather than
     reported: this is called mid-build, the file write has already succeeded,
     and sync() will push the day on the next run.
+
+    A RECOVERED CLOSE IS NOT RECORDED. When Massive's daily series has a hole,
+    sources.fetch_futures fills it from the hourly bars and marks the contract
+    settle_source "hourly close" -- a last trade, not a settlement, and on
+    2026-09-11 the two differed by as much as 0.30. This file is the authority
+    for the prior-Friday base once a value lands in it, so writing a close here
+    would make next Friday's week-over-week change a few ticks wrong with
+    nothing marking it: precisely the quiet error the whole module exists to
+    stop. The snapshot's official settlement IS a settlement and is kept.
     """
     p = Path(path or LOG_PATH)
     log = load(p)
@@ -187,6 +196,8 @@ def record(ctx: dict, path: Path = None, source: str = "app") -> int:
             ticker, settle = c.get("ticker"), c.get("settle")
             when = str(c.get("settle_date") or "")[:10]
             if not ticker or settle is None or not when:
+                continue
+            if c.get("settle_source") == "hourly close":
                 continue
             log.setdefault(ticker, {})[when] = float(settle)
             touched.add(when)
