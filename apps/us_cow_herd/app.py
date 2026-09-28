@@ -35,6 +35,7 @@ from herd import (BASELINE_YEARS, LEGACY_LAST_GOOD_WEEK, YTD_CUT, annual_ratio,
                   class_prices, decompose, heifer_share_annual,
                   heifer_share_rolling, heifer_share_summary, latest_date,
                   receipts_yoy)
+from inventory import inventory_summary
 from on_feed import on_feed_summary
 
 # ── JSA Brand Colors (shared with the rest of the portal shell) ──────────────
@@ -146,6 +147,15 @@ def load_all():
         return None
     finally:
         conn.close()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_inventory():
+    """The head counts. Same contract as load_on_feed: reason up, never a bare None."""
+    try:
+        return {"ok": inventory_summary()}
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -678,29 +688,131 @@ if OF:
     )
 
 
-# ── Awaiting NASS ────────────────────────────────────────────────────────────
-st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
-st.markdown('<div class="sec-header">Herd Inventory — Awaiting Data</div>',
-            unsafe_allow_html=True)
-st.warning(
-    "**The inventory half of this page is still not wired up.** The receipts-mix "
-    "section above is a volume signal — it counts heifers that went to the feedlot "
-    "rather than pricing the choice — but neither it nor the ratio is a head count "
-    "of the breeding herd, and auction receipts miss the direct and video trade "
-    "entirely. The counts that measure it directly are USDA NASS January 1 "
-    "inventory — **beef cows** and **beef replacement heifers ≥500 lb** — plus "
-    "monthly **beef cow slaughter** for the culling side. Beef cows are already in "
-    "the shared NASS cache; replacement heifers and class-level slaughter are not, "
-    "and adding them means adding series to the `usda-nass-etl` job that holds the "
-    "NASS key. Once they land, the ratio that belongs here is replacement heifers "
-    "÷ beef cows — the standard expansion measure."
-)
+# ── Herd Inventory ───────────────────────────────────────────────────────────
+# The head counts. Everything above measures the retention decision or what
+# producers did about it at the sale barn; this measures the herd itself.
+_IV = load_inventory() or {}
+if _IV.get("error"):
+    st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="sec-header">Herd Inventory</div>', unsafe_allow_html=True)
+    st.warning(
+        f"**The inventory panel could not read the NASS cache.** Everything above is "
+        f"unaffected — different backend. `{_IV['error']}`"
+    )
+IV = _IV.get("ok")
+if IV:
+    _ic, _ip = IV["current"], IV["prev"]
+    _ihi, _ilo = IV["recent_high"], IV["recent_low"]
+    _sl, _ypk = IV["slaughter"], IV["slaughter_peak"]
+    _yc, _yp = IV["ytd_current"], IV["ytd_prev"]
+    _sla = IV["slaughter_annual_latest"]
+
+    st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="sec-header">Herd Inventory — The Head Count</div>',
+                unsafe_allow_html=True)
+    st.caption(
+        "USDA NASS January 1 inventory and monthly commercial slaughter. "
+        "**Replacement heifers ÷ beef cows** is the standard expansion measure — "
+        "females entering the herd against females already in it — and beef cow "
+        "slaughter is the culling side of the same ledger. These are counts of the "
+        "herd, not prices or receipts, and they are the only thing here that "
+        "measures the rebuild directly."
+    )
+
+    i = st.columns(4)
+    with i[0]:
+        _arrow = ("▲" if IV["turned_up"] else "▼")
+        _kind = "pos" if IV["turned_up"] else "neg"
+        st.markdown(tile(f"Replacement Ratio, {_ic['year']}", f"{_ic['ratio']:.1f}%",
+                         f'<div class="tile-delta-{_kind}">{_arrow} '
+                         f'{abs(_ic["ratio"] - _ip["ratio"]):.2f} pts vs {_ip["year"]}</div>'),
+                    unsafe_allow_html=True)
+    with i[1]:
+        st.markdown(tile(f"Beef Cows, {_ic['year']}", f"{_ic['cows'] / 1e6:.2f}M",
+                         f'<div class="tile-delta-neu">{_ic["heifers"] / 1e6:.2f}M '
+                         f'replacements</div>'), unsafe_allow_html=True)
+    with i[2]:
+        _spct = 100.0 * (_sla["head"] - _ypk["head"]) / _ypk["head"]
+        st.markdown(tile(f"Cow Slaughter, {_sla['year']}", f"{_sla['head'] / 1e6:.2f}M",
+                         f'<div class="tile-delta-pos">▼ {abs(_spct):.0f}% vs '
+                         f'{_ypk["year"]} peak</div>'), unsafe_allow_html=True)
+    with i[3]:
+        _ypct = 100.0 * (_yc["head"] - _yp["head"]) / _yp["head"]
+        st.markdown(tile(f"Slaughter YTD thru {_yc['through'].title()}",
+                         f"{_yc['head'] / 1e6:.2f}M",
+                         f'<div class="tile-delta-{"pos" if _ypct < 0 else "neg"}">'
+                         f'{"▼" if _ypct < 0 else "▲"} {abs(_ypct):.1f}% vs '
+                         f'{_yp["year"]}</div>'), unsafe_allow_html=True)
+
+    # Five decades rather than the full 107 years the series carries: enough to
+    # show four cattle cycles without compressing the current turn to nothing.
+    _rr = [r for r in IV["ratio"] if r["year"] >= _ic["year"] - 55]
+    _f4 = go.Figure()
+    _f4.add_trace(go.Scatter(x=[r["year"] for r in _rr], y=[r["ratio"] for r in _rr],
+                             mode="lines", fill="tozeroy",
+                             fillcolor="rgba(6,147,227,0.09)",
+                             line=dict(color=JPSI_BLUE, width=2.5),
+                             hovertemplate="%{x}<br>%{y:.2f}%<extra></extra>"))
+    _f4.add_trace(go.Scatter(x=[_ic["year"]], y=[_ic["ratio"]], mode="markers",
+                             hoverinfo="skip",
+                             marker=dict(size=14, color=POS,
+                                         line=dict(color="#ffffff", width=2))))
+    _f4.add_annotation(x=_ihi["year"], y=_ihi["ratio"], ax=0, ay=-30,
+                       text=f"<b>{_ihi['ratio']:.1f}%</b> {_ihi['year']} rebuild",
+                       showarrow=True, arrowhead=0, arrowcolor=MUTED,
+                       font=dict(size=12, color=TEXT))
+    _f4.add_annotation(x=_ic["year"], y=_ic["ratio"], ax=-20, ay=34,
+                       text=f"<b>{_ic['ratio']:.1f}%</b>", showarrow=True, arrowhead=0,
+                       arrowcolor=POS, font=dict(size=13, color=TEXT))
+    _f4.update_layout(height=330, margin=dict(l=0, r=10, t=30, b=0),
+                      plot_bgcolor="white", paper_bgcolor="white", showlegend=False,
+                      yaxis_title="replacement heifers ÷ beef cows")
+    # Explicit range: fill="tozeroy" otherwise drags the axis to 0% and squashes
+    # a four-point spread into the top quarter of the chart. The fill weights the
+    # area; it is not a claim that zero is meaningful here. (The slaughter bars
+    # below DO baseline at zero, correctly -- bar length encodes magnitude.)
+    _rv = [r["ratio"] for r in _rr]
+    _f4.update_yaxes(showgrid=True, gridcolor="#f1f5f9", ticksuffix="%",
+                     range=[min(_rv) - 0.8, max(_rv) + 1.0])
+    _f4.update_xaxes(showgrid=False)
+    with st.container(key="wm-repl-ratio"):
+        st.plotly_chart(_f4, use_container_width=True)
+
+    _sa = [r for r in _sl["annual"] if r["year"] >= _ic["year"] - 26]
+    _f5 = go.Figure()
+    _f5.add_trace(go.Bar(x=[r["year"] for r in _sa], y=[r["head"] / 1e6 for r in _sa],
+                         marker_color=[NEG if r["year"] == _ypk["year"]
+                                       else ("#9fb8c8" if r["year"] != _sla["year"]
+                                             else POS) for r in _sa],
+                         hovertemplate="%{x}<br>%{y:.2f}M head<extra></extra>"))
+    _f5.update_layout(height=270, margin=dict(l=0, r=10, t=24, b=0),
+                      plot_bgcolor="white", paper_bgcolor="white", showlegend=False,
+                      yaxis_title="beef cow slaughter, million head")
+    _f5.update_yaxes(showgrid=True, gridcolor="#f1f5f9")
+    _f5.update_xaxes(showgrid=False)
+    st.plotly_chart(_f5, use_container_width=True)
+
+    _turn = ("**turned up in "
+             f"{_ic['year']} — the first rise since {_ihi['year']}**"
+             if IV["turned_up"] else "has not yet turned up")
+    st.info(
+        f"**The flows have turned; the herd has not — which is the order a rebuild "
+        f"happens in.** Beef cow slaughter is down **{abs(_spct):.0f}%** from its "
+        f"{_ypk['year']} peak and still falling this year, and the replacement ratio "
+        f"{_turn}. But beef cows themselves are **{_ic['cows'] / 1e6:.2f}M**, still "
+        f"the smallest in decades. That is not a contradiction: culling stops and "
+        f"heifers start being held while the herd is still shrinking, because those "
+        f"heifers do not add a calf for the better part of two years. Slaughter "
+        f"falls first, the ratio turns second, and beef cow inventory bottoms last."
+    )
 
 st.markdown(
     f"<div style='margin-top:22px;color:{MUTED};font-size:0.72rem;"
     f"border-top:1px solid {BORDER};padding-top:10px;'>"
-    f"Source: USDA AMS replacement- and slaughter-cattle auction reports via the "
-    f"MARS API, {len(D['annual'])} years of history. Provided for informational "
+    f"Sources: USDA AMS replacement- and slaughter-cattle auction reports via the "
+    f"MARS API ({len(D['annual'])} years), AMS state auction summaries and USDA's "
+    f"legacy auction archive for the receipts mix, and USDA NASS via the shared "
+    f"cache for cattle on feed and the January 1 head counts. Provided for informational "
     f"purposes only; not investment advice. © John Stewart &amp; Associates "
     f"{datetime.now().year}.</div>",
     unsafe_allow_html=True)

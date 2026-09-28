@@ -30,22 +30,10 @@ move is mostly calendar. The chart therefore plots a trailing FOUR-QUARTER mean,
 the direct analogue of the 52-week window used on the receipts chart and for the
 same reason, and the year-ago tile compares a quarter with its own quarter.
 """
-import os
 from statistics import mean
 
-# nass_cache_client reads the key passphrase from SNOWFLAKE_PRIVATE_KEY_PWD, the
-# name Streamlit Cloud's secrets use. Everywhere else on this machine it is
-# SNOWFLAKE_PRIVATE_KEY_PASSPHRASE, and the connector then fails with
-# "Password was not given but private key is encrypted" -- which surfaces as this
-# panel silently not existing. snowflake_db.py accepts either name; the cache
-# client accepts only one and is vendored byte-for-byte across four repos, so it
-# is not ours to edit. Bridge the name instead, as letter/build.py already does.
-if not os.environ.get("SNOWFLAKE_PRIVATE_KEY_PWD"):
-    _pp = os.environ.get("SNOWFLAKE_PRIVATE_KEY_PASSPHRASE")
-    if _pp:
-        os.environ["SNOWFLAKE_PRIVATE_KEY_PWD"] = _pp
-
-import nass_cache_client as nc  # noqa: E402  -- must follow the bridge above
+import nass_env  # noqa: F401  -- import order matters: bridges the passphrase
+import nass_cache_client as nc  # noqa: E402  -- must follow nass_env
 
 # Matches jobs/cattle_on_feed.py in usda-nass-etl exactly. The cache key is a
 # hash of these params, so any difference here silently returns an empty result
