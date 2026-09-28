@@ -570,7 +570,9 @@ if HS:
 **What it measures.** Every feeder animal sold at auction is a steer or a heifer.
 Steers have one destination — the feedlot. A heifer can go to the feedlot too, or
 she can stay home and be bred. So the heifer share of feeder receipts is a direct
-count of which choice was made, aggregated over {len(_ann)} years and 20 states.
+count of which choice was made, aggregated over {len(_ann)} years and the
+{min(r["states"] for r in _ann)}–{max(r["states"] for r in _ann)} states
+reporting in each of them.
 
 **Falling is rebuilding.** A share of **{_cur['share']:.1f}%** in {_cur['year']}
 against a peak of **{_hi['share']:.1f}%** in {_hi['year']} means heifers are being
@@ -717,8 +719,17 @@ if OF:
         # peak so the panel opens on the comparison the caption above just made,
         # but 2015-16 is the more interesting one -- that is the last genuine
         # rebuild, and whether today has matched it is the actual question.
+        # Derived from the receipts series rather than written down, because
+        # this bound has already gone stale once: it read 2010 when receipts
+        # began in 2011, and the wtd_1 backfill moved the start to 2005.
+        #
+        # Read off HS rather than _ann: _ann is bound to the RETENTION series
+        # at the top of the page and only rebound to the heifer-share one
+        # inside the section above, so when that section is skipped it still
+        # holds the other frame -- same years, entirely different measure.
+        _rec_from = min((r["year"] for r in HS["annual"]), default=2011) if HS else 2011
         _years = sorted({r["year"] for r in _orows
-                         if 2010 <= r["year"] < _ocur["year"]})
+                         if _rec_from <= r["year"] < _ocur["year"]})
         _bench = None
         _rdrop = None
         _rec_then = None
@@ -728,8 +739,9 @@ if OF:
                 _def = _years[-1]
             _by = st.selectbox("Compare against", _years, index=_years.index(_def),
                                key="dm_year",
-                               help="On-feed data runs to 1996; receipts only to "
-                                    "2011, so the receipts row drops out below that.")
+                               help=f"On-feed data runs to 1996; receipts only to "
+                                    f"{_rec_from}, so the receipts row drops out "
+                                    f"below that.")
             # Same quarter as the current reading -- this series is seasonal, and
             # April sits about 1.3 points under the rest every year.
             _same_q = [r for r in _orows
