@@ -699,15 +699,32 @@ if OF:
     # question: the receipts series IS breed-clean, so ask how much dairy there
     # would have to be for the two measures to be telling the same story.
     with st.expander("⚖️  Adjusting for dairy-origin cattle — what would it take?"):
+        # The benchmark year is the reader's to choose. It defaults to the receipts
+        # peak so the panel opens on the comparison the caption above just made,
+        # but 2015-16 is the more interesting one -- that is the last genuine
+        # rebuild, and whether today has matched it is the actual question.
+        _years = sorted({r["year"] for r in _orows
+                         if 2010 <= r["year"] < _ocur["year"]})
         _bench = None
         _rdrop = None
-        if HS:
-            _rs = HS["summary"]
-            _rdrop = _rs["current"]["share"] - _rs["high"]["share"]
-            _py = _rs["high"]["year"]
+        _rec_then = None
+        if _years:
+            _def = HS["summary"]["high"]["year"] if HS else _years[-1]
+            if _def not in _years:
+                _def = _years[-1]
+            _by = st.selectbox("Compare against", _years, index=_years.index(_def),
+                               key="dm_year",
+                               help="On-feed data runs to 1996; receipts only to "
+                                    "2011, so the receipts row drops out below that.")
+            # Same quarter as the current reading -- this series is seasonal, and
+            # April sits about 1.3 points under the rest every year.
             _same_q = [r for r in _orows
-                       if r["year"] == _py and r["quarter"] == _ocur["quarter"]]
-            _bench = (_same_q or [r for r in _orows if r["year"] == _py] or [None])[-1]
+                       if r["year"] == _by and r["quarter"] == _ocur["quarter"]]
+            _bench = (_same_q or [r for r in _orows if r["year"] == _by])[-1]
+            if HS:
+                _rec_then = next((r for r in HS["annual"] if r["year"] == _by), None)
+                if _rec_then:
+                    _rdrop = HS["summary"]["current"]["share"] - _rec_then["share"]
 
         st.markdown(f"""
 This series counts **every** heifer in a feedlot. Straight Holstein heifers and
@@ -744,23 +761,53 @@ sensitivity, not a correction.
                 "there are heifers. That is the assumption failing, not the market."
             )
         else:
-            m1, m2, m3 = st.columns(3)
-            with m1:
-                st.markdown(tile(f"As Reported, {_ocur['year']}",
-                                 f"{_ocur['trailing']:.1f}%",
-                                 f'<div class="tile-delta-neu">all heifers on feed</div>'),
-                            unsafe_allow_html=True)
-            with m2:
-                st.markdown(tile("Beef-Only, Implied", f"{_adj_now:.1f}%",
-                                 f'<div class="tile-delta-neu">dairy stream removed</div>'),
-                            unsafe_allow_html=True)
-            with m3:
-                _adrop = _adj_now - _adj_then
-                st.markdown(tile(f"Fall Since {_bench['year']}", f"{_adrop:+.1f} pts",
-                                 f'<div class="tile-delta-neu">receipts: '
-                                 f'{_rdrop:+.1f} pts</div>' if _rdrop is not None
-                                 else '<div class="tile-delta-neu">—</div>'),
-                            unsafe_allow_html=True)
+            # A table, not tiles. Tiles showed the adjusted CURRENT figure beside
+            # a change that was measured against the adjusted BENCHMARK -- a
+            # number never displayed -- so the change matched neither value on
+            # screen. Every term in the arithmetic is visible here.
+            _adrop = _adj_now - _adj_then
+            _rrep = _ocur["trailing"] - _bench["trailing"]
+            _rows_html = [
+                ("As reported", "all heifers on feed",
+                 _bench["trailing"], _ocur["trailing"], _rrep, False),
+                ("Beef-only", "dairy stream removed",
+                 _adj_then, _adj_now, _adrop, True),
+            ]
+            if _rec_then and _rdrop is not None:
+                _rows_html.append(
+                    ("Receipts", "breed-clean, for comparison",
+                     _rec_then["share"], HS["summary"]["current"]["share"],
+                     _rdrop, False))
+
+            _tbl = [
+                f'<table style="width:100%;border-collapse:collapse;font-size:0.9rem;">',
+                f'<tr style="color:{MUTED};font-size:0.7rem;text-transform:uppercase;'
+                f'letter-spacing:0.08em;text-align:right;">'
+                f'<th style="text-align:left;padding:6px 8px;">Heifer share</th>'
+                f'<th style="padding:6px 8px;">{_bench["year"]}</th>'
+                f'<th style="padding:6px 8px;">{_ocur["year"]}</th>'
+                f'<th style="padding:6px 8px;">Change</th></tr>']
+            for _lbl, _sub, _a, _b, _c, _hi in _rows_html:
+                _bg = f"background:{SURFACE2};" if _hi else ""
+                _wt = "700" if _hi else "400"
+                _tbl.append(
+                    f'<tr style="{_bg}border-top:1px solid {BORDER};text-align:right;">'
+                    f'<td style="text-align:left;padding:8px;font-weight:{_wt};">{_lbl}'
+                    f'<div style="color:{MUTED};font-size:0.72rem;font-weight:400;">{_sub}</div></td>'
+                    f'<td style="padding:8px;">{_a:.1f}%</td>'
+                    f'<td style="padding:8px;font-weight:{_wt};">{_b:.1f}%</td>'
+                    f'<td style="padding:8px;font-weight:700;color:{POS if _c < 0 else NEG};">'
+                    f'{_c:+.1f} pts</td></tr>')
+            _tbl.append("</table>")
+            st.markdown("".join(_tbl), unsafe_allow_html=True)
+            st.caption(
+                f"Read the **Change** column. Removing an assumed dairy stream takes "
+                f"the reported fall of {_rrep:+.1f} pts to {_adrop:+.1f} — moving it "
+                f"toward the {_rdrop:+.1f} pts the breed-clean receipts series "
+                f"actually fell." if _rdrop is not None else
+                "Read the Change column: it is the fall in each measure between the "
+                "two years, not the gap between the rows."
+            )
 
             if _rdrop is not None:
                 _target = _adj_then + _rdrop
