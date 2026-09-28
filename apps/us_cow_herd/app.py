@@ -35,6 +35,7 @@ from herd import (BASELINE_YEARS, LEGACY_LAST_GOOD_WEEK, YTD_CUT, annual_ratio,
                   class_prices, decompose, heifer_share_annual,
                   heifer_share_rolling, heifer_share_summary, latest_date,
                   receipts_yoy)
+from on_feed import on_feed_summary
 
 # ── JSA Brand Colors (shared with the rest of the portal shell) ──────────────
 JPSI_DARK = "#32373c"
@@ -145,6 +146,27 @@ def load_all():
         return None
     finally:
         conn.close()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_on_feed():
+    """
+    The feedlot-side read, from the shared NASS cache rather than Snowflake's
+    CME_FEEDER_CATTLE schema. Loaded on its own for the same reason the receipts
+    section is: a different backend, and a failure here should cost one panel
+    rather than the page.
+
+    Returns {"ok": summary} or {"error": reason}. The reason is carried up rather
+    than swallowed: nass_cache_client raises on a genuine backend failure
+    precisely so a misconfigured secret is loud, and catching that to a bare None
+    would delete this panel with no explanation. That is not hypothetical -- it
+    is how the SNOWFLAKE_PRIVATE_KEY_PWD name mismatch hid itself the first time.
+    An empty cache is different, and stays quiet.
+    """
+    try:
+        return {"ok": on_feed_summary()}
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -554,6 +576,106 @@ not included, and roughly half the feeder cattle in the country change hands tha
 way. It is a large consistent sample, not a census, and the *level* matters less
 than the direction and where it sits against {_lo['year']}.
 """)
+
+
+# ── Heifers On Feed ──────────────────────────────────────────────────────────
+# The same decision measured from the opposite end, by someone else. Receipts
+# count heifers arriving at auction (AMS, barn-level); this counts heifers
+# standing in feedlots (NASS, a survey of feedyards). Two datasets with
+# different failure modes agreeing is worth more than either on its own.
+_OF = load_on_feed() or {}
+if _OF.get("error"):
+    st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="sec-header">Heifers On Feed — The Feedlot Side</div>',
+                unsafe_allow_html=True)
+    st.warning(
+        f"**The feedlot panel could not read the NASS cache.** Everything above is "
+        f"unaffected — it comes from a different backend. `{_OF['error']}`"
+    )
+OF = _OF.get("ok")
+if OF:
+    _ocur, _ohi, _olo = OF["current"], OF["high"], OF["low"]
+    _orows = [r for r in OF["rows"] if r["trailing"] is not None]
+
+    st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="sec-header">Heifers On Feed — The Feedlot Side</div>',
+                unsafe_allow_html=True)
+    st.caption(
+        "Heifers as a share of the steers and heifers standing in US feedlots — "
+        "USDA NASS's quarterly survey of feedyards, an entirely separate "
+        "measurement from the auction receipts above. A heifer on feed is a heifer "
+        "that was **not** kept back to breed, so this falls when producers retain, "
+        "the same direction as the receipts share. Plotted as a trailing "
+        "four-quarter mean, because April runs about 1.3 points below the other "
+        "quarters every year."
+    )
+
+    o = st.columns(4)
+    with o[0]:
+        _yoy = (f'<div class="tile-delta-{"pos" if OF["yoy_pts"] < 0 else "neg"}">'
+                f'{"▼" if OF["yoy_pts"] < 0 else "▲"} {abs(OF["yoy_pts"]):.2f} pts YoY</div>'
+                if OF["yoy_pts"] is not None else '<div class="tile-delta-neu">—</div>')
+        st.markdown(tile(f"On Feed, {_ocur['label']}", f"{_ocur['share']:.1f}%", _yoy),
+                    unsafe_allow_html=True)
+    with o[1]:
+        st.markdown(tile("Trailing 4-Qtr", f"{_ocur['trailing']:.1f}%",
+                         f'<div class="tile-delta-neu">seasonally neutral</div>'),
+                    unsafe_allow_html=True)
+    with o[2]:
+        st.markdown(tile("Series Peak", f"{_ohi['trailing']:.1f}%",
+                         f'<div class="tile-delta-neu">{_ohi["label"]}</div>'),
+                    unsafe_allow_html=True)
+    with o[3]:
+        st.markdown(tile("Rebuild Low", f"{_olo['trailing']:.1f}%",
+                         f'<div class="tile-delta-neu">{_olo["label"]}</div>'),
+                    unsafe_allow_html=True)
+
+    _ox = [f"{r['year']}-Q{r['quarter']}" for r in _orows]
+    _oy = [r["trailing"] for r in _orows]
+    _f3 = go.Figure()
+    _f3.add_trace(go.Scatter(x=_ox, y=_oy, mode="lines", fill="tozeroy",
+                             fillcolor="rgba(217,119,6,0.09)",
+                             line=dict(color="#d97706", width=2.5),
+                             hovertemplate="%{x}<br>%{y:.2f}%<extra></extra>"))
+    for _r, _c, _sz in ((_ohi, MUTED, 11), (_olo, MUTED, 11), (_orows[-1], POS, 14)):
+        _f3.add_trace(go.Scatter(x=[f"{_r['year']}-Q{_r['quarter']}"],
+                                 y=[_r["trailing"]], mode="markers", hoverinfo="skip",
+                                 marker=dict(size=_sz, color=_c,
+                                             line=dict(color="#ffffff", width=2))))
+    _f3.add_hline(y=_olo["trailing"], line_dash="dot", line_color=POS)
+    _f3.add_annotation(x=f"{_ohi['year']}-Q{_ohi['quarter']}", y=_ohi["trailing"],
+                       ax=0, ay=-30, text=f"<b>{_ohi['trailing']:.1f}%</b> {_ohi['year']}",
+                       showarrow=True, arrowhead=0, arrowcolor=MUTED,
+                       font=dict(size=12, color=TEXT))
+    _f3.add_annotation(x=f"{_olo['year']}-Q{_olo['quarter']}", y=_olo["trailing"],
+                       ax=0, ay=36, text=f"<b>{_olo['trailing']:.1f}%</b> last rebuild",
+                       showarrow=True, arrowhead=0, arrowcolor=MUTED,
+                       font=dict(size=12, color=TEXT))
+    _f3.add_annotation(x=_ox[-1], y=_oy[-1], ax=-18, ay=-30,
+                       text=f"<b>{_oy[-1]:.1f}%</b>", showarrow=True, arrowhead=0,
+                       arrowcolor=POS, font=dict(size=13, color=TEXT))
+    _f3.update_layout(height=340, margin=dict(l=0, r=10, t=30, b=0),
+                      plot_bgcolor="white", paper_bgcolor="white", showlegend=False,
+                      yaxis_title="heifer share on feed, trailing 4 quarters")
+    _f3.update_yaxes(showgrid=True, gridcolor="#f1f5f9", ticksuffix="%",
+                     range=[min(_oy) - 1.0, max(_oy) + 1.2])
+    _f3.update_xaxes(showgrid=False,
+                     tickvals=[f"{y}-Q1" for y in range(1998, _ocur["year"] + 1, 4)])
+    with st.container(key="wm-on-feed"):
+        st.plotly_chart(_f3, use_container_width=True)
+
+    st.caption(
+        f"**The two measures agree on direction and differ on distance, which is "
+        f"what you would expect.** Both peaked in 2023 and both are falling. But "
+        f"the receipts share sits within a point of its rebuild low while this one "
+        f"is still **{_ocur['trailing'] - _olo['trailing']:.1f} points** above "
+        f"{_olo['year']}'s. Receipts are a *flow* — what is being sold this week. "
+        f"Cattle on feed are a *stock*, and heifers already placed stay on feed for "
+        f"months, so the feedlot number lags the sale barn by roughly a feeding "
+        f"period. Receipts turning hard through 2026 should show up here over the "
+        f"next several quarters; if it does not, one of the two is wrong and that "
+        f"is worth knowing."
+    )
 
 
 # ── Awaiting NASS ────────────────────────────────────────────────────────────
