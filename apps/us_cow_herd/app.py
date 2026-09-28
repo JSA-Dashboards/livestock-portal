@@ -33,7 +33,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 import snowflake_db as db
 from herd import (BASELINE_YEARS, LEGACY_LAST_GOOD_WEEK, YTD_CUT, annual_ratio,
                   class_prices, decompose, heifer_share_annual,
-                  heifer_share_rolling, heifer_share_summary, latest_date,
+                  heifer_share_rolling, heifer_share_summary, heifer_share_thin,
+                  latest_date,
                   receipts_yoy)
 from dairy_mix import (ASSUMED_DAIRY_NOW, ASSUMED_DAIRY_THEN,
                        ASSUMED_HEIFER_FRAC)
@@ -201,7 +202,10 @@ def load_heifer_share():
         if not summary:
             return None
         return {"summary": summary, "annual": heifer_share_annual(conn),
-                "rolling": heifer_share_rolling(conn)}
+                "rolling": heifer_share_rolling(conn),
+                # Kept apart from "annual" all the way to the chart. Nothing
+                # that computes a benchmark, a peak or a distance ever sees it.
+                "thin": heifer_share_thin(conn)}
     except Exception:
         return None
     finally:
@@ -459,12 +463,33 @@ if HS:
     _sizes = [14 if r["year"] == _cur["year"]
               else (11 if r["year"] in (_hi["year"], _lo["year"]) else 7) for r in _ann]
 
+    # The under-covered early years, drawn DETACHED -- no segment joins 2004 to
+    # 2005, because the break is the message. They are the same measurement on a
+    # smaller and shifting set of states (12 in 2000, 16 by 2004), so the level
+    # is not comparable even though each year is internally sound. Dashed, grey,
+    # hollow markers, no fill: every cue says "read these apart".
+    _thin = HS.get("thin") or []
+    _tyrs = [r["year"] for r in _thin]
+    _tshs = [r["share"] for r in _thin]
+
     _f1 = go.Figure()
+    if _thin:
+        _f1.add_trace(go.Scatter(
+            x=_tyrs, y=_tshs, mode="lines+markers",
+            name=f"{_tyrs[0]}–{_tyrs[-1]} · {min(r['states'] for r in _thin)}–"
+                 f"{max(r['states'] for r in _thin)} states",
+            line=dict(color="#94a3b8", width=1.8, dash="dot"),
+            marker=dict(size=7, color="#ffffff",
+                        line=dict(color="#94a3b8", width=1.8)),
+            hovertemplate="%{x}<br>heifer share %{y:.2f}%"
+                          "<br><i>fewer reporting states</i><extra></extra>"))
     _f1.add_trace(go.Scatter(x=_yrs, y=_shs, mode="lines", fill="tozeroy",
                              fillcolor="rgba(6,147,227,0.08)",
+                             name=f"{_yrs[0]}–{_yrs[-1]} · full panel",
                              line=dict(color=JPSI_BLUE, width=2.5),
                              hovertemplate="%{x}<br>heifer share %{y:.2f}%<extra></extra>"))
     _f1.add_trace(go.Scatter(x=_yrs, y=_shs, mode="markers", hoverinfo="skip",
+                             showlegend=False,
                              marker=dict(size=_sizes, color=_colors,
                                          line=dict(color="#ffffff", width=2))))
     _f1.add_hline(y=_lo["share"], line_dash="dot", line_color=POS)
@@ -484,12 +509,21 @@ if HS:
     _f1.add_annotation(x=_cur["year"], y=_cur["share"], ax=-14, ay=34,
                        text=f"<b>{_cur['share']:.1f}%</b>", showarrow=True,
                        arrowhead=0, arrowcolor=POS, font=dict(size=13, color=TEXT))
-    _f1.update_layout(height=380, margin=dict(l=0, r=10, t=30, b=0),
-                      plot_bgcolor="white", paper_bgcolor="white", showlegend=False,
+    # A legend only once there are two series to tell apart, and never as the
+    # sole cue: the early years are also dashed, grey and detached.
+    _f1.update_layout(height=380, margin=dict(l=0, r=10, t=44 if _thin else 30, b=0),
+                      plot_bgcolor="white", paper_bgcolor="white",
+                      showlegend=bool(_thin),
+                      legend=dict(orientation="h", yanchor="bottom", y=1.04,
+                                  xanchor="left", x=0, font=dict(size=11),
+                                  bgcolor="rgba(0,0,0,0)"),
                       yaxis_title=f"heifer share, Jan–mid-Sep (weeks 1–{YTD_CUT})")
+    # Ranges span BOTH series, so adding the early years cannot clip them.
+    _allsh = _shs + _tshs
+    _allyr = _tyrs + _yrs
     _f1.update_yaxes(showgrid=True, gridcolor="#f1f5f9", ticksuffix="%",
-                     range=[min(_shs) - 1.2, max(_shs) + 1.1])
-    _f1.update_xaxes(showgrid=False, tickvals=[y for i, y in enumerate(_yrs)
+                     range=[min(_allsh) - 1.2, max(_allsh) + 1.1])
+    _f1.update_xaxes(showgrid=False, tickvals=[y for i, y in enumerate(_allyr)
                                                if i % 2 == 0 or y == _cur["year"]])
     with st.container(key="wm-heifer-annual"):
         st.plotly_chart(_f1, use_container_width=True)
