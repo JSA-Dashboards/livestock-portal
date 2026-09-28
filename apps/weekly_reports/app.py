@@ -477,7 +477,8 @@ st.caption("One bullet per line. Blank sections are left out of the letter entir
 # write_template() creates the file when it is missing and a created file would
 # then look like a legitimately empty local draft. On a fresh container -- every
 # reboot is one -- this is the step that makes yesterday's writing reappear.
-_restored = draft_store.restore(cpath, issue, slug)
+_restored = draft_store.restore(cpath, issue, slug,
+                                has_content=lambda b: commentary.has_content(b, kind))
 
 # Seed the boxes with whatever is on disk so the CLI and this page stay in sync.
 commentary.write_template(cpath, letter_build.hints(ctx, kind), kind)

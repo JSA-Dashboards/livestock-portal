@@ -212,6 +212,94 @@ def test_everything_is_a_no_op_when_snowflake_is_not_configured(monkeypatch, tmp
 
 # ── the collision trap ───────────────────────────────────────────────────────
 
+# ── a blank never beats writing ──────────────────────────────────────────────
+#
+# Found in production on 2026-09-28: opening the deployed page without typing
+# pushed commentary.write_template()'s output up, and being NEWER it would then
+# have replaced a real draft sitting on another machine.
+
+from letter import commentary  # noqa: E402
+
+_TEMPLATE = ("<!-- Your sections. Bullets as '- '. Blank sections are skipped in the\n"
+             "     rendered letter, so you can drop one by leaving it empty. -->\n"
+             "\n## Headlines\n\n- \n")
+_REAL = "## Headlines\n\n- Boxed beef higher for a fourth session\n"
+
+
+def _am(body):
+    return commentary.has_content(body, "am")
+
+
+def test_the_template_is_not_content_but_a_written_bullet_is():
+    assert _am(_TEMPLATE) is False
+    assert _am(_REAL) is True
+
+
+def test_an_untouched_template_is_never_pushed_up(table, tmp_path):
+    p = tmp_path / "d.md"
+    _touch(p, _TEMPLATE, datetime.now(timezone.utc))
+
+    assert draft_store.restore(p, ISSUE, "am", has_content=_am) == ""
+    assert table.history(ISSUE, "am") == []
+
+
+def test_a_newer_template_does_not_overwrite_older_real_writing(table, tmp_path):
+    """The exact loss: a template pushed from the deployed page at 10:00 is
+    newer than the desktop's 09:00 draft, and newest-wins would take it."""
+    table.store(ISSUE, "am", _TEMPLATE)                 # pushed later...
+    remote_at = table.fetch(ISSUE, "am")[1]
+
+    p = tmp_path / "d.md"
+    _touch(p, _REAL, remote_at - timedelta(hours=1))    # ...than this was written
+
+    draft_store.restore(p, ISSUE, "am", has_content=_am)
+
+    assert p.read_text(encoding="utf-8") == _REAL
+    assert table.fetch(ISSUE, "am")[0] == _REAL         # and the real one is now upstream
+
+
+def test_a_blank_upstream_is_not_pulled_onto_a_fresh_container(table, tmp_path):
+    table.store(ISSUE, "am", _TEMPLATE)
+    p = tmp_path / "d.md"
+
+    assert draft_store.restore(p, ISSUE, "am", has_content=_am) == ""
+    assert not p.exists()
+
+
+def test_real_writing_still_comes_back_over_a_local_template(table, tmp_path):
+    table.store(ISSUE, "am", _REAL)
+    p = tmp_path / "d.md"
+    _touch(p, _TEMPLATE, datetime.now(timezone.utc) + timedelta(hours=1))   # newer!
+
+    msg = draft_store.restore(p, ISSUE, "am", has_content=_am)
+
+    assert p.read_text(encoding="utf-8") == _REAL
+    assert "restored" in msg.lower()
+
+
+def test_without_a_predicate_nothing_changes(table, tmp_path):
+    """The week base and the settle log pass none: a JSON file of settles has
+    no 'well-formed but means nothing' state, so every body counts."""
+    p = tmp_path / "w.json"
+    _touch(p, '{"LEZ6": 222.0}', datetime.now(timezone.utc))
+
+    draft_store.restore(p, ISSUE, draft_store.WEEK_BASE_KIND)
+
+    assert table.fetch(ISSUE, draft_store.WEEK_BASE_KIND)[0] == '{"LEZ6": 222.0}'
+
+
+def test_a_raising_predicate_never_costs_data(table, tmp_path):
+    def boom(_body):
+        raise RuntimeError("no")
+
+    p = tmp_path / "d.md"
+    _touch(p, _REAL, datetime.now(timezone.utc))
+
+    draft_store.restore(p, ISSUE, "am", has_content=boom)
+
+    assert table.fetch(ISSUE, "am")[0] == _REAL
+
+
 def test_it_never_reads_snowflake_schema():
     """CLAUDE.md: five modules default SNOWFLAKE_SCHEMA to their own schema, so
     setting it for one empties the others. This module names its table in full

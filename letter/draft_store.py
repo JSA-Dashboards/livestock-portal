@@ -318,7 +318,8 @@ def backup(path: Path, issue, kind: str, source: str = "app") -> str:
     return store(issue, kind, body, source)
 
 
-def restore(path: Path, issue, kind: str, label: str = "Draft") -> str:
+def restore(path: Path, issue, kind: str, label: str = "Draft",
+            has_content=None) -> str:
     """
     Reconcile disk and Snowflake before the file is read. Newest wins.
 
@@ -330,21 +331,56 @@ def restore(path: Path, issue, kind: str, label: str = "Draft") -> str:
     `label` names the thing in that line. It is not decoration: "Draft
     restored" over the prior-Friday settles would read as the commentary
     coming back and send someone looking for writing that never moved.
+
+    `has_content(body) -> bool` OVERRIDES NEWEST-WINS, and exists because
+    newest-wins alone lost real writing on 2026-09-28. This function pushes the
+    local file up when Snowflake has no row -- and on the page's second rerun
+    that file is the template commentary.write_template() has just created. A
+    template pushed at 10:00 is NEWER than a real draft written at 09:00, so
+    the next reconcile on the machine holding the real draft replaced it with
+    empty headings.
+
+    So a blank never beats a non-blank, in either direction, whatever the
+    timestamps say. Timestamps only decide between two bodies that both carry
+    writing. Left None -- as the week base and the settle log leave it -- every
+    body counts as content and the behaviour is unchanged, which is right for
+    those: a JSON file of settles has no "empty but well-formed" state that
+    means nothing.
     """
     path = Path(path)
     if not enabled():
         return ""
 
+    def _real(body) -> bool:
+        if body is None:
+            return False
+        if has_content is None:
+            return True
+        try:
+            return bool(has_content(body))
+        except Exception:
+            return True          # never let the predicate decide to lose data
+
     remote_body, remote_at = fetch(issue, kind)
     local_at = _mtime_utc(path)
 
     if remote_body is None:
+        # Nothing upstream. Push what is here, unless "what is here" is an
+        # untouched template -- that is the case that started all this.
         if local_at is not None:
+            try:
+                local_body = path.read_text(encoding="utf-8")
+            except OSError:
+                return ""
+            if not _real(local_body):
+                return ""
             err = backup(path, issue, kind)
             return err or ""
         return ""
 
     if local_at is None:
+        if not _real(remote_body):
+            return ""
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(remote_body, encoding="utf-8")
         return f"{label} restored from Snowflake (saved {remote_at:%b %d %H:%M} UTC)."
@@ -357,9 +393,21 @@ def restore(path: Path, issue, kind: str, label: str = "Draft") -> str:
     if local_body == remote_body:
         return ""
 
+    local_real, remote_real = _real(local_body), _real(remote_body)
+
+    # A blank loses to writing regardless of which is newer.
+    if local_real and not remote_real:
+        err = store(issue, kind, local_body or "", "app")
+        return err or ""
+    if remote_real and not local_real:
+        path.write_text(remote_body, encoding="utf-8")
+        return f"{label} restored from Snowflake (saved {remote_at:%b %d %H:%M} UTC)."
+
     if remote_at is not None and local_at is not None and remote_at > local_at:
         path.write_text(remote_body, encoding="utf-8")
         return f"{label} restored from Snowflake (saved {remote_at:%b %d %H:%M} UTC)."
 
+    if not local_real:
+        return ""
     err = store(issue, kind, local_body or "", "app")
     return err or ""

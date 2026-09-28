@@ -767,7 +767,9 @@ def main(argv=None) -> int:
     # Pull down anything typed on the deployed page before deciding the file is
     # empty. Without this the CLI and the page each kept their own draft and
     # whichever you were not looking at was invisible.
-    restored = draft_store.restore(cpath, issue, slug)
+    restored = draft_store.restore(
+        cpath, issue, slug,
+        has_content=lambda b: commentary.has_content(b, kind))
     if restored:
         print(f"  {restored}")
     existed = cpath.exists()

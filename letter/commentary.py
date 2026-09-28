@@ -174,15 +174,41 @@ def read(path: Path, kind: str = "tuesday") -> dict:
     """
     Parse the markdown back into {key: [bullet, ...]}.
 
-    Sections are matched on their HEADING TEXT, so reordering them in the file
-    is harmless and an unrecognised heading is ignored rather than guessed at.
+    The file handling only -- parse() does the reading, so the page's
+    "has this been written in yet?" test cannot drift from what the letter
+    actually renders.
     """
     if not path.exists():
         return {key: [] for key, _ in sections_for(kind)}
+    return parse(path.read_text(encoding="utf-8"), kind)
 
-    text = path.read_text(encoding="utf-8")
-    text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
 
+def has_content(text: str, kind: str = "tuesday") -> bool:
+    """
+    Does this markdown carry any actual writing?
+
+    Written for draft_store.restore(), which otherwise cannot tell a finished
+    letter from the file write_template() just created: both are a few hundred
+    bytes of headings. On 2026-09-28 that difference mattered -- opening the
+    deployed page without typing pushed a template up, and it was NEWER than a
+    real draft sitting on the desktop, so the newest-wins rule would have
+    replaced real writing with empty headings.
+
+    Parses rather than checking length: the template's bare "- " placeholder
+    and the HTML comment header are exactly what read() already knows to
+    discard, and duplicating that judgement here would let the two disagree.
+    """
+    return any(parse(text, kind).values())
+
+
+def parse(text: str, kind: str = "tuesday") -> dict:
+    """
+    read(), over a string. read() is this plus the file handling.
+
+    Sections are matched on their HEADING TEXT, so reordering them in the file
+    is harmless and an unrecognised heading is ignored rather than guessed at.
+    """
+    text = re.sub(r"<!--.*?-->", "", text or "", flags=re.DOTALL)
     by_title = {}
     matches = list(_HEADING.finditer(text))
     for i, m in enumerate(matches):
@@ -191,15 +217,12 @@ def read(path: Path, kind: str = "tuesday") -> dict:
 
     out = {}
     for key, title in sections_for(kind):
-        body = by_title.get(title.lower(), "")
         bullets = []
-        for line in body.splitlines():
+        for line in by_title.get(title.lower(), "").splitlines():
             line = line.strip()
-            if not line:
-                continue
             # The template seeds each section with a bare "- ". An untouched one
             # must not reach the letter as an empty bullet.
-            if line in ("-", "*"):
+            if not line or line in ("-", "*"):
                 continue
             # "- x" and "  - x" (a sub-bullet, kept with its indent intact so the
             # renderer can nest it the way Word's "o" level did).
