@@ -427,8 +427,13 @@ if HS:
                              marker=dict(size=_sizes, color=_colors,
                                          line=dict(color="#ffffff", width=2))))
     _f1.add_hline(y=_lo["share"], line_dash="dot", line_color=POS)
+    # The basis is named on both charts' peaks and axes. Without it the two
+    # sections read as disagreeing about the same number: this one peaks at
+    # 47.5% and the rolling one at 46.6%, because heifer share runs about three
+    # points lighter in the autumn run and a trailing-year window always
+    # contains one while a January-September window never does.
     _f1.add_annotation(x=_hi["year"], y=_hi["share"], xanchor="left", ax=6, ay=-32,
-                       text=f"<b>{_hi['share']:.1f}%</b> peak liquidation",
+                       text=f"<b>{_hi['share']:.1f}%</b> peak liquidation (Jan–Sep)",
                        showarrow=True, arrowhead=0, arrowcolor=MUTED,
                        font=dict(size=12, color=TEXT))
     _f1.add_annotation(x=_lo["year"], y=_lo["share"], ax=0, ay=40,
@@ -440,7 +445,7 @@ if HS:
                        arrowhead=0, arrowcolor=POS, font=dict(size=13, color=TEXT))
     _f1.update_layout(height=380, margin=dict(l=0, r=10, t=30, b=0),
                       plot_bgcolor="white", paper_bgcolor="white", showlegend=False,
-                      yaxis_title="heifer share of steer + heifer receipts")
+                      yaxis_title=f"heifer share, Jan–mid-Sep (weeks 1–{YTD_CUT})")
     _f1.update_yaxes(showgrid=True, gridcolor="#f1f5f9", ticksuffix="%",
                      range=[min(_shs) - 1.2, max(_shs) + 1.1])
     _f1.update_xaxes(showgrid=False, tickvals=[y for i, y in enumerate(_yrs)
@@ -493,14 +498,16 @@ if HS:
                                  marker=dict(size=14, color=POS,
                                              line=dict(color="#ffffff", width=2))))
         _f2.add_annotation(x=_pk["week"], y=_pk["share"], ax=-2, ay=-32,
-                           text=f"<b>peak {_pk['share']:.1f}%</b>", showarrow=True,
-                           arrowhead=0, arrowcolor=MUTED, font=dict(size=12, color=TEXT))
+                           text=f"<b>peak {_pk['share']:.1f}%</b> (12-month)",
+                           showarrow=True, arrowhead=0, arrowcolor=MUTED,
+                           font=dict(size=12, color=TEXT))
         _f2.add_annotation(x=_rc["week"], y=_rc["share"], ax=0, ay=34,
                            text=f"<b>{_rc['share']:.1f}%</b>", showarrow=True,
                            arrowhead=0, arrowcolor=POS, font=dict(size=13, color=TEXT))
         _f2.update_layout(height=320, margin=dict(l=0, r=10, t=26, b=0),
                           plot_bgcolor="white", paper_bgcolor="white",
-                          showlegend=False, yaxis_title="rolling 52-week heifer share")
+                          showlegend=False,
+                          yaxis_title="heifer share, trailing 52 weeks")
         # An explicit range, because fill="tozeroy" otherwise drags the axis down
         # to 0% and squeezes a four-point move into a sliver at the top of the
         # chart. The fill is there to weight the area, not to imply a zero base.
@@ -534,6 +541,13 @@ above it.
 decision; this counts the outcome. They can disagree, and when they do the
 disagreement is the story: an incentive nobody acts on is not a rebuild, and
 retention in the face of a poor incentive says something about expectations.
+
+**Why the two charts peak at different numbers.** The first reads January to
+mid-September; the second reads a trailing twelve months. Heifer share runs about
+three points lighter in the autumn run, so any twelve-month window sits below a
+January–September one. Both peak in 2023 — it is the same market through two
+windows, not a disagreement. The annual basis is the only one comparable across
+the 2019 source handover; the trailing one is the only one free of seasonality.
 
 **What it is not.** Auction receipts only — direct, video and internet sales are
 not included, and roughly half the feeder cattle in the country change hands that
