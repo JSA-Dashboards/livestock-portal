@@ -212,6 +212,64 @@ def record(ctx: dict, path: Path = None, source: str = "app") -> int:
     return written
 
 
+def bank(values: dict, when, path: Path = None, source: str = "manual") -> int:
+    """
+    Record settles typed in by hand. Returns how many were written.
+
+    WHY A LETTER NEEDS THIS. On 2026-09-28 Massive had no settlement for
+    Friday 09-25 at any resolution and no prospect of one: /trades carries zero
+    ticks for the whole of 09-14..09-24, so the hole is in the raw trade table
+    and nothing can be aggregated out of it. The brief could recover the
+    session from the hourly bars but only as a LAST TRADE -- 335.00 on the Oct
+    feeder, which settled 334.925 -- and the letter quotes settlements.
+
+    Where the feed cannot supply a number and no arithmetic can invent one, the
+    letter's standing answer is to put a human on it, exactly as it does for
+    the prior-Friday week base and for headlines. This is that entry point.
+
+    IT WRITES WHERE fetch_futures ALREADY LOOKS, which is the point of putting
+    it here rather than in a file of its own. The settle log is a recovery tier
+    ranked above an hourly close, so a banked value is picked up on the next
+    fetch with no new plumbing -- and because both ends of the move are then
+    settlements rather than a close against a settle, the daily change comes
+    back too instead of staying marked.
+
+    IT CANNOT OVERWRITE REAL DATA, and that is deliberate rather than an
+    oversight. fetch_futures fills only sessions the settlement history lacks,
+    so a banked figure loses to a real bar the moment Massive serves one. That
+    is the same rule the week base follows, and for the same reason: inviting a
+    typed number to beat a fetched one is the mistake the [[?]] marking exists
+    to prevent.
+
+    The source lands in SAVED_BY on the Snowflake row, so a hand-entered settle
+    is distinguishable from a fetched one after the fact without changing the
+    row format, which is a plain {ticker: settle} for its date.
+    """
+    p = Path(path or LOG_PATH)
+    log = load(p)
+    iso = when.isoformat() if hasattr(when, "isoformat") else str(when)[:10]
+
+    written = 0
+    for ticker, settle in (values or {}).items():
+        if settle is None or not str(ticker).strip():
+            continue
+        try:
+            log.setdefault(str(ticker).strip().upper(), {})[iso] = float(settle)
+        except (TypeError, ValueError):
+            continue
+        written += 1
+
+    if written:
+        _write(p, log)
+        # Swallowed like record()'s: the file write has already succeeded, and
+        # sync() pushes the day on the next run if Snowflake is unreachable.
+        try:
+            _push(log, [iso], source)
+        except Exception:
+            pass
+    return written
+
+
 def settles_on(when: date, path: Path = None) -> dict:
     """{ticker: settle} for one date, from whatever has been recorded."""
     iso = when.isoformat()

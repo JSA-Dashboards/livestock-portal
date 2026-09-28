@@ -646,6 +646,49 @@ are adjacent again, but Friday's last trade against Thursday's settlement gives
 +3.25 where the true settle-to-settle move is +3.175 — adjacent, plausible and
 wrong. `settle_basis` exists to refuse that.
 
+### Typing a settle in by hand
+
+Where the feed cannot supply a number and no arithmetic can invent one, the
+letter's standing answer is to put a human on it — the same answer it gives for
+the prior-Friday week base and for headlines. `settle_log.bank()` is that entry
+point, reachable three ways:
+
+- **the authoring page** — "Enter the official settles", under the week-base
+  form, shown only when a contract's settle did not come from the real
+  settlement history;
+- **the CLI** — `--settle GFV6=334.925,LEV6=218.875`, or
+  `GFV6=334.925@2026-09-25` to name the session; defaults to the last weekday
+  before the issue date;
+- **`settle_log.bank({...}, when)`** directly.
+
+**It writes to the settle log rather than a file of its own**, and that is the
+whole design. `fetch_futures` already reads the log as a recovery tier ranked
+above an hourly close, so a banked value is picked up on the next fetch with no
+new plumbing to apply it — which is also why the CLI banks BEFORE `gather()`
+and why the page sets `wcr_force_fetch` and re-runs the fetch instead of
+patching the ctx. The arithmetic lives in one place.
+
+**It restores the daily change, not just the settle.** An hourly close against
+a banked settlement is a mixed basis and yields nothing; two settlements give a
+move. On 2026-09-25 that is the difference between a marked `[[?]]` and Oct
+feeders +3.175.
+
+**It cannot overwrite real data.** `fetch_futures` fills only sessions the
+settlement history lacks, so a typed figure loses to a real bar the moment
+Massive serves one — the same rule the week base follows, for the same reason.
+If Massive ever serves a settlement that is simply *wrong*, this will not
+override it, and that is a known limit rather than an oversight.
+
+The `source` lands in `SAVED_BY` on the Snowflake row (`page`, `cli`,
+`manual-verified`), so a hand-entered settle stays distinguishable from a
+fetched one without changing the row format.
+
+**Banked on 2026-09-28 for session 2026-09-25**, since the provenance matters
+if anyone re-derives them: Oct LC 218.875, Dec LC 222.150, Oct FC 334.925, Nov
+FC 331.975. Feb LC and Jan FC were deliberately left on the marked hourly
+close — they were never independently verified, and banking an unverified
+number is the error this whole section is about.
+
 ### Three quieter things the same morning turned up
 
 - **The chart of the day was drawing the stale series.** `fetch_front_history`

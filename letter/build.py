@@ -691,6 +691,12 @@ def main(argv=None) -> int:
                     help="prior-Friday settles when the futures history has a hole, "
                          "e.g. LEV6=215.925,GFV6=323.50. Keyed by ticker; persists "
                          "to out/weekbase_<kind>_<date>.json for later re-renders.")
+    ap.add_argument("--settle", default="",
+                    help="official settles for a session the feed cannot supply, e.g. "
+                         "GFV6=334.925,LEV6=218.875 or GFV6=334.925@2026-09-25. Banked "
+                         "to the settle log, so they persist, reach the deployed app "
+                         "and restore the daily change. Defaults to the last weekday "
+                         "before the issue date. Cannot override a real settlement.")
     ap.add_argument("--cof-guess", default="",
                     help="analyst pre-report estimates for the Cattle on Feed table, "
                          "e.g. on_feed=101.8,placed=96.8,marketed=96.1. USDA does not "
@@ -742,6 +748,37 @@ def main(argv=None) -> int:
 
     load_env()
     errors: list = []
+
+    # BEFORE gather(), deliberately. A banked settle is read by
+    # sources.fetch_futures as a recovery tier, so entering it first means the
+    # normal fetch does the work -- including recomputing the daily change off
+    # two settlements instead of leaving it marked. Applying it afterwards
+    # would mean reimplementing that arithmetic here, badly.
+    if args.settle:
+        default_day = issue - timedelta(days=1)
+        while default_day.weekday() >= 5:
+            default_day -= timedelta(days=1)
+        banked: dict = {}
+        for pair in args.settle.split(","):
+            if "=" not in pair:
+                continue
+            k, _, v = pair.partition("=")
+            when = default_day
+            if "@" in v:
+                v, _, stamp = v.partition("@")
+                try:
+                    when = date.fromisoformat(stamp.strip())
+                except ValueError:
+                    print(f"  ignoring {pair}: '{stamp.strip()}' is not a date")
+                    continue
+            try:
+                banked.setdefault(when, {})[k.strip().upper()] = float(v)
+            except ValueError:
+                print(f"  ignoring {pair}: '{v}' is not a number")
+        for when, values in sorted(banked.items()):
+            n = settle_log.bank(values, when, source="cli")
+            print(f"banked {n} settle(s) for {when}: "
+                  + ", ".join(f"{t}={x}" for t, x in sorted(values.items())))
 
     if args.no_fetch:
         if not data_path.exists():

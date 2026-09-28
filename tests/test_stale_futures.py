@@ -471,3 +471,71 @@ def test_the_evening_formats_keep_their_figures_under_market_action():
     out = build.hints(ctx, "recap")
     assert " ".join(out.get("market_action", [])).count("218.875") == 1
     assert not any("218.875" in line for line in out.get("headlines", []))
+
+# ── settles entered by hand ─────────────────────────────────────────────────
+# Added 2026-09-28. Where the feed cannot supply a number and no arithmetic can
+# invent one, the letter's standing answer is to put a human on it -- the same
+# answer it gives for the prior-Friday base and for headlines. bank() is that
+# entry point, and it writes where fetch_futures already looks.
+
+
+@pytest.fixture
+def offline_log(monkeypatch):
+    """bank() pushes to Snowflake; these tests must not."""
+    monkeypatch.setattr(settle_log.draft_store, "enabled", lambda: False)
+
+
+def test_a_banked_settle_is_written_and_read_back(tmp_path, offline_log):
+    n = settle_log.bank({"GFV6": 334.925, "LEV6": 218.875}, FRIDAY, tmp_path / "s.json")
+    assert n == 2
+    log = settle_log.load(tmp_path / "s.json")
+    assert log["GFV6"]["2026-09-25"] == 334.925
+    assert log["LEV6"]["2026-09-25"] == 218.875
+
+
+def test_banking_leaves_other_days_alone(tmp_path, offline_log):
+    """It is a log, not a snapshot. Thursday must survive Friday's entry."""
+    p2 = tmp_path / "s.json"
+    settle_log.bank({"GFV6": 331.75}, date(2026, 9, 24), p2)
+    settle_log.bank({"GFV6": 334.925}, FRIDAY, p2)
+    assert settle_log.load(p2)["GFV6"] == {"2026-09-24": 331.75, "2026-09-25": 334.925}
+
+
+def test_a_junk_entry_is_skipped_rather_than_stored(tmp_path, offline_log):
+    n = settle_log.bank({"GFV6": None, "": 12.0, "LEV6": "not a number",
+                         "GFX6": 331.975}, FRIDAY, tmp_path / "s.json")
+    assert n == 1
+    assert list(settle_log.load(tmp_path / "s.json")) == ["GFX6"]
+
+
+def test_a_banked_settle_cannot_overwrite_a_session_the_feed_has(fake):
+    """
+    THE RULE THE WEEK BASE ALREADY FOLLOWS. fetch_futures fills only sessions
+    the settlement history lacks, so a typed figure loses to a real bar the
+    moment Massive serves one. Inviting a typed number to beat a fetched one is
+    the mistake the [[?]] marking exists to prevent.
+    """
+    fake(session=THROUGH_THURSDAY,
+         banked={"LEV6": {"2026-09-24": 999.0, "2026-09-25": 218.875}})
+    con = _one()
+    assert con["settle"] == 218.875              # 09-25 was missing, so it is used
+    assert con["change_day"] == round(218.875 - 219.675, 4)   # 09-24 kept its real bar
+
+
+def test_banking_restores_the_daily_change_the_hourly_bars_could_not(fake):
+    """
+    THE REASON TO TYPE THEM AT ALL, beyond the settle itself. An hourly close
+    against a banked settlement is a mixed basis and yields no move; two
+    settlements give one. On 2026-09-25 that is the difference between a
+    marked [[?]] and Oct feeders +3.175.
+    """
+    without = fake(session=BEFORE_THE_HOLE, hourly={FRIDAY: 335.00},
+                   banked={"LEV6": {"2026-09-24": 331.75}})
+    assert _one()["change_day"] is None
+
+    fake(session=BEFORE_THE_HOLE, hourly={FRIDAY: 335.00},
+         banked={"LEV6": {"2026-09-24": 331.75, "2026-09-25": 334.925}})
+    con = _one()
+    assert con["settle"] == 334.925
+    assert con["change_day"] == 3.175
+    assert without is not None

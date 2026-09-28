@@ -236,7 +236,11 @@ def _load_ctx():
     return None, []
 
 
-if fetch:
+# `or` a requested refetch: banking a settle changes what fetch_futures would
+# return, and the arithmetic that turns it into a daily change lives there.
+# Re-running the fetch is how the page gets the corrected figures without this
+# file growing a second, drifting copy of that logic.
+if fetch or st.session_state.pop("wcr_force_fetch", False):
     with st.spinner("Fetching USDA, futures and Snowflake…"):
         import json
         errors = []
@@ -341,6 +345,90 @@ if editable:
                     if _wb_err:
                         st.warning(f"Saved locally. {_wb_err}")
                 st.rerun()
+
+
+# -- Settles the feed could not supply ----------------------------------------
+# Offered ONLY for contracts whose settle did not come from the real settlement
+# history. The same rule the week-base form follows, and for the same reason:
+# a typed number must never be invited to beat a fetched one.
+#
+# Why it exists at all: on 2026-09-28 Massive had no settlement for Friday
+# 09-25 at any resolution and no prospect of one -- /trades carries zero ticks
+# for the whole of 09-14..09-24, so nothing can be aggregated out of it. The
+# brief could recover the session from the hourly bars, but only as a LAST
+# TRADE: 335.00 on the Oct feeder, which settled 334.925. CME settles on a
+# weighted average of the closing range, so the two differ routinely, and the
+# letter quotes settlements.
+#
+# It writes to the settle log rather than a file of its own, because
+# fetch_futures already reads that as a recovery tier ranked above an hourly
+# close. Nothing new has to be applied -- and because both ends of the move
+# become settlements, the daily change comes back too instead of staying [[?]].
+
+_PRODUCTS = {"LE": "Live Cattle", "GF": "Feeder"}
+
+_recovered = [c for c in (ctx.get("live_cattle") or []) + (ctx.get("feeder_cattle") or [])
+              if c.get("settle_recovered")]
+
+if _recovered:
+    # COUNT THE CLOSES, NOT EVERYTHING RECOVERED. A banked settle IS an official
+    # settlement -- it just did not come from the feed -- and calling all six
+    # "not official" told Ross four correct numbers were suspect.
+    _closes = [c for c in _recovered if c.get("settle_source") == "hourly close"]
+    _typed_already = [c for c in _recovered if c not in _closes]
+
+    if _closes:
+        st.warning(
+            f"**{len(_closes)} contract(s) are priced off a last trade, not a "
+            "settlement.** The hourly bars carry the closing trade, and CME settles on "
+            "a weighted average of the closing range — usually identical, occasionally "
+            "a few ticks out. Their daily move is left marked rather than measured from "
+            "one kind of number to the other. Type the settles in below and both come "
+            "right."
+        )
+    if _typed_already:
+        st.caption(f"{len(_typed_already)} contract(s) are on settles entered by hand. "
+                   "They are real settlements and the letter treats them as such — "
+                   "correct one here if it was mistyped.")
+
+    with st.expander("Enter the official settles", expanded=bool(_closes)):
+        st.caption("From your broker, the CME settlements page or the evening market "
+                   "report. Leave a box at zero to keep what was fetched. These are "
+                   "saved per SESSION DATE, so they carry to every letter that quotes "
+                   "that session and are not re-typed tomorrow.")
+        with st.form("manual_settles"):
+            _typed = {}
+            _cols = st.columns(min(3, len(_recovered)))
+            for _i, _c in enumerate(_recovered):
+                _tk = _c.get("ticker") or ""
+                _prod = _PRODUCTS.get(_tk[:2], _tk[:2])
+                with _cols[_i % len(_cols)]:
+                    _v = st.number_input(
+                        f"{_c.get('month')} {_prod}  ({_tk})",
+                        min_value=0.0, max_value=1000.0,
+                        value=float(_c.get("settle") or 0.0),
+                        step=0.025, format="%.3f", key=f"ms_{_tk}",
+                        help=f"session of {_c.get('settle_date')} — currently "
+                             f"{_c.get('settle_source')}")
+                    if _v:
+                        _typed[(str(_c.get("settle_date"))[:10], _tk)] = _v
+            if st.form_submit_button("Use these settles", use_container_width=True):
+                _by_date = {}
+                for (_when, _tk), _v in _typed.items():
+                    # Unchanged boxes are not re-banked: every bank is a
+                    # Snowflake row, and a history of identical rows is a
+                    # history of nothing. Same lesson as the draft autosave.
+                    _cur = next((c for c in _recovered if c.get("ticker") == _tk), {})
+                    if abs(float(_cur.get("settle") or 0) - _v) < 1e-9:
+                        continue
+                    _by_date.setdefault(_when, {})[_tk] = _v
+                _n = sum(settle_log.bank(_vals, _when, source="page")
+                         for _when, _vals in _by_date.items())
+                if _n:
+                    st.session_state["wcr_force_fetch"] = True
+                    st.rerun()
+                else:
+                    st.info("Nothing changed, so nothing was saved.")
 
 
 # -- What came back -----------------------------------------------------------
