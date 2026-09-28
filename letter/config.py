@@ -339,8 +339,18 @@ CHART_POOL = [
 # It also retires a recurring nuisance. change_week needs the prior FRIDAY'S
 # settle, which Massive has not had since 2026-09-14, so Monday-Thursday were
 # printing [[?]] wherever the hand-typed substitute was unavailable -- which is
-# every reboot of the deployed app. change_day needs only the previous bar and
-# is always there. Friday still depends on the week base, correctly.
+# every reboot of the deployed app. change_day needs only the previous bar.
+#
+# IT IS NOT "ALWAYS THERE", WHICH THIS COMMENT CLAIMED UNTIL 2026-09-28.
+# fetch_futures yields None for change_day -- printing [[?]] -- when the previous
+# bar is more than MAX_SETTLE_AGE_DAYS older than the settle, and also when the
+# two ends are different kinds of number (an hourly close against a settlement),
+# because that mixes bases and gives a wrong figure with every appearance of a
+# right one. Verified on the deployed app: the Monday 2026-09-28 AM brief marked
+# every cattle contract, on change_day, with the week base irrelevant.
+#
+# Friday still depends on the week base, correctly. The 09-24 change removed one
+# CAUSE of [[?]] from Mon-Thu; it did not make the mark impossible there.
 CHANGE_BASIS_BY_KIND = {
     "am": "day",
     "tuesday": "day",     # Monday's full letter

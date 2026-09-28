@@ -322,7 +322,9 @@ the change twice. Do not "restore" it.
 It also retired a daily nuisance: `change_week` needs the prior **Friday's**
 settle, which Massive has not had since 2026-09-14, so Mon–Thu printed `[[?]]`
 whenever the hand-typed substitute was unavailable. `change_day` needs only the
-previous bar.
+previous bar — **but "only the previous bar" is not "always available"**, and a
+Monday brief marked all six contracts on 2026-09-28. See the `[[?]]` section
+below for the two conditions that mark it.
 
 **The basis comes from the format, never the cache.** Every
 `data_<slug>_<date>.json` written before 09-24 stores `"week"`; a `--no-fetch`
@@ -411,9 +413,33 @@ The week base moved to `JSA.LETTER.DRAFTS` under `KIND = "weekbase"` on
 2026-09-26, and the settle log on 2026-09-28 under `KIND = "settlelog"`. See
 **Drafts survive a reboot now** above and `letter/settle_log.py`.
 
-**This had already narrowed from every evening letter to Friday only**, because
-Mon–Thu stopped quoting week-over-week on 2026-09-24 and `change_day` needs
-nothing but the previous bar.
+**IT DID NOT NARROW TO FRIDAY, AND THAT CLAIM WAS WRONG.** This section read
+"had already narrowed from every evening letter to Friday only, because Mon–Thu
+stopped quoting week-over-week on 2026-09-24 and `change_day` needs nothing but
+the previous bar". The second half is false. `change_day` is not a number that
+is always there — `sources.fetch_futures` yields None for it, which prints
+`[[?]]`, on **either** of two conditions:
+
+- the previous bar is more than `MAX_SETTLE_AGE_DAYS` (4) older than the settle,
+  so the move would be measured across a hole; or
+- the two ends are different KINDS of number — an hourly close against a
+  settlement. Mixed basis is marked rather than computed, because Friday's last
+  trade against Thursday's settle gives +3.25 where settle-to-settle is +3.175.
+
+**Observed on the deployed app on Monday 2026-09-28**, which is what settles it:
+the AM brief printed `[[?]]` on every cattle contract, under both warnings at
+once — six contracts recovered from hourly close, and no daily change for six.
+A Monday morning, on `change_day`, with the week base irrelevant.
+
+So the `[[?]]` risk is not Friday's alone. It belongs to any letter whose two
+settle dates are far apart or unlike in kind, which is a property of the feed on
+the day, not of the weekday. The 09-24 basis change removed one *cause* of it
+Mon–Thu; it did not make the mark impossible there.
+
+A related imprecision worth knowing: `build.py` prints only the gap explanation
+("The previous session is absent from the feed") for every marked contract,
+including the ones marked for mixed basis instead. The message can therefore
+name a cause that is not the one that fired.
 
 One consequence of the history: the settles for **Friday 2026-09-25** were
 recorded only on the deployed container, before the mirror existed, so they went
