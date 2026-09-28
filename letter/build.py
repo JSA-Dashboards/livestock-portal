@@ -145,12 +145,114 @@ def report_futures_health(ctx: dict, issue: date, errors: list) -> None:
             "hourly close is the last trade, not the official settlement -- usually "
             "identical, occasionally a few ticks out.")
 
+    # A GAPPED HISTORY CORRUPTS THE WEEKLY CHANGE AND THE MOVING AVERAGES
+    # TOGETHER, and both look plausible while being wrong. Moved here from a
+    # console print so it reaches the page with the rest.
+    gaps, no_base = set(), []
+    for key, label in (("live_cattle", "Live Cattle"), ("feeder_cattle", "Feeders")):
+        for c in ctx.get(key) or []:
+            gaps.update(c.get("gaps") or [])
+            if c.get("week_base_missing"):
+                no_base.append(f"{label} {c.get('month')}")
+    for tech in (ctx.get("tech_lc"), ctx.get("tech_fc")):
+        if tech:
+            gaps.update(tech.get("gaps") or [])
+    if no_base:
+        errors.append(
+            f"No settle on the prior Friday for: {', '.join(no_base)}. The week-over-week "
+            "change is marked rather than measured from an earlier session, which would "
+            "print a plausible wrong number.")
+    if gaps:
+        errors.append(
+            f"Futures history is missing sessions: {', '.join(sorted(gaps)[:8])}. Moving "
+            "averages over a gapped series are wrong rather than approximate, so they are "
+            "marked too. This is upstream data, not a fetch failure.")
+
     missing = [c.get("month") for c in cons if c.get("change_missing")]
     if missing:
         errors.append(
             f"No daily change for {', '.join(str(m) for m in missing)}. The previous "
             "session is absent from the feed, so the move would be measured across the "
             "gap; it is marked in the letter instead of computed across it.")
+
+
+# How far behind the issue date each report may legitimately be. They differ
+# because the SERIES differ, not because some are trusted more. Boxed beef and
+# daily slaughter are same-day prints, so three days covers a weekend and
+# anything past it means a back-dated rebuild picked up the newest report
+# instead of that day's. The 5-area weekly weighted average always describes
+# the PRIOR week, so it is seven days behind on a Monday BY DESIGN -- warning
+# about that every morning would make this panel noise, and a warning nobody
+# reads is how the futures outage went unnoticed for a whole letter.
+MAX_REPORT_LAG_DAYS = {"boxed beef": 3, "daily slaughter": 3, "cash trade": 10}
+
+
+def report_source_health(ctx: dict, issue: date, kind: str, errors: list) -> None:
+    """
+    The USDA sources' freshness problems, on the page rather than the console.
+
+    WHY THIS FUNCTION EXISTS. Every one of these checks was already written and
+    already correct -- as a print() in build.main. Ross writes the letter on the
+    deployed Streamlit page, which shows the `errors` list and nothing else, so
+    he had never seen one of them. "Boxed beef is the 9/25 print" was being
+    explained to an empty terminal. Same gap, same fix, as
+    report_futures_health: a source's problems belong where the letter is
+    written.
+
+    ONLY CONDITIONAL, ACTIONABLE THINGS GO IN THE LIST. The always-true notes --
+    that carcass weights run twelve days in arrears, that the feeder index is
+    JSA's own estimate -- stay as console prints. They are context, not
+    problems, and a panel that cries every morning stops being read on the one
+    morning it matters.
+    """
+    # THE 3PM CENTRAL TRAP, AND WHY IT IS PM-ONLY. LM_XB403 PM publishes around
+    # 3pm Central. The evening letter is written after that and wants today's
+    # print, so an older one means the release has not landed. The MORNING
+    # brief legitimately quotes the previous session's cutout -- that is what a
+    # 07:30 letter is -- so firing there would warn every single day about the
+    # letter working correctly.
+    cut_date = (ctx.get("cutout") or {}).get("report_date")
+    if kind != "am" and cut_date and date.fromisoformat(cut_date) < issue:
+        errors.append(
+            f"Boxed beef is the {cut_date} print, not {issue}'s. LM_XB403 PM releases "
+            f"about 3pm Central -- re-run after that for today's cutout. Until then the "
+            f"letter correctly labels it as the {cut_date} PM print.")
+
+    ds = ctx.get("daily_slaughter") or {}
+    if ds.get("status") and ds["status"].lower() != "final":
+        errors.append(
+            f"AMS 3208 is a {ds['status'].upper()} print for {ds.get('report_date')}. The "
+            "daily and week-to-date slaughter figures will be revised -- re-run for the "
+            "final before sending.")
+
+    # SEVERAL AMS ENDPOINTS SERVE THE NEWEST REPORT AND TAKE NO DATE FILTER, so
+    # a back-dated rebuild quietly reports today's numbers under an earlier
+    # date. Harmless on the day, wrong afterwards, and silent either way.
+    stale = []
+    for label, rd in (("boxed beef", cut_date),
+                      ("daily slaughter", ds.get("report_date")),
+                      ("cash trade", (ctx.get("cash") or {}).get("report_date"))):
+        if rd and abs((date.fromisoformat(rd) - issue).days) > MAX_REPORT_LAG_DAYS[label]:
+            stale.append(f"{label} is from {rd}")
+    if stale:
+        errors.append(
+            f"Built for {issue}, but " + "; ".join(stale) + ". These AMS endpoints always "
+            "serve the newest report and take no date filter, so a back-dated build does "
+            "not reconstruct that day.")
+
+    if kind == "friday":
+        cftc = ctx.get("cftc") or {}
+        if cftc.get("as_of") and not sources.cftc_is_current(cftc, issue):
+            errors.append(
+                f"CFTC data is as of {cftc['as_of']}, which is NOT this week's Tuesday. It "
+                "releases Friday 3:30pm ET, so a letter built before then carries last "
+                "week's positions with no error. Re-run after 3:30pm ET.")
+
+    if not os.environ.get("USE_SNOWFLAKE"):
+        errors.append(
+            "USE_SNOWFLAKE is not set, so the feeder index and Douglas imports came from "
+            "the committed SQLite file, which is stale. Set USE_SNOWFLAKE=1 and the "
+            "Snowflake credentials for the live values.")
 
 
 def gather(issue: date, errors: list, kind: str = "tuesday", cof_guesses: dict = None) -> dict:
@@ -287,6 +389,11 @@ def gather(issue: date, errors: list, kind: str = "tuesday", cof_guesses: dict =
         ctx["regional_cash"] = _try("cash week-to-date (AMS daily)",
                                     lambda: sources.fetch_regional_cash_wtd(issue), errors) or {}
         ctx["cof"] = _try("Cattle on Feed", lambda: cof.fetch(issue, cof_guesses), errors) or {}
+
+    # LAST, once every source is in, and inside gather() so the Streamlit page
+    # gets it too -- the page calls gather() directly and never goes through
+    # build.main, which is exactly how these warnings stayed invisible.
+    report_source_health(ctx, issue, kind, errors)
     return ctx
 
 
@@ -810,6 +917,7 @@ def main(argv=None) -> int:
         # report_futures_health only reads the ctx, so a cached ctx answers it
         # just as well.
         report_futures_health(ctx, issue, errors)
+        report_source_health(ctx, issue, kind, errors)
     else:
         print(f"fetching {session.upper()} {day} letter for {issue} ({fmt} format) ...")
         ctx = gather(issue, errors, kind, cof_guesses)
@@ -935,22 +1043,19 @@ def main(argv=None) -> int:
         print("    when it appears, but WASDE months with no Crop Production (roughly")
         print("    Dec-Apr) will not show at all.")
 
-    ds = ctx.get("daily_slaughter") or {}
-    if ds.get("status") and ds["status"].lower() != "final":
-        print(f"\n  ! AMS 3208 is a {ds['status'].upper()} print for {ds.get('report_date')}.")
-        print("    The daily and WTD figures will be revised -- re-run for the final.")
-
+    # THE CONDITIONAL FRESHNESS CHECKS MOVED OUT OF HERE on 2026-09-28, into
+    # build.report_source_health, so they reach the Streamlit authoring page
+    # through the errors list rather than a terminal Ross never looks at. What
+    # is left below is context that is ALWAYS true -- the carcass-weight lag,
+    # the feeder index being JSA's own estimate, the COF block's composition.
+    # Those are not problems and must not be warnings, or the panel becomes
+    # noise and stops being read on the morning it matters.
     cw = ctx.get("carcass_weights") or {}
     if cw.get("week_ending"):
         print(f"\n  Carcass weights are for the week ending {cw['week_ending']} "
               "(AMS 3658, published Thursdays, ~12 days in arrears).")
 
     if kind == "friday":
-        cftc = ctx.get("cftc") or {}
-        if cftc.get("as_of") and not sources.cftc_is_current(cftc, issue):
-            print(f"\n  ! CFTC data is as of {cftc['as_of']}, which is NOT this week's Tuesday.")
-            print("    CFTC releases Friday 3:30pm ET. Built before then, you get last week's")
-            print("    positions with no error. Re-run after 3:30pm ET.")
         cf = ctx.get("cof") or {}
         if cf.get("include"):
             print(f"\n  COF block INCLUDED ({cf.get('title')}, "
@@ -962,56 +1067,6 @@ def main(argv=None) -> int:
             print("    not the old Excel sheet's 100.8 / 99. See letter/cof.py.")
         elif cf.get("reason"):
             print(f"\n  COF block omitted: {cf['reason']}")
-
-    # THE 3PM CENTRAL TRAP. LM_XB403 PM publishes around 3pm Central. A letter
-    # written before that gets the PREVIOUS session's cutout, with no error --
-    # which is why the 9/22 letter's Choice and Select had to be typed by hand.
-    cut_date = (ctx.get("cutout") or {}).get("report_date")
-    if cut_date and date.fromisoformat(cut_date) < issue:
-        print(f"\n  ! Boxed beef is the {cut_date} print, not {issue}'s.")
-        print("    LM_XB403 PM releases about 3pm Central. Re-run after that for today's")
-        print(f"    cutout; until then the letter correctly labels it as the {cut_date} PM print.")
-
-    # A gapped futures history corrupts the weekly change and the moving
-    # averages together, and both look plausible while being wrong.
-    fut_gaps, no_base = set(), []
-    for label, rows in (("Live Cattle", ctx.get("live_cattle") or []),
-                        ("Feeders", ctx.get("feeder_cattle") or [])):
-        for r in rows:
-            fut_gaps.update(r.get("gaps") or [])
-            if r.get("week_base_missing"):
-                no_base.append(f"{label} {r.get('month')}")
-    for tech in (ctx.get("tech_lc"), ctx.get("tech_fc")):
-        if tech:
-            fut_gaps.update(tech.get("gaps") or [])
-    if no_base:
-        print(f"\n  ! No settle on the prior Friday for: {', '.join(no_base)}.")
-        print("    The week-over-week change is marked rather than measured from an")
-        print("    earlier session, which would print a plausible wrong number.")
-    if fut_gaps:
-        shown = ", ".join(sorted(fut_gaps)[:8])
-        print(f"\n  ! Futures history is missing sessions: {shown}")
-        print("    Moving averages over a gapped series are wrong, not approximate, so")
-        print("    they are marked too. This is upstream data, not a fetch failure.")
-
-    # Several AMS endpoints serve the LATEST report and take no date filter, so
-    # a back-dated rebuild quietly picks up today's numbers rather than the
-    # issue's. Harmless on the day; wrong afterwards, and silent either way.
-    stale = []
-    for label, rd in (("boxed beef", (ctx.get("cutout") or {}).get("report_date")),
-                      ("daily slaughter", (ctx.get("daily_slaughter") or {}).get("report_date")),
-                      ("cash trade", (ctx.get("cash") or {}).get("report_date"))):
-        if rd and abs((date.fromisoformat(rd) - issue).days) > 3:
-            stale.append(f"{label} is from {rd}")
-    if stale:
-        print(f"\n  ! Built for {issue}, but " + "; ".join(stale) + ".")
-        print("    These AMS endpoints always serve the newest report and take no date")
-        print("    filter, so a back-dated build does not reconstruct that day.")
-
-    if not os.environ.get("USE_SNOWFLAKE"):
-        print("\n  ! USE_SNOWFLAKE is not set, so the feeder index and Douglas imports came")
-        print("    from the committed SQLite file, which is stale. Set USE_SNOWFLAKE=1 and")
-        print("    the Snowflake credentials for the live values.")
 
     fci = ctx.get("fci") or {}
     if config.INCLUDE_FEEDER_INDEX and fci.get("value") is not None:

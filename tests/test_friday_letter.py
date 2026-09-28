@@ -979,7 +979,14 @@ def test_the_recap_actually_fetches_week_to_date_cash():
     so the recap needs the week-to-date one by name.
     """
     src = (REPO_ROOT / "letter" / "build.py").read_text(encoding="utf-8")
-    recap = src[src.index('if kind == "recap":'):src.index('if kind == "friday":')]
+    # ANCHOR INSIDE gather() FIRST. This used to index the whole file for
+    # 'if kind == "friday":', which silently became the WRONG occurrence on
+    # 2026-09-28 when report_source_health -- defined above gather -- gained a
+    # friday branch of its own. The slice inverted, `recap` came back empty,
+    # and the assertion failed for a reason that had nothing to do with cash.
+    gather_src = src[src.index("def gather("):]
+    recap = gather_src[gather_src.index('if kind == "recap":'):
+                       gather_src.index('if kind == "friday":')]
     assert "fetch_regional_cash_wtd" in recap
 
 
