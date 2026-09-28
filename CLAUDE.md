@@ -54,6 +54,43 @@ The reliable check is to **look for a feature that only exists in the new code**
 the log for what it is good at, which is seeing whether the dependency install
 failed, not for which commit is live.
 
+### `KeyError: 'letter.archive'` in the app log is not a bug — diagnosed
+
+It appears at `letter/build.py:38`, on the
+`from . import (archive, chart, cof, ...)` line, with three frozen frames
+(`_find_and_load` → `_find_and_load_unlocked` → `_load_unlocked`) and nothing
+of ours in the trace. Seen 2026-09-28 at 14:48:27, immediately before an
+`Updated app!`. **It is transient and self-healing; do not go looking for a
+circular import.** It was chased once already.
+
+The mechanism, reproduced 40 times out of 40 locally:
+
+- `streamlit/watcher/local_sources_watcher.py` → `flush_pending_evictions()`
+  calls `sys.modules.pop(name, None)` for every watched module whose file
+  changed, **plus everything under its prefix** — so a touched `letter`
+  evicts `letter.archive`, `letter.build` and the rest.
+- Its docstring says it runs "at the start of each script run on the script
+  thread so that `sys.modules` is not mutated from the file watcher thread
+  while user code is executing". That holds for ONE script thread. Every
+  browser session gets its own ScriptRunner thread, so session A's flush can
+  pop a module while session B's thread is still executing its import.
+- CPython's `_load_unlocked` ends with `module = sys.modules.pop(spec.name)`.
+  If the entry has vanished mid-execution, that line raises `KeyError` naming
+  the module. Hence the bare KeyError with no application frame.
+
+**Why `archive` every time:** it is the FIRST name in that import tuple, so it
+is the one in flight when the eviction lands. The name is a symptom of
+alphabetical position, not of anything about `archive.py` — which imports only
+stdlib and takes no part in any cycle. The package's import graph is a clean
+DAG (`sources → settle_log → draft_store`, `render → chart → config`,
+`technicals → sources`), nothing in the repo deletes from `sys.modules` or
+calls `importlib.reload`, and 480 concurrent first-imports of `letter.build`
+across 8 threads raise nothing.
+
+**It is also an argument for the reboot habit below.** A reboot restarts the
+process and never goes down the hot-reload path, so it cannot hit this. The
+race needs a code change to land while a session is mid-rerun.
+
 THE STATED CAUSE ABOVE IS NOW IN DOUBT. It was written when this app was
 believed to live in the personal workspace, and that turned out to be false, so
 "registered under the old owner path" may no longer be the reason — or may no
