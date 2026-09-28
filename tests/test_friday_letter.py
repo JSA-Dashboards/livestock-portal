@@ -845,6 +845,61 @@ def test_the_summary_names_every_format_in_use():
         assert config.FORMAT_LABELS[kind] in summary, kind
 
 
+def test_every_format_the_page_can_select_has_its_own_caption():
+    """
+    The bug this prevents, twice over: a format with no branch of its own falls
+    through to the last one and the page labels it as a letter you are not
+    writing. It happened to the recap when that landed, and to the AM brief,
+    which reached "Standard format -- leads with last week's cash trade" while
+    the box below it offered the morning brief's single Headlines section.
+
+    Every (day, session) pair the two radios can produce must hit a branch.
+    """
+    from letter import config
+    src = (REPO_ROOT / "apps" / "weekly_reports" / "app.py").read_text(encoding="utf-8")
+    kinds = {config.format_for(day, session)
+             for day in config.DAYS for session in config.SESSIONS}
+    # One `else` is allowed and it belongs to the full evening letter.
+    for kind in kinds - {"tuesday"}:
+        assert f'kind == "{kind}"' in src, f"no caption branch for {kind!r}"
+
+
+def test_the_am_caption_states_nothing_from_memory():
+    """
+    Same rule as the Letter radio's help text. The morning brief's two facts a
+    reader could get wrong -- how many sections there are to write, and which
+    change the figures quote -- are both DERIVED. Monday's basis moved on
+    2026-09-24 and the evening letter gained a section on 09-23; a typed-out
+    caption survives neither.
+    """
+    src = (REPO_ROOT / "apps" / "weekly_reports" / "app.py").read_text(encoding="utf-8")
+    am = src.split('elif kind == "am":')[1].split("else:")[0]
+    assert "commentary.sections_summary('am')" in am
+    assert "config.change_basis_label(kind)" in am
+    for stale in ("one written section", "prior session's settle", "week over week"):
+        assert stale not in am, f"stated by hand: {stale!r}"
+    # The other half of the morning brief that looks wrong and is not.
+    assert "COMPLETED" in am
+
+
+def test_the_section_summary_follows_the_section_list(monkeypatch):
+    """Add a section and the count changes with it, or it is not derived."""
+    from letter import commentary
+    assert commentary.sections_summary("am") == "one written section (Headlines)"
+    monkeypatch.setitem(commentary.SECTIONS_BY_KIND, "am",
+                        [("headlines", "Headlines"), ("border", "Border")])
+    assert commentary.sections_summary("am") == "two written sections (Headlines, Border)"
+
+
+def test_the_change_basis_label_follows_the_mapping(monkeypatch):
+    """Friday quotes the week and the morning brief the prior session."""
+    from letter import config
+    assert config.change_basis_label("am") == "the prior session"
+    assert config.change_basis_label("friday") == "week over week"
+    monkeypatch.setitem(config.CHANGE_BASIS_BY_KIND, "am", "week")
+    assert config.change_basis_label("am") == "week over week"
+
+
 # -- Which cash block each evening letter carries ------------------------------
 
 _CASH_WTD = {"regions": {

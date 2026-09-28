@@ -356,6 +356,26 @@ CHANGE_BASIS = "day"      # "week" | "day"
 def change_basis_for(kind: str = "tuesday") -> str:
     return CHANGE_BASIS_BY_KIND.get(str(kind).strip().lower(), CHANGE_BASIS)
 
+
+# What each basis is called in prose, for the authoring page's captions.
+CHANGE_BASIS_LABELS = {
+    "day": "the prior session",
+    "week": "week over week",
+}
+
+
+def change_basis_label(kind: str = "tuesday") -> str:
+    """
+    "the prior session" or "week over week", READ OFF CHANGE_BASIS_BY_KIND.
+
+    Same rule as pm_format_summary(): a page that tells you which change a
+    format quotes must derive it from the mapping. Monday quoted week over week
+    until 2026-09-24 and now quotes the prior session -- a caption that had said
+    so in a hardcoded string would still be saying the old thing.
+    """
+    basis = change_basis_for(kind)
+    return CHANGE_BASIS_LABELS.get(basis, basis)
+
 # Moving averages the Technicals section quotes.
 MA_WINDOWS = (9, 20)
 
