@@ -421,10 +421,11 @@ if HS:
     st.markdown('<div class="sec-header">Heifer Share of Feeder Receipts</div>',
                 unsafe_allow_html=True)
     st.caption(
-        f"Heifers as a share of steer + heifer feeder cattle sold at auction, "
-        f"year-to-date through week {YTD_CUT} of every year. When "
-        f"producers keep heifers back to breed, those heifers stop arriving at the "
-        f"sale barn — so a **falling** share is retention. Unlike the ratio above, "
+        f"Heifers as a share of steer + heifer feeder cattle sold, across **all "
+        f"three channels** — sale barn, direct country trade and video/internet "
+        f"auction — year-to-date through week {YTD_CUT} of every year. When "
+        f"producers keep heifers back to breed, those heifers stop being sold "
+        f"at all, so a **falling** share is retention. Unlike the ratio above, "
         f"this measures what was done rather than what it paid to do."
     )
 
@@ -443,15 +444,20 @@ if HS:
                          f'<div class="tile-delta-neu">{_lo["year"]}</div>'),
                     unsafe_allow_html=True)
     with h[3]:
-        # The basis is in the label, not a footnote. This number says the herd is
-        # within a point of the last rebuild, and the feedlot survey two sections
-        # below disagrees by nearly four -- so the qualifier has to travel with
-        # the figure. A footnote gets separated from it the moment someone
-        # screenshots the tiles.
+        # The basis travels with the figure rather than sitting in a footnote,
+        # because a footnote is separated from it the moment someone screenshots
+        # the tiles.
+        #
+        # The subtitle used to read "feedlot survey reads further", which was
+        # true while this was auction-only and read 0.64 points. On all three
+        # channels it reads about 3, which is close to the feedlot figure -- so
+        # the old line would now assert a disagreement that has largely closed.
+        # It says what it measures instead, and the prose below does the
+        # comparing where it can be qualified.
         st.markdown(tile(f"Distance To {_lo['year']} — Receipts Basis",
                          f"{_sum['gap_to_low']:.2f} pts",
-                         '<div class="tile-delta-neu">feedlot survey reads '
-                         'further</div>'), unsafe_allow_html=True)
+                         '<div class="tile-delta-neu">all three sale '
+                         'channels</div>'), unsafe_allow_html=True)
 
     _ann = HS["annual"]
     _yrs = [r["year"] for r in _ann]
@@ -547,9 +553,11 @@ if HS:
             f"point takes the weeks through {LEGACY_LAST_GOOD_WEEK} from one and the "
             f"rest from the other; the two halves agree to within 0.26 points.")
     st.caption(
-        f"Each point covers the same weeks of its year, across the "
-        f"{min(r['states'] for r in _ann)}–{max(r['states'] for r in _ann)} panel "
-        f"states reporting in it."
+        f"Each point covers the same weeks of its year, across all three sale "
+        f"channels and the {min(r['states'] for r in _ann)}–"
+        f"{max(r['states'] for r in _ann)} auction panel states reporting in it. "
+        f"2020 is absent rather than missing: the direct channel changed archive "
+        f"in September of that year, past this window, so no honest point exists."
         + (f" The grey {_tyrs[0]}–{_tyrs[-1]} segment is drawn apart because only "
            f"{min(r['states'] for r in _thin)}–{max(r['states'] for r in _thin)} "
            f"states reported then: each year is sound on its own, but the level "
@@ -600,19 +608,26 @@ if HS:
         st.caption(
             "A rolling 52-week window, which is seasonally neutral and so puts the "
             "turn on its actual date rather than in whichever annual bucket the "
-            "calendar assigns it. It stays inside the current data source: a window "
-            "spanning the 2019 handover would mix two archives mid-window, which the "
-            "annual series above avoids by construction."
+            "calendar assigns it. It begins later than the annual series above "
+            "because it stays clear of every handover: each channel switched "
+            "archives on its own date, the last in September 2020, and a window "
+            "spanning one would mix two archives mid-window."
         )
 
     with st.expander("ℹ️  How to read the heifer share"):
         st.markdown(f"""
-**What it measures.** Every feeder animal sold at auction is a steer or a heifer.
-Steers have one destination — the feedlot. A heifer can go to the feedlot too, or
-she can stay home and be bred. So the heifer share of feeder receipts is a direct
-count of which choice was made, aggregated over {len(_ann)} years and the
-{min(r["states"] for r in _ann)}–{max(r["states"] for r in _ann)} states
-reporting in each of them.
+**What it measures.** Every feeder animal sold is a steer or a heifer. Steers
+have one destination — the feedlot. A heifer can go to the feedlot too, or she
+can stay home and be bred. So the heifer share of feeder receipts is a direct
+count of which choice was made, aggregated over {len(_ann)} years.
+
+**All three sale channels.** The sale barn is roughly 60% of the head here;
+direct country trade and video/internet auctions are the rest, and they do not
+move together — direct's heifer share climbed about twelve points since 2015
+while the barn's moved half a point. A barn-only reading of today would put the
+herd within a point of the 2015 rebuild; all three channels put it about three
+points above. The coverage guard still counts the {min(r["states"] for r in _ann)}–{max(r["states"] for r in _ann)}
+auction states, because it exists for the auction archive's own thin early years.
 
 **Falling is rebuilding.** A share of **{_cur['share']:.1f}%** in {_cur['year']}
 against a peak of **{_hi['share']:.1f}%** in {_hi['year']} means heifers are being
@@ -620,12 +635,17 @@ withheld. The benchmark is **{_lo['share']:.1f}%** in {_lo['year']}, the last ti
 the national herd genuinely expanded — today sits **{_sum['gap_to_low']:.2f} points**
 above it *on this measure*.
 
-**Do not read that gap as settled.** It is the sale-barn view. The NASS feedlot
-survey further down reads considerably further from {_lo['year']} — and stays
-further even after allowing for dairy-origin cattle, which is the obvious
-explanation and does not stretch far enough to cover it. Two independent datasets
-agree the herd is retaining and disagree about how close that is to a rebuild.
-Set the year selector in that panel to {_lo['year']} to see the size of it.
+**This is the all-channel view, and it used to be the sale barn's alone.** That
+change is worth knowing about, because the two do not say the same thing: barn
+receipts put today about a point above {_lo['year']}, all three channels put it
+around three. The barn's heifer share barely moved since {_lo['year']} while
+direct country trade's climbed about twelve points, so a barn-only reading
+understates how far today sits from a genuine rebuild.
+
+**Compare it with the feedlot survey below.** That is an independent measurement
+with its own basis, and the year selector in that panel set to {_lo['year']} shows
+the size of any disagreement. Where they diverge, the divergence is the finding —
+neither is the correction to the other.
 
 **Why it is not the same as the ratio above.** The retention incentive prices the
 decision; this counts the outcome. They can disagree, and when they do the
@@ -1007,8 +1027,9 @@ st.markdown(
     f"<div style='margin-top:22px;color:{MUTED};font-size:0.72rem;"
     f"border-top:1px solid {BORDER};padding-top:10px;'>"
     f"Sources: USDA AMS replacement- and slaughter-cattle auction reports via the "
-    f"MARS API ({len(D['annual'])} years), AMS state auction summaries and USDA's "
-    f"legacy auction archive for the receipts mix, and USDA NASS via the shared "
+    f"MARS API ({len(D['annual'])} years); for the receipts mix, AMS auction, "
+    f"direct and video/internet reports via MARS from 2020-21 and USDA's legacy "
+    f"archives before that; and USDA NASS via the shared "
     f"cache for cattle on feed and the January 1 head counts. Provided for informational "
     f"purposes only; not investment advice. © John Stewart &amp; Associates "
     f"{datetime.now().year}.</div>",
