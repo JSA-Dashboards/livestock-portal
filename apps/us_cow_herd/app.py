@@ -876,196 +876,199 @@ if OF:
     # Not a correction -- there is no breed split to correct WITH. The inverse
     # question: the receipts series IS breed-clean, so ask how much dairy there
     # would have to be for the two measures to be telling the same story.
-    with st.expander("⚖️  Compare with an earlier year, with dairy cattle taken out"):
-        # The benchmark year is the reader's to choose. It defaults to the receipts
-        # peak so the panel opens on the comparison the caption above just made,
-        # but 2015-16 is the more interesting one -- that is the last genuine
-        # rebuild, and whether today has matched it is the actual question.
-        # Derived from the receipts series rather than written down, because
-        # this bound has already gone stale once: it read 2010 when receipts
-        # began in 2011, and the wtd_1 backfill moved the start to 2005.
+    # OUT OF THE EXPANDER on purpose. This is the most load-bearing thing on
+    # the page -- two independently collected surveys agreeing on how far today
+    # sits from a benchmark once a third, independently estimated number is
+    # applied -- and it spent its first hours hidden behind a disclosure
+    # triangle that most readers never open.
+    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="sec-header">Reconciling The Two Measures</div>',
+                unsafe_allow_html=True)
+    # The benchmark year is the reader's to choose. It defaults to the receipts
+    # peak so the panel opens on the comparison the caption above just made,
+    # but 2015-16 is the more interesting one -- that is the last genuine
+    # rebuild, and whether today has matched it is the actual question.
+    # Derived from the receipts series rather than written down, because
+    # this bound has already gone stale once: it read 2010 when receipts
+    # began in 2011, and the wtd_1 backfill moved the start to 2005.
+    #
+    # Read off HS rather than _ann: _ann is bound to the RETENTION series
+    # at the top of the page and only rebound to the heifer-share one
+    # inside the section above, so when that section is skipped it still
+    # holds the other frame -- same years, entirely different measure.
+    _rec_from = min((r["year"] for r in HS["annual"]), default=2011) if HS else 2011
+    _years = sorted({r["year"] for r in _orows
+                     if _rec_from <= r["year"] < _ocur["year"]})
+    _bench = None
+    _rdrop = None
+    _rec_then = None
+    if _years:
+        _def = HS["summary"]["high"]["year"] if HS else _years[-1]
+        if _def not in _years:
+            _def = _years[-1]
+        _by = st.selectbox("Compare against", _years, index=_years.index(_def),
+                           key="dm_year",
+                           help=f"On-feed data runs to 1996; receipts only to "
+                                f"{_rec_from}, so the receipts row drops out "
+                                f"below that.")
+        # Same quarter as the current reading -- this series is seasonal, and
+        # April sits about 1.3 points under the rest every year.
+        _same_q = [r for r in _orows
+                   if r["year"] == _by and r["quarter"] == _ocur["quarter"]]
+        _bench = (_same_q or [r for r in _orows if r["year"] == _by])[-1]
+        if HS:
+            _rec_then = next((r for r in HS["annual"] if r["year"] == _by), None)
+            if _rec_then:
+                _rdrop = HS["summary"]["current"]["share"] - _rec_then["share"]
+
+    st.caption(
+        "The feedlot series counts **every** heifer on feed, including dairy-origin "
+        "ones that were never a retention decision; the receipts series excludes "
+        "them by construction. Taking an assumed dairy stream out of both years "
+        "puts the two on the same terms. The assumption is stated, not adjustable."
+    )
+
+    _gap_rep = _ocur["trailing"] - _bench["trailing"]
+    _adj_then = dm_adjust(_bench["trailing"], ASSUMED_DAIRY_THEN, ASSUMED_HEIFER_FRAC)
+    _adj_now = dm_adjust(_ocur["trailing"], ASSUMED_DAIRY_NOW, ASSUMED_HEIFER_FRAC)
+    _gap_adj = (_adj_now - _adj_then) if (_adj_then is not None
+                                         and _adj_now is not None) else None
+
+    _rows = [("On feed, as reported", "every heifer in a feedlot",
+              _bench["trailing"], _ocur["trailing"], _gap_rep, False)]
+    if _gap_adj is not None:
+        _rows.append(
+            ("On feed, beef-only",
+             f"assumes {ASSUMED_DAIRY_NOW:.0f}% dairy today, none in "
+             f"{_bench['year']}, that stream {ASSUMED_HEIFER_FRAC:.0f}% heifers",
+             _adj_then, _adj_now, _gap_adj, True))
+    if _rec_then and _rdrop is not None:
+        _rows.append(("At the sale barn", "receipts — excludes dairy already",
+                      _rec_then["share"], HS["summary"]["current"]["share"],
+                      _rdrop, False))
+
+    _t = ['<table style="width:100%;border-collapse:collapse;font-size:0.9rem;">',
+          f'<tr style="color:{MUTED};font-size:0.7rem;text-transform:uppercase;'
+          f'letter-spacing:0.08em;text-align:right;">'
+          f'<th style="text-align:left;padding:6px 8px;">Heifer share</th>'
+          f'<th style="padding:6px 8px;">{_bench["year"]}</th>'
+          f'<th style="padding:6px 8px;">{_ocur["year"]}</th>'
+          f'<th style="padding:6px 8px;">Change</th></tr>']
+    for _lbl, _sub, _a, _b, _c, _hi in _rows:
+        _bg = f"background:{SURFACE2};" if _hi else ""
+        _w = "700" if _hi else "400"
+        _t.append(
+            f'<tr style="{_bg}border-top:1px solid {BORDER};text-align:right;">'
+            f'<td style="text-align:left;padding:8px;font-weight:{_w};">{_lbl}'
+            f'<div style="color:{MUTED};font-size:0.72rem;font-weight:400;">{_sub}</div></td>'
+            f'<td style="padding:8px;">{_a:.1f}%</td>'
+            f'<td style="padding:8px;font-weight:{_w};">{_b:.1f}%</td>'
+            f'<td style="padding:8px;font-weight:700;color:{POS if _c < 0 else NEG};">'
+            f'{_c:+.1f} pts</td></tr>')
+    _t.append("</table>")
+    st.markdown("".join(_t), unsafe_allow_html=True)
+
+    # One plain sentence. Earlier versions of this panel showed the dairy share
+    # that WOULD BE needed to reconcile the two series -- true, and unreadable:
+    # a column of percentages whose meaning depended on holding a gap in your
+    # head from a caption above it. The question a reader has is whether today
+    # resembles the benchmark year, so answer that.
+    if _gap_adj is None or _rdrop is None:
+        st.caption("The sale-barn series does not reach "
+                   f"{_bench['year']}, so there is nothing breed-clean to set "
+                   "the feedlot reading against.")
+    else:
+        _closed = abs(_gap_adj - _rdrop) < abs(_gap_rep - _rdrop)
+        _verdict = (
+            f"That takes most of the disagreement out — what is left "
+            f"({abs(_gap_adj - _rdrop):.1f} pts) is the feeding-period lag, or "
+            f"something neither series shows."
+            if _closed else
+            f"That does not close the disagreement, so dairy mix is not what "
+            f"is driving it.")
+        st.info(
+            f"**Same measure, dairy taken out of both ends.** Against "
+            f"{_bench['year']}, the feedlot reading goes from **{_gap_rep:+.1f} "
+            f"pts** as reported to **{_gap_adj:+.1f} pts** beef-only. The sale "
+            f"barn, which never counted dairy cattle, moved **{_rdrop:+.1f} pts** "
+            f"over the same span. {_verdict}"
+        )
+
+        # THE INVERSE QUESTION, which is what this panel was built for and
+        # which the table above only implies: instead of assuming a dairy
+        # share, solve for the one that would make the two measures move
+        # identically, then ask whether that number is believable.
         #
-        # Read off HS rather than _ann: _ann is bound to the RETENTION series
-        # at the top of the page and only rebound to the heifer-share one
-        # inside the section above, so when that section is skipped it still
-        # holds the other frame -- same years, entirely different measure.
-        _rec_from = min((r["year"] for r in HS["annual"]), default=2011) if HS else 2011
-        _years = sorted({r["year"] for r in _orows
-                         if _rec_from <= r["year"] < _ocur["year"]})
-        _bench = None
-        _rdrop = None
-        _rec_then = None
-        if _years:
-            _def = HS["summary"]["high"]["year"] if HS else _years[-1]
-            if _def not in _years:
-                _def = _years[-1]
-            _by = st.selectbox("Compare against", _years, index=_years.index(_def),
-                               key="dm_year",
-                               help=f"On-feed data runs to 1996; receipts only to "
-                                    f"{_rec_from}, so the receipts row drops out "
-                                    f"below that.")
-            # Same quarter as the current reading -- this series is seasonal, and
-            # April sits about 1.3 points under the rest every year.
-            _same_q = [r for r in _orows
-                       if r["year"] == _by and r["quarter"] == _ocur["quarter"]]
-            _bench = (_same_q or [r for r in _orows if r["year"] == _by])[-1]
-            if HS:
-                _rec_then = next((r for r in HS["annual"] if r["year"] == _by), None)
-                if _rec_then:
-                    _rdrop = HS["summary"]["current"]["share"] - _rec_then["share"]
-
-        st.markdown("""
-This series counts **every** heifer in a feedlot, including straight Holstein
-heifers and beef-on-dairy crossbreds. Neither was a female a rancher chose not to
-keep, so neither belongs in a retention signal — but they cannot be removed from
-the data, because **NASS publishes no breed split for cattle on feed**.
-
-What follows takes an assumed dairy stream out of both years, so the two are
-comparable on beef-herd terms. The assumption is stated, not adjustable: nobody
-knows this figure, and a control would only let a reader dial in the answer they
-came for.
-""")
-
-        _gap_rep = _ocur["trailing"] - _bench["trailing"]
-        _adj_then = dm_adjust(_bench["trailing"], ASSUMED_DAIRY_THEN, ASSUMED_HEIFER_FRAC)
-        _adj_now = dm_adjust(_ocur["trailing"], ASSUMED_DAIRY_NOW, ASSUMED_HEIFER_FRAC)
-        _gap_adj = (_adj_now - _adj_then) if (_adj_then is not None
-                                             and _adj_now is not None) else None
-
-        _rows = [("On feed, as reported", "every heifer in a feedlot",
-                  _bench["trailing"], _ocur["trailing"], _gap_rep, False)]
-        if _gap_adj is not None:
-            _rows.append(
-                ("On feed, beef-only",
-                 f"assumes {ASSUMED_DAIRY_NOW:.0f}% dairy today, none in "
-                 f"{_bench['year']}, that stream {ASSUMED_HEIFER_FRAC:.0f}% heifers",
-                 _adj_then, _adj_now, _gap_adj, True))
-        if _rec_then and _rdrop is not None:
-            _rows.append(("At the sale barn", "receipts — excludes dairy already",
-                          _rec_then["share"], HS["summary"]["current"]["share"],
-                          _rdrop, False))
-
-        _t = ['<table style="width:100%;border-collapse:collapse;font-size:0.9rem;">',
-              f'<tr style="color:{MUTED};font-size:0.7rem;text-transform:uppercase;'
-              f'letter-spacing:0.08em;text-align:right;">'
-              f'<th style="text-align:left;padding:6px 8px;">Heifer share</th>'
-              f'<th style="padding:6px 8px;">{_bench["year"]}</th>'
-              f'<th style="padding:6px 8px;">{_ocur["year"]}</th>'
-              f'<th style="padding:6px 8px;">Change</th></tr>']
-        for _lbl, _sub, _a, _b, _c, _hi in _rows:
-            _bg = f"background:{SURFACE2};" if _hi else ""
-            _w = "700" if _hi else "400"
-            _t.append(
-                f'<tr style="{_bg}border-top:1px solid {BORDER};text-align:right;">'
-                f'<td style="text-align:left;padding:8px;font-weight:{_w};">{_lbl}'
-                f'<div style="color:{MUTED};font-size:0.72rem;font-weight:400;">{_sub}</div></td>'
-                f'<td style="padding:8px;">{_a:.1f}%</td>'
-                f'<td style="padding:8px;font-weight:{_w};">{_b:.1f}%</td>'
-                f'<td style="padding:8px;font-weight:700;color:{POS if _c < 0 else NEG};">'
-                f'{_c:+.1f} pts</td></tr>')
-        _t.append("</table>")
-        st.markdown("".join(_t), unsafe_allow_html=True)
-
-        # One plain sentence. Earlier versions of this panel showed the dairy share
-        # that WOULD BE needed to reconcile the two series -- true, and unreadable:
-        # a column of percentages whose meaning depended on holding a gap in your
-        # head from a caption above it. The question a reader has is whether today
-        # resembles the benchmark year, so answer that.
-        if _gap_adj is None or _rdrop is None:
-            st.caption("The sale-barn series does not reach "
-                       f"{_bench['year']}, so there is nothing breed-clean to set "
-                       "the feedlot reading against.")
-        else:
-            _closed = abs(_gap_adj - _rdrop) < abs(_gap_rep - _rdrop)
-            _verdict = (
-                f"That takes most of the disagreement out — what is left "
-                f"({abs(_gap_adj - _rdrop):.1f} pts) is the feeding-period lag, or "
-                f"something neither series shows."
-                if _closed else
-                f"That does not close the disagreement, so dairy mix is not what "
-                f"is driving it.")
-            st.info(
-                f"**Same measure, dairy taken out of both ends.** Against "
-                f"{_bench['year']}, the feedlot reading goes from **{_gap_rep:+.1f} "
-                f"pts** as reported to **{_gap_adj:+.1f} pts** beef-only. The sale "
-                f"barn, which never counted dairy cattle, moved **{_rdrop:+.1f} pts** "
-                f"over the same span. {_verdict}"
+        # REPORTED AS A RANGE, NOT A POINT, AND THAT IS NOT HEDGING. The
+        # answer is sensitive to how the two windows are aligned, because the
+        # benchmark year is usually moving fast. Receipts cover Jan-mid-Sep;
+        # the feedlot series is quarterly and compared same-quarter here, so
+        # its trailing mean reaches back into the PRIOR year. For 2015 that
+        # is the difference between 33.4% (trailing at Q3) and 32.6%
+        # (trailing at Q4, i.e. the calendar-year mean) -- 0.8 points of
+        # benchmark, which moves the implied dairy share by about five.
+        # Quoting one figure to a decimal would imply a precision the
+        # alignment does not support.
+        _need = dm_implied(_ocur["trailing"], _bench["trailing"] + _rdrop,
+                           ASSUMED_HEIFER_FRAC)
+        _alt = None
+        _cal = [r for r in _orows if r["year"] == _bench["year"]]
+        if _cal:
+            _alt = dm_implied(_ocur["trailing"], _cal[-1]["trailing"] + _rdrop,
+                              ASSUMED_HEIFER_FRAC)
+        if _need is not None:
+            _lo, _hi_ = sorted([v for v in (_need, _alt) if v is not None])[0],                             sorted([v for v in (_need, _alt) if v is not None])[-1]
+            _span = (f"between **{_lo:.0f}% and {_hi_:.0f}%**"
+                     if abs(_hi_ - _lo) >= 1 else f"about **{_need:.0f}%**")
+            _overlaps = _hi_ >= 15.0 and _lo <= 20.0
+            st.markdown(
+                f"**And the strongest version of it.** Instead of assuming a "
+                f"dairy share, solve for one: cattle on feed would need to be "
+                f"{_span} dairy-origin for this series to have moved exactly as "
+                f"the sale barn did since {_bench['year']}. The span is the "
+                f"alignment, not the uncertainty in the data: which quarter "
+                f"anchors {_bench['year']} moves it by {abs(_hi_ - _lo):.1f} "
+                f"points.\n\n"
+                + (f"Credible industry estimates put dairy-influenced fed cattle "
+                   f"at **15–20%**, and this page assumed "
+                   f"{ASSUMED_DAIRY_NOW:.0f}% before the comparison was made. "
+                   f"The reconciling value overlaps that range, which is worth "
+                   f"something — two surveys run by different agencies over "
+                   f"different populations, needing a third independently "
+                   f"estimated number to agree, and getting one in the right "
+                   f"neighbourhood.\n\nIt is not a confirmation to a decimal "
+                   f"place, and benchmark years disagree: the implied share runs "
+                   f"from the low teens to the low twenties depending which year "
+                   f"anchors it, because the two series trough a year apart and a "
+                   f"common calendar year pairs them at different points in the "
+                   f"cycle. This year is among the closer agreements, not a "
+                   f"typical one."
+                   if _overlaps else
+                   f"Credible industry estimates put dairy-influenced fed cattle "
+                   f"at **15-20%**, and this lands " + ("above" if _lo > 20.0
+                   else "below") + f" it on every alignment, so dairy mix is "
+                   f"the wrong SIZE to explain the gap rather than the wrong idea.\n\n"
+                   f"Benchmark years disagree here: the implied share runs from "
+                   f"the low teens to the low twenties depending which year "
+                   f"anchors it, because the two series trough a year apart and "
+                   f"a common calendar year pairs them at different points in "
+                   f"the cycle.")
             )
 
-            # THE INVERSE QUESTION, which is what this panel was built for and
-            # which the table above only implies: instead of assuming a dairy
-            # share, solve for the one that would make the two measures move
-            # identically, then ask whether that number is believable.
-            #
-            # REPORTED AS A RANGE, NOT A POINT, AND THAT IS NOT HEDGING. The
-            # answer is sensitive to how the two windows are aligned, because the
-            # benchmark year is usually moving fast. Receipts cover Jan-mid-Sep;
-            # the feedlot series is quarterly and compared same-quarter here, so
-            # its trailing mean reaches back into the PRIOR year. For 2015 that
-            # is the difference between 33.4% (trailing at Q3) and 32.6%
-            # (trailing at Q4, i.e. the calendar-year mean) -- 0.8 points of
-            # benchmark, which moves the implied dairy share by about five.
-            # Quoting one figure to a decimal would imply a precision the
-            # alignment does not support.
-            _need = dm_implied(_ocur["trailing"], _bench["trailing"] + _rdrop,
-                               ASSUMED_HEIFER_FRAC)
-            _alt = None
-            _cal = [r for r in _orows if r["year"] == _bench["year"]]
-            if _cal:
-                _alt = dm_implied(_ocur["trailing"], _cal[-1]["trailing"] + _rdrop,
-                                  ASSUMED_HEIFER_FRAC)
-            if _need is not None:
-                _lo, _hi_ = sorted([v for v in (_need, _alt) if v is not None])[0],                             sorted([v for v in (_need, _alt) if v is not None])[-1]
-                _span = (f"between **{_lo:.0f}% and {_hi_:.0f}%**"
-                         if abs(_hi_ - _lo) >= 1 else f"about **{_need:.0f}%**")
-                _overlaps = _hi_ >= 15.0 and _lo <= 20.0
-                st.markdown(
-                    f"**And the strongest version of it.** Instead of assuming a "
-                    f"dairy share, solve for one: cattle on feed would need to be "
-                    f"{_span} dairy-origin for this series to have moved exactly as "
-                    f"the sale barn did since {_bench['year']}. The span is the "
-                    f"alignment, not the uncertainty in the data: which quarter "
-                    f"anchors {_bench['year']} moves it by {abs(_hi_ - _lo):.1f} "
-                    f"points.\n\n"
-                    + (f"Credible industry estimates put dairy-influenced fed cattle "
-                       f"at **15–20%**, and this page assumed "
-                       f"{ASSUMED_DAIRY_NOW:.0f}% before the comparison was made. "
-                       f"The reconciling value overlaps that range, which is worth "
-                       f"something — two surveys run by different agencies over "
-                       f"different populations, needing a third independently "
-                       f"estimated number to agree, and getting one in the right "
-                       f"neighbourhood.\n\nIt is not a confirmation to a decimal "
-                       f"place, and benchmark years disagree: the implied share runs "
-                       f"from the low teens to the low twenties depending which year "
-                       f"anchors it, because the two series trough a year apart and a "
-                       f"common calendar year pairs them at different points in the "
-                       f"cycle. This year is among the closer agreements, not a "
-                       f"typical one."
-                       if _overlaps else
-                       f"Credible industry estimates put dairy-influenced fed cattle "
-                       f"at **15-20%**, and this lands " + ("above" if _lo > 20.0
-                       else "below") + f" it on every alignment, so dairy mix is "
-                       f"the wrong SIZE to explain the gap rather than the wrong idea.\n\n"
-                       f"Benchmark years disagree here: the implied share runs from "
-                       f"the low teens to the low twenties depending which year "
-                       f"anchors it, because the two series trough a year apart and "
-                       f"a common calendar year pairs them at different points in "
-                       f"the cycle.")
-                )
-
-        st.caption(
-            "**Why the direction across a decade is genuinely unknown.** Straight "
-            "Holstein heifers used to be scarce in feedlots — the legacy AMS archive "
-            "carries Feeder Holstein *steers* and no Holstein heifer class at all, "
-            "because those heifers became dairy replacements. Sexed semen then "
-            "produced a surplus that did go on feed, peaking around the same years "
-            "this page uses as its rebuild benchmark, before beef-on-dairy displaced "
-            "it. Our own auction data shows that changeover: straight-Holstein "
-            "heifers were 100% of dairy-class heifers through 2023 and are 69% now. "
-            "So the benchmark year may carry its own dairy inflation. The two "
-            "effects partly offset, neither is measurable, and anyone who tells you "
-            "the net sign with confidence is guessing."
-        )
+    with st.expander("ℹ️  Why the direction across a decade is genuinely unknown"):
+        st.markdown(
+        "Straight "
+        "Holstein heifers used to be scarce in feedlots — the legacy AMS archive "
+        "carries Feeder Holstein *steers* and no Holstein heifer class at all, "
+        "because those heifers became dairy replacements. Sexed semen then "
+        "produced a surplus that did go on feed, peaking around the same years "
+        "this page uses as its rebuild benchmark, before beef-on-dairy displaced "
+        "it. Our own auction data shows that changeover: straight-Holstein "
+        "heifers were 100% of dairy-class heifers through 2023 and are 69% now. "
+        "So the benchmark year may carry its own dairy inflation. The two "
+        "effects partly offset, neither is measurable, and anyone who tells you "
+        "the net sign with confidence is guessing."
+    )
 
 
 # ── Herd Inventory ───────────────────────────────────────────────────────────
