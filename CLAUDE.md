@@ -260,6 +260,55 @@ don't.**
 reboot restarts the process, so the cache starts empty. The push alone is enough
 only when the edit is inside the cached function itself, or in uncached page code.
 
+## The video "seam" was not one, and the mistake is worth keeping
+
+For most of 2026-09-29 this file, `herd.py` and several answers to Ross cited a
+**+1.62-point video seam** at the 2020/21 archive handover as the weakest join in
+the receipts series. It does not exist. Investigated with four independent
+probes and adversarial verification; every one came back at zero points
+explained by any artefact.
+
+**The error was mine and it was simple.** I measured legacy **2019** against MARS
+**2021** — two years apart, with 2020 skipped between them — and called the
+difference a join. The adjacent-year join is legacy 2019 36.40% against MARS
+2020 36.27%: **−0.13 pt**. The +1.62 is two years of market movement.
+
+Four things establish it, and they are worth not re-deriving:
+
+- **Norwood NC is a paired-week calibration.** Legacy video decays through 2020
+  (1.58M head in 2019, 218k in 2020), so the overlap looked like a dying
+  remnant — but Norwood kept reporting normally. On the 12 weeks both archives
+  carry it: legacy 17,953 head / 39.26%, MARS 17,857 / 39.48%. **+0.22 pt, head
+  ratio 0.9947, eight weeks identical to the head.** They are transcriptions of
+  the same AMS report. Recorded in `feeder_sex_mix.py` and pinned by a test.
+- **The move is within-location, not mix.** Decomposing 2019→2021: +1.62
+  within-location, −0.10 roster. Nine of eleven comparable auctions rose, and
+  the five carrying 92% of head rose together (Superior +1.61, Western +1.84,
+  Cattle Country +1.57, Joplin +2.78, Norwood +2.06). Coverage artefacts move a
+  few locations, not every large one by the same amount.
+- **Within MARS alone it keeps climbing**: 2020 36.27% → 2021 37.19% → 2022
+  37.91%, about +0.9/yr, no archive change involved.
+- **Every quantifiable artefact runs the other way**, hiding ~0.6 pt of real
+  movement: unmatched locations −0.07, legacy 2019's Northern hole −0.31 to
+  −0.41, week-mix −0.21.
+
+**The control channels were never controls**, which is why this looked anomalous
+for so long. Direct's tidy −0.12 over the same span is two large offsetting
+moves (44.09 → 38.75 → 43.97), not stability. And auction holds both sources in
+the same year: 2019 legacy 46.28% vs MARS 45.84%, a −0.44 pt cross-source
+difference.
+
+Two real defects surfaced on the way, neither closing any gap:
+
+- **Legacy 2019 video is not a clean benchmark year.** Northern Livestock appears
+  for one week, 60,688 head, against 144,670–236,818 over 5–8 sales in 2013–18.
+  The year is short ~145k head (~9%), and Northern runs below the video mean, so
+  the hole *inflates* the 2019 share by 0.3–0.4 pt. Do not benchmark against it.
+- **`CHANNEL_LEGACY_THROUGH["video"]` was 18 and is now 19.** In week 2020W19
+  legacy carries 28,687 head and MARS 1,967 — MARS is starting up, not legacy
+  finishing — so the old boundary discarded 26,720 head. No published figure
+  moved (2020 is in `SKIP_YEARS`), which is precisely why it needed a test.
+
 ## TWO BACKENDS, AND "IT WORKS LOCALLY" PROVES NOTHING
 
 `snowflake_db.get_conn()` returns SQLite or Snowflake depending on
