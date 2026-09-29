@@ -606,6 +606,69 @@ if HS:
         st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
         st.markdown('<div class="sec-header">Receipts Volume</div>',
                     unsafe_allow_html=True)
+
+        # THE TABLE COMES FIRST, deliberately. The chart below shows the shape,
+        # but a line makes a reader infer each year-over-year by eye. The
+        # question here -- is the heifer side falling faster than the steer
+        # side, and by how much, in which years -- is read off numbers.
+        #
+        # The states column is not decoration. The auction panel grows from 12
+        # reporting states to 20 across this table, and without seeing that a
+        # reader takes the early years' smaller totals for fewer cattle. It also
+        # lets them judge a year-over-year that spans a panel change themselves
+        # rather than having me silently blank it.
+        _vt = ['<table style="width:100%;border-collapse:collapse;'
+               'font-size:0.86rem;">',
+               f'<tr style="color:{MUTED};font-size:0.68rem;'
+               f'text-transform:uppercase;letter-spacing:0.08em;text-align:right;">'
+               f'<th style="text-align:left;padding:5px 8px;">Year</th>'
+               f'<th style="padding:5px 8px;">States</th>'
+               f'<th style="padding:5px 8px;">Steers</th>'
+               f'<th style="padding:5px 8px;">Heifers</th>'
+               f'<th style="padding:5px 8px;">Total</th>'
+               f'<th style="padding:5px 8px;">Steer YoY</th>'
+               f'<th style="padding:5px 8px;">Heifer YoY</th></tr>']
+        _prev = None
+        for _r in _vol:
+            _s, _h = _r["steers"], _r["heifers"]
+            # A year-over-year is shown only where both ends are the same kind of
+            # number: consecutive, same archive era, both whole years.
+            _ok = (_prev is not None and _r["year"] - _prev["year"] == 1
+                   and _r["era"] == _prev["era"] and _r["complete"]
+                   and _prev["complete"])
+            _sy = 100 * (_s / _prev["steers"] - 1) if _ok else None
+            _hy = 100 * (_h / _prev["heifers"] - 1) if _ok else None
+            _note = ("" if _r["complete"] else
+                     f' <span style="color:{MUTED};font-size:0.72rem;">'
+                     f'{_r["weeks"]} of 52 wks</span>')
+            _dim = f"color:{MUTED};" if _r["thin"] else ""
+            _vt.append(
+                f'<tr style="border-top:1px solid {BORDER};text-align:right;{_dim}">'
+                f'<td style="text-align:left;padding:5px 8px;">{_r["year"]}{_note}</td>'
+                f'<td style="padding:5px 8px;">{_r["states"]}</td>'
+                f'<td style="padding:5px 8px;">{_s:,}</td>'
+                f'<td style="padding:5px 8px;">{_h:,}</td>'
+                f'<td style="padding:5px 8px;">{_s + _h:,}</td>'
+                + (f'<td style="padding:5px 8px;color:{POS if _sy < 0 else NEG};">'
+                   f'{_sy:+.1f}%</td>'
+                   f'<td style="padding:5px 8px;font-weight:600;'
+                   f'color:{POS if _hy < 0 else NEG};">{_hy:+.1f}%</td>'
+                   if _ok else
+                   f'<td style="padding:5px 8px;color:{MUTED};">—</td>'
+                   f'<td style="padding:5px 8px;color:{MUTED};">—</td>')
+                + '</tr>')
+            _prev = _r
+        _vt.append("</table>")
+        st.markdown("".join(_vt), unsafe_allow_html=True)
+        st.caption(
+            "Every year in the archive. A dash means the two ends are not the "
+            "same kind of number — the row above is a part year, sits in the "
+            "other archive era, or is not the preceding year. Grey rows report "
+            "from fewer states than the panel reaches today, so their totals are "
+            "smaller for that reason as well as for the market's."
+        )
+        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+
         _part = [r for r in _vol if not r["complete"]]
         _fv = go.Figure()
         for _era in ("legacy", "mars"):
