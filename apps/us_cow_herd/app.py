@@ -575,8 +575,11 @@ if HS:
         f"in September of that year, past this window, so no honest point exists."
         + (f" The grey {_tyrs[0]}–{_tyrs[-1]} segment is drawn apart because only "
            f"{min(r['states'] for r in _thin)}–{max(r['states'] for r in _thin)} "
-           f"states reported then: each year is sound on its own, but the level "
-           f"is not comparable with the rest, so no line joins them." if _thin else "")
+           f"states reported then, and the video channel covered as few as "
+           f"{min(r['weeks'] for r in _thin)} of the {YTD_CUT} weeks: each year is "
+           f"sound on its own — the gaps are scattered, not seasonal, worth under "
+           f"a third of a point — but the level is not comparable with the rest, "
+           f"so no line joins them." if _thin else "")
         + f"{_spl_txt}{_chg}"
     )
 
