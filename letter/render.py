@@ -15,7 +15,7 @@ here either.
 from __future__ import annotations
 
 import html
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from . import chart as chart_mod
@@ -500,10 +500,17 @@ CSS = """
 body {
   font-family: Calibri, Carlito, "Segoe UI", system-ui, sans-serif;
   font-size: 11.5pt; line-height: 1.32; color: #000; margin: 0;
-  /* Restores the original 0.9in / 0.85in text block exactly: 0.52 + 0.38 = 0.90
-     down the page, 0.52 + 0.33 = 0.85 across. The measured one-page geometry is
-     therefore unchanged -- 6.8in of text width, 9.2in of height. */
-  padding: 0.38in 0.33in;
+  /* TOP 0.20, SIDES 0.33, BOTTOM 0.38. The sides and the foot still restore
+     the original text block -- 0.52 + 0.33 = 0.85 across, 0.52 + 0.38 = 0.90
+     up from the bottom -- but the HEAD is tighter than the 0.90in it used to
+     be, by Ross's ask on 2026-09-29: "too much of a gap for the title".
+     0.52 + 0.20 = 0.72in of white above the masthead, which still clears the
+     frame comfortably.
+     It also bought back the two lines of disclaimer that were tipping the
+     morning brief onto a second page. The foot deliberately did NOT move: the
+     disclaimer is the last thing on the page and crowding it against the
+     frame is the problem this was fixing. */
+  padding: 0.20in 0.33in 0.38in;
   -webkit-print-color-adjust: exact; print-color-adjust: exact;
 }
 /* Masthead is a row now: title left, logo hard right. baseline rather than
@@ -569,7 +576,11 @@ table.cof td:first-child { font-weight: 600; }
 body.am h2 { margin: 12px 0 3px; }
 body.am .intro { margin: 0 0 10px; }
 body.am .signoff { margin: 14px 0 18px; }
-body.am .sig .disclaimer { margin-top: 22px; }
+/* 22px on a page that was overflowing by two lines. The gap is there so the
+   risk text does not sit hard against the phone number; 12px still reads as a
+   separate block and is worth an eighth of an inch on a one-page budget. The
+   evening letter, which has the whole page, keeps the roomier 30px below. */
+body.am .sig .disclaimer { margin-top: 12px; }
 /* The evening letter keeps its own page for the signature and the
    disclaimer, matching the printed letter clients already receive. The
    morning brief does not: it is one page, and pushing six lines of
@@ -705,12 +716,51 @@ def am_blocks(ctx: dict, c: dict) -> list:
     #    "Today" block and a "This Week" block. A reader scanning for whether
     #    anything prints today finds it in the same place either way, and one
     #    list is a shorter read than two headings.
+    # THIS WEEK ONLY, though the fetch reaches six weeks out. sources
+    # .fetch_report_calendar argues, correctly, that a WASDE a fortnight away
+    # changes how the month is traded -- so the horizon stays wide and the
+    # trimming happens HERE, at the display. The full list is still in the ctx
+    # for anything else that wants it.
+    #
+    # Five rows of October on a one-page brief is most of a section spent on
+    # things three weeks out. Ross asked for the current week on 2026-09-29;
+    # the comment above this block always claimed it was "the week's releases"
+    # and only now is that true.
     items = (ctx.get("calendar") or {}).get("items") or []
+    issue = ctx.get("issue_date")
+    if isinstance(issue, str):
+        try:
+            issue = date.fromisoformat(issue[:10])
+        except ValueError:
+            issue = None
+    if isinstance(issue, date):
+        # Through Sunday, so "this week" means the calendar week the letter is
+        # written in rather than the next seven days -- on a Thursday those are
+        # very different lists.
+        week_end = (issue + timedelta(days=6 - issue.weekday())).isoformat()
+        # BOTH ENDS. The fetch already drops anything before as_of, but a
+        # --no-fetch re-render reads a ctx captured days earlier, and an
+        # "upcoming" report that has already printed is worse than a long list.
+        shown = [i for i in items
+                 if issue.isoformat() <= str(i.get("date") or "")[:10] <= week_end]
+    else:
+        shown = items
+
     rows = [f"{_esc(i['label'])}: {_esc(i['when'])}"
             + (" <strong>(today)</strong>" if i.get("is_today") else "")
-            for i in items]
-    out.append("<h2>Upcoming USDA Reports</h2>"
-               + _bullets(rows or ["None scheduled"]))
+            for i in shown]
+
+    # A QUIET WEEK STILL NAMES WHAT IS NEXT, in one line. The section exists so
+    # a reader is not hearing about a Cattle on Feed on the morning it prints,
+    # and a bare "None scheduled" on a Thursday would hide one landing Monday.
+    # One line is not the five this change removed.
+    if not rows:
+        after = issue.isoformat() if isinstance(issue, date) else ""
+        nxt = next((i for i in items if str(i.get("date") or "")[:10] >= after), None)
+        rows = [f"None this week &mdash; next is {_esc(nxt['label'])}: {_esc(nxt['when'])}"] \
+            if nxt else ["None scheduled"]
+
+    out.append("<h2>Upcoming USDA Reports</h2>" + _bullets(rows))
     return out
 
 
