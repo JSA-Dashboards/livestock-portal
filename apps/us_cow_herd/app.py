@@ -710,55 +710,67 @@ if HS:
         # happening' and the table answers 'by how much, in which year', so
         # the chart goes first and the numbers are one click away.
         with st.expander("📋  Receipts volume by year, with year-over-year"):
-            _vt = ['<table style="width:100%;border-collapse:collapse;'
-                   'font-size:0.86rem;">',
-                   f'<tr style="color:{MUTED};font-size:0.68rem;'
-                   f'text-transform:uppercase;letter-spacing:0.08em;text-align:right;">'
-                   f'<th style="text-align:left;padding:5px 8px;">Year</th>'
-                   f'<th style="padding:5px 8px;">States</th>'
-                   f'<th style="padding:5px 8px;">Steers</th>'
-                   f'<th style="padding:5px 8px;">Heifers</th>'
-                   f'<th style="padding:5px 8px;">Total</th>'
-                   f'<th style="padding:5px 8px;">Steer YoY</th>'
-                   f'<th style="padding:5px 8px;">Heifer YoY</th></tr>']
-            _prev = None
+            # st.dataframe rather than hand-rolled HTML, for two affordances it
+            # brings and a markup table cannot: a FULLSCREEN toggle, which is how
+            # you snip this, and a download, which is how you print it or take it
+            # into a spreadsheet. Both live in the toolbar that appears on hover;
+            # the explicit button below repeats the download because a toolbar
+            # that only exists on hover is not a thing most readers find.
+            _rowsv = []
+            _pv = None
             for _r in _vol:
-                _s, _h = _r["steers"], _r["heifers"]
-                # A year-over-year is shown only where both ends are the same kind of
-                # number: consecutive, same archive era, both whole years.
-                _ok = (_prev is not None and _r["year"] - _prev["year"] == 1
-                       and _r["era"] == _prev["era"] and _r["complete"]
-                       and _prev["complete"])
-                _sy = 100 * (_s / _prev["steers"] - 1) if _ok else None
-                _hy = 100 * (_h / _prev["heifers"] - 1) if _ok else None
-                _note = ("" if _r["complete"] else
-                         f' <span style="color:{MUTED};font-size:0.72rem;">'
-                         f'{_r["weeks"]} of 52 wks</span>')
-                _dim = f"color:{MUTED};" if _r["thin"] else ""
-                _vt.append(
-                    f'<tr style="border-top:1px solid {BORDER};text-align:right;{_dim}">'
-                    f'<td style="text-align:left;padding:5px 8px;">{_r["year"]}{_note}</td>'
-                    f'<td style="padding:5px 8px;">{_r["states"]}</td>'
-                    f'<td style="padding:5px 8px;">{_s:,}</td>'
-                    f'<td style="padding:5px 8px;">{_h:,}</td>'
-                    f'<td style="padding:5px 8px;">{_s + _h:,}</td>'
-                    + (f'<td style="padding:5px 8px;color:{POS if _sy < 0 else NEG};">'
-                       f'{_sy:+.1f}%</td>'
-                       f'<td style="padding:5px 8px;font-weight:600;'
-                       f'color:{POS if _hy < 0 else NEG};">{_hy:+.1f}%</td>'
-                       if _ok else
-                       f'<td style="padding:5px 8px;color:{MUTED};">—</td>'
-                       f'<td style="padding:5px 8px;color:{MUTED};">—</td>')
-                    + '</tr>')
-                _prev = _r
-            _vt.append("</table>")
-            st.markdown("".join(_vt), unsafe_allow_html=True)
+                _ok = (_pv is not None and _r["year"] - _pv["year"] == 1
+                       and _r["era"] == _pv["era"] and _r["complete"]
+                       and _pv["complete"])
+                _rowsv.append({
+                    "Year": (str(_r["year"]) if _r["complete"]
+                             else f"{_r['year']} ({_r['weeks']} of 52 wks)"),
+                    "States": _r["states"],
+                    "Steers": _r["steers"],
+                    "Heifers": _r["heifers"],
+                    "Total": _r["steers"] + _r["heifers"],
+                    "Steer YoY %": (round(100 * (_r["steers"] / _pv["steers"] - 1), 1)
+                                    if _ok else None),
+                    "Heifer YoY %": (round(100 * (_r["heifers"] / _pv["heifers"] - 1), 1)
+                                     if _ok else None),
+                })
+                _pv = _r
+            _dfv = pd.DataFrame(_rowsv)
+            _thin_years = {str(r["year"]) for r in _vol if r["thin"]}
+
+            def _shade(_row):
+                # Grey the under-covered years, the same signal the chart gives
+                # them, so a reader who prints this still sees which rows are
+                # drawn from a smaller panel.
+                _d = str(_row["Year"]).split(" ")[0] in _thin_years
+                return [f"color:{MUTED};" if _d else "" for _ in _row]
+
+            def _yoy_colour(_v):
+                if _v is None or pd.isna(_v):
+                    return f"color:{MUTED};"
+                return f"color:{POS};" if _v < 0 else f"color:{NEG};"
+
+            _sty = (_dfv.style
+                    .apply(_shade, axis=1)
+                    .map(_yoy_colour, subset=["Steer YoY %", "Heifer YoY %"])
+                    .format({"Steers": "{:,.0f}", "Heifers": "{:,.0f}",
+                             "Total": "{:,.0f}",
+                             "Steer YoY %": lambda v: "—" if pd.isna(v) else f"{v:+.1f}%",
+                             "Heifer YoY %": lambda v: "—" if pd.isna(v) else f"{v:+.1f}%"}))
+            st.dataframe(_sty, use_container_width=True, hide_index=True,
+                         height=min(38 * (len(_dfv) + 1) + 3, 900))
+            st.download_button(
+                "⬇  Download as CSV",
+                _dfv.to_csv(index=False).encode("utf-8"),
+                file_name=f"jsa_feeder_receipts_volume_{_vol[-1]['year']}.csv",
+                mime="text/csv", key="dl_vol")
             st.caption(
                 "Every year in the archive. A dash means the two ends are not the "
                 "same kind of number — the row above is a part year, sits in the "
                 "other archive era, or is not the preceding year. Grey rows report "
-                "from fewer states than the panel reaches today, so their totals are "
-                "smaller for that reason as well as for the market's."
+                "from fewer states than the panel reaches today, so their totals "
+                "are smaller for that reason as well as for the market's. "
+                "Hover the table for a fullscreen toggle."
             )
 
 
