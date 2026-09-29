@@ -609,7 +609,8 @@ if HS:
         _part = [r for r in _vol if not r["complete"]]
         _fv = go.Figure()
         for _era in ("legacy", "mars"):
-            _seg = [r for r in _vol if r["era"] == _era and r["complete"]]
+            _seg = [r for r in _vol
+                    if r["era"] == _era and r["complete"] and not r["thin"]]
             if not _seg:
                 continue
             for _k, _col, _nm in (("steers", JPSI_BLUE, "steers"),
@@ -622,6 +623,24 @@ if HS:
                     line=dict(color=_col, width=2.5),
                     marker=dict(size=6, color=_col),
                     hovertemplate="%{x}<br>" + _nm + " %{y:.2f}M head<extra></extra>"))
+        # The under-covered early years drawn APART, as on the share chart above.
+        # Excluding them would be wrong -- a count from twelve states is a real
+        # count -- but joining them to the rest asserts a comparability the
+        # panel does not have: it fills from 12 states to 18 between 2000 and
+        # 2005, and most of the "rise" across those years is that.
+        _tv = [r for r in _vol if r["thin"] and r["complete"]]
+        if _tv:
+            for _k, _col, _nm in (("steers", JPSI_BLUE, "steers"),
+                                  ("heifers", POS, "heifers")):
+                _fv.add_trace(go.Scatter(
+                    x=[r["year"] for r in _tv], y=[r[_k] / 1e6 for r in _tv],
+                    mode="lines+markers", showlegend=False, legendgroup=_nm,
+                    line=dict(color="#94a3b8", width=1.6, dash="dot"),
+                    marker=dict(size=6, color="#ffffff",
+                                line=dict(color="#94a3b8", width=1.6)),
+                    hovertemplate="%{x}<br>" + _nm + " %{y:.2f}M head"
+                                  "<br><i>fewer reporting states</i><extra></extra>"))
+
         # The partial year as hollow markers, joined to nothing.
         for _r in _part:
             for _k, _col in (("steers", JPSI_BLUE), ("heifers", POS)):
@@ -650,7 +669,8 @@ if HS:
         for _i in range(1, len(_vol)):
             _a, _b = _vol[_i - 1], _vol[_i]
             if (_a["era"] != _b["era"] or _b["year"] - _a["year"] != 1
-                    or not (_a["complete"] and _b["complete"])):
+                    or not (_a["complete"] and _b["complete"])
+                    or _a["thin"] or _b["thin"]):
                 continue
             _yy.append((_b["year"], 100 * (_b["steers"] / _a["steers"] - 1),
                         100 * (_b["heifers"] / _a["heifers"] - 1)))
@@ -667,6 +687,12 @@ if HS:
                    "falling no faster than steers, so the mix is not shifting "
                    "toward retention on this measure.")
                 + _pt
+                + (f" {_tv[0]['year']}–{_tv[-1]['year']} are grey and set apart: "
+                   f"the auction panel reported from {min(r['states'] for r in _tv)}"
+                   f"–{max(r['states'] for r in _tv)} states then against "
+                   f"{max(r['states'] for r in _vol)} now, so most of the rise "
+                   f"across them is the panel filling in rather than more cattle."
+                   if _tv else "")
                 + " The eras are drawn apart and no year-over-year spans them: "
                 "head does not cross the 2020 archive handover cleanly even "
                 "though share does, because both the auction and video rosters "
