@@ -39,6 +39,7 @@ from herd import (BASELINE_YEARS, LEGACY_LAST_GOOD_WEEK, YTD_CUT, annual_ratio,
 from dairy_mix import (ASSUMED_DAIRY_NOW, ASSUMED_DAIRY_THEN,
                        ASSUMED_HEIFER_FRAC)
 from dairy_mix import adjust as dm_adjust
+from dairy_mix import implied_dairy_share as dm_implied
 from inventory import inventory_summary
 from on_feed import on_feed_summary
 
@@ -846,12 +847,19 @@ if OF:
     with st.container(key="wm-on-feed"):
         st.plotly_chart(_f3, use_container_width=True)
 
+    # Guarded: this caption renders even when the receipts section above did
+    # not, and the old text asserted a receipts distance regardless -- it read
+    # "within a point of its rebuild low", true at +0.64 on auction receipts
+    # and wrong at +2.98 on all three channels.
+    _rec_gap_txt = (f", against **{HS['summary']['gap_to_low']:.1f} points** "
+                    f"for the receipts share above" if HS else "")
     st.caption(
         f"**The two measures agree on direction and differ on distance, and there "
         f"are two reasons for that, not one.** Both peaked in 2023 and both are "
-        f"falling, but the receipts share sits within a point of its rebuild low "
-        f"while this one is still **{_ocur['trailing'] - _olo['trailing']:.1f} "
-        f"points** above {_olo['year']}'s.\n\n"
+        f"falling. This one sits **{_ocur['trailing'] - _olo['trailing']:.1f} "
+        f"points** above {_olo['year']}'s low{_rec_gap_txt}. The panel below "
+        f"shows that gap is close to what dairy-origin cattle alone account "
+        f"for.\n\n"
         f"**Timing.** Receipts are a *flow* — what is being sold this week. Cattle "
         f"on feed are a *stock*, and heifers already placed stay on feed for months, "
         f"so the feedlot number lags the sale barn by roughly a feeding period.\n\n"
@@ -983,6 +991,57 @@ came for.
                 f"barn, which never counted dairy cattle, moved **{_rdrop:+.1f} pts** "
                 f"over the same span. {_verdict}"
             )
+
+            # THE INVERSE QUESTION, which is what this panel was built for and
+            # which the table above only implies: instead of assuming a dairy
+            # share, solve for the one that would make the two measures move
+            # identically, then ask whether that number is believable.
+            #
+            # REPORTED AS A RANGE, NOT A POINT, AND THAT IS NOT HEDGING. The
+            # answer is sensitive to how the two windows are aligned, because the
+            # benchmark year is usually moving fast. Receipts cover Jan-mid-Sep;
+            # the feedlot series is quarterly and compared same-quarter here, so
+            # its trailing mean reaches back into the PRIOR year. For 2015 that
+            # is the difference between 33.4% (trailing at Q3) and 32.6%
+            # (trailing at Q4, i.e. the calendar-year mean) -- 0.8 points of
+            # benchmark, which moves the implied dairy share by about five.
+            # Quoting one figure to a decimal would imply a precision the
+            # alignment does not support.
+            _need = dm_implied(_ocur["trailing"], _bench["trailing"] + _rdrop,
+                               ASSUMED_HEIFER_FRAC)
+            _alt = None
+            _cal = [r for r in _orows if r["year"] == _bench["year"]]
+            if _cal:
+                _alt = dm_implied(_ocur["trailing"], _cal[-1]["trailing"] + _rdrop,
+                                  ASSUMED_HEIFER_FRAC)
+            if _need is not None:
+                _lo, _hi_ = sorted([v for v in (_need, _alt) if v is not None])[0],                             sorted([v for v in (_need, _alt) if v is not None])[-1]
+                _span = (f"between **{_lo:.0f}% and {_hi_:.0f}%**"
+                         if abs(_hi_ - _lo) >= 1 else f"about **{_need:.0f}%**")
+                _overlaps = _hi_ >= 15.0 and _lo <= 20.0
+                st.markdown(
+                    f"**And the strongest version of it.** Instead of assuming a "
+                    f"dairy share, solve for one: cattle on feed would need to be "
+                    f"{_span} dairy-origin for this series to have moved exactly as "
+                    f"the sale barn did since {_bench['year']}. The span is the "
+                    f"alignment, not the uncertainty in the data — {_bench['year']} "
+                    f"was moving fast enough that which quarter anchors it is worth "
+                    f"several points here.\n\n"
+                    + (f"Credible industry estimates put dairy-influenced fed cattle "
+                       f"at **15–20%**, and this page assumed "
+                       f"{ASSUMED_DAIRY_NOW:.0f}% before the comparison was made. "
+                       f"The reconciling value overlaps that range, which is worth "
+                       f"something — two surveys run by different agencies over "
+                       f"different populations, needing a third independently "
+                       f"estimated number to agree, and getting one in the right "
+                       f"neighbourhood. It is not a confirmation to a decimal place."
+                       if _overlaps else
+                       f"Credible industry estimates put dairy-influenced fed cattle "
+                       f"at **15–20%**, and this lands below it on every alignment. "
+                       f"Dairy mix alone is then too small to explain the gap, and "
+                       f"the remainder is the feeding-period lag or something "
+                       f"neither series shows.")
+                )
 
         st.caption(
             "**Why the direction across a decade is genuinely unknown.** Straight "
