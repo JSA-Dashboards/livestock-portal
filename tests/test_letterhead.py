@@ -80,7 +80,10 @@ def test_a_missing_asset_does_not_cost_the_letter(monkeypatch):
     render._asset_uri.cache_clear()
     monkeypatch.setattr(render, "_asset_uri", lambda name: "")
     html = render.build_html(_ctx())
-    assert "JSA AM Daily Cattle Report 9/24/26" in html
+    # The masthead survives losing the images -- the title comes from config
+    # so a rename does not fail a test about missing ASSETS.
+    from letter import config
+    assert f"{config.title_for('AM')} 9/24/26" in html
     assert 'class="wm"' not in html
     assert "<img" not in html.split("<h2>")[0] or "data:image" not in html
 

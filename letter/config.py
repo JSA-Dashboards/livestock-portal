@@ -56,9 +56,19 @@ def session_for_now(now=None) -> str:
             return DEFAULT_SESSION
     return "AM" if now.hour < SESSION_SWITCH_HOUR else "PM"
 
+# MORNING and AFTERNOON, not AM and PM -- Ross's wording, 2026-09-29.
+#
+# THIS STRING IS ALSO THE FILENAME. build.main and the authoring page both
+# build "<title> <Day> <date>.html/.pdf" from it, and letter/archive.py
+# publishes under that name. So letters archived from today read "JSA Morning
+# Cattle Report Tuesday 2026-09-29.pdf" while everything before keeps the old
+# name. That is a rename, not a loss -- the archive is a git repo and both
+# names are in its history -- but do not expect a --no-fetch re-render of an
+# older letter to overwrite the file it originally wrote. It will write a new
+# one beside it.
 TITLE_BY_SESSION = {
-    "am": "JSA AM Daily Cattle Report",
-    "pm": "JSA PM Daily Cattle Report",
+    "am": "JSA Morning Cattle Report",
+    "pm": "JSA Afternoon Cattle Report",
 }
 
 
@@ -108,7 +118,7 @@ SIGN_OFF_TUESDAY = "Have a good evening,"
 # them as accepted rather than pending. One edit each to change.
 SIGN_OFF_AM = "Have a good day,"
 # EMPTY ON PURPOSE, 2026-09-24. This read "Morning report for {stamp}:" directly
-# under a masthead reading "JSA AM Daily Cattle Report 9/24/26" -- the same two
+# under a masthead reading "JSA Morning Cattle Report 9/24/26" -- the same two
 # facts twice, at the top of a brief whose whole budget is three minutes.
 #
 # The evening intros are NOT redundant and stay: "For the week through the close
@@ -120,7 +130,7 @@ INTRO_AM = ""
 SIGN_OFF_FRIDAY = "Have a good weekend,"
 
 # The recap letter opens on nothing, for the reason INTRO_AM is empty: the
-# masthead already reads "JSA PM Daily Cattle Report 9/24/26", and unlike the
+# masthead already reads "JSA Afternoon Cattle Report 9/24/26", and unlike the
 # Tuesday and Friday intros there is no PERIOD to name -- a recap covers the
 # session its date already gives. Put a string here and it renders.
 INTRO_RECAP = ""

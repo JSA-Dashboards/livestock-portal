@@ -656,13 +656,16 @@ def test_an_undated_contract_drops_the_label_rather_than_guessing():
 def test_the_morning_brief_has_no_intro_line():
     """
     Removed 2026-09-24. "Morning report for 9/24/26:" sat directly under a
-    masthead reading "JSA AM Daily Cattle Report 9/24/26" -- the same two facts
+    masthead already carrying the title and the date -- the same two facts
     twice, at the top of a brief whose budget is three minutes.
     """
     html = render.build_html(_am_ctx(
         [{"month": "Oct", "settle": 220.5, "change_day": 1.0,
           "settle_date": "2026-09-23"}], date(2026, 9, 24)))
-    assert "JSA AM Daily Cattle Report 9/24/26" in html
+    # FROM config, not spelled out. The point of this test is that the intro
+    # is gone and the masthead still carries the date; pinning the title text
+    # made it fail on a pure rename (AM Daily -> Morning, 2026-09-29).
+    assert f"{config.title_for('AM')} 9/24/26" in html
     assert "Morning report for" not in html
     # Not an empty paragraph either -- the element is absent.
     assert 'class="intro"' not in html

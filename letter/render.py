@@ -830,8 +830,8 @@ def build_html(ctx: dict) -> str:
     # The two letters open differently: Tuesday reports the week so far, Friday
     # the week just closed.
     kind = ctx.get("kind", "tuesday")
-    # The masthead names the SESSION -- "JSA AM Daily Cattle Report" against
-    # "JSA PM Daily Cattle Report". Two reports a day, two names.
+    # The masthead names the SESSION -- "JSA Morning Cattle Report" against
+    # "JSA Afternoon Cattle Report". Two reports a day, two names.
     title = config.title_for(ctx.get("session", config.DEFAULT_SESSION))
     # There is no close to report at 07:30, so the AM letter cannot use either
     # evening opening.
