@@ -95,14 +95,20 @@ on the live page settled it in one glance, with no reliance on the log at all.
 **Prefer a figure you can predict exactly beforehand** — it beats a caption,
 because a wrong value is as informative as a missing one.
 
-### `KeyError: 'letter.archive'` in the app log is not a bug — diagnosed
+### A bare `KeyError: '<module>'` in the app log is not a bug — diagnosed
 
-It appears at `letter/build.py:38`, on the
-`from . import (archive, chart, cof, ...)` line, with three frozen frames
-(`_find_and_load` → `_find_and_load_unlocked` → `_load_unlocked`) and nothing
-of ours in the trace. Seen 2026-09-28 at 14:48:27, immediately before an
-`Updated app!`. **It is transient and self-healing; do not go looking for a
-circular import.** It was chased once already.
+Seen twice, on different modules and different pages, always with the same
+shape: an `import` line, three frozen frames (`_find_and_load` →
+`_find_and_load_unlocked` → `_load_unlocked`), a bare `KeyError` naming a
+module, and **nothing of ours in the trace**.
+
+    2026-09-28 14:48:27  KeyError: 'letter.archive'
+                         letter/build.py:38, `from . import (archive, chart, ...)`
+    2026-09-29 13:55     KeyError: 'snowflake_db'
+                         apps/us_cow_herd/app.py:33, `import snowflake_db as db`
+
+**It is transient and self-healing; do not go looking for a circular import.**
+It was chased once already. Both fired during an auto-deploy, not a reboot.
 
 The mechanism, reproduced 40 times out of 40 locally:
 
@@ -119,18 +125,32 @@ The mechanism, reproduced 40 times out of 40 locally:
   If the entry has vanished mid-execution, that line raises `KeyError` naming
   the module. Hence the bare KeyError with no application frame.
 
-**Why `archive` every time:** it is the FIRST name in that import tuple, so it
-is the one in flight when the eviction lands. The name is a symptom of
-alphabetical position, not of anything about `archive.py` — which imports only
-stdlib and takes no part in any cycle. The package's import graph is a clean
-DAG (`sources → settle_log → draft_store`, `render → chart → config`,
-`technicals → sources`), nothing in the repo deletes from `sys.modules` or
-calls `importlib.reload`, and 480 concurrent first-imports of `letter.build`
-across 8 threads raise nothing.
+**THE MODULE NAMED IS INCIDENTAL — it is simply whichever import was in flight
+when the eviction landed.** `archive` is the FIRST name in `build.py`'s import
+tuple; `snowflake_db` is the first import in the US Cow Herd page. Neither has
+anything wrong with it. That was predicted after the first sighting and the
+second one confirmed it, which is the main reason to record both: a future
+reader seeing a third module name should recognise the shape and stop, not
+start again on whatever that module happens to be.
 
-**It is also an argument for the reboot habit below.** A reboot restarts the
-process and never goes down the hot-reload path, so it cannot hit this. The
-race needs a code change to land while a session is mid-rerun.
+Ruled out, and worth not re-deriving: the `letter` package's import graph is a
+clean DAG (`sources → settle_log → draft_store`, `render → chart → config`,
+`technicals → sources`); `archive.py` imports only stdlib; nothing in the repo
+deletes from `sys.modules` or calls `importlib.reload`; and 480 concurrent
+first-imports of `letter.build` across 8 threads raise nothing.
+
+**It is an argument for the reboot habit above.** A reboot restarts the process
+and never goes down the hot-reload path, so it cannot hit this. The race needs
+a code change to land while a session is mid-rerun — which is exactly what an
+auto-deploy is, and both sightings were during one.
+
+**One interaction to keep in mind, currently harmless.** `snowflake_db` is the
+module that exists FIVE times and is imported by bare name, so whichever page
+loads first wins (see "Apps sharing code do not share secrets"). Eviction plus
+bare-name import means a re-import could in principle bind a DIFFERENT copy
+than the process started with. All five are byte-identical today, which is the
+only reason that is a curiosity rather than a bug — and one more reason to keep
+them that way.
 
 ## Required secrets
 
