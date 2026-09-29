@@ -188,30 +188,57 @@ the cme-feeder-cattle-index repo. The two are deliberately NOT identical (the
 standalone calls `set_page_config`, loads `.env`, and uses its own palette), so
 diff before copying — but a layout or logic fix belongs in both.
 
-## `feeder_receipts` is multi-channel; the herd page is not
+## `feeder_receipts` is all three channels now
 
-`JSA.CME_FEEDER_CATTLE.FEEDER_RECEIPTS` carries a `channel` column — `auction`,
-`direct`, `video`. `herd.py` reads **`auction` only**, via a `CHANNEL` constant,
-and that filter is load-bearing.
+`JSA.CME_FEEDER_CATTLE.FEEDER_RECEIPTS` carries `auction`, `direct` and
+`video`, and `herd.py` reads **all three** as of 2026-09-29. It was auction-only
+until then, because USDA had retired the legacy archives that carried direct and
+video and those channels stopped in 2020/21. They no longer do: MARS serves them
+through a per-section endpoint the repo had not used —
+`/reports/{slug}/Report Details`, where the bare `/reports/{slug}` returns
+narrative rows and no head count at all. See `direct_reports.py`'s docstring.
 
-Direct and video were loaded from the legacy archives to test whether sale-barn
-receipts fairly proxy the national trade. They do: across 2011–2020 the auction
-and all-channel series agreed on direction **9 years out of 9**, r = +0.92, with
-auction running a mean **3.5 points high** and damping the amplitude about 40%
-(mean |YoY| 0.86 vs 1.22). Auction is 74% of the three-channel head.
+**Why it was worth changing.** The auction-vs-all-channel gap is not a constant
+offset: 4.57 points in 2015, 2.25 now, because direct's heifer share climbed
+about twelve points over that span while auction's moved half a point. The
+page's headline is the DISTANCE from the 2015 rebuild, so that drift lands on
+it — auction alone says **+0.64**, all three say **+2.96**, and 2026 goes from
+2nd-lowest of 21 years to 8th.
 
-But those archives stop in 2020/21 and 2021–2026 is not backfilled, so summing
-every channel does not widen the series — it **breaks** it: three channels
-through 2019, auction alone after, with a 3.5-point step at the seam sitting
-directly under the 2015 benchmark the page compares today against. `herd.py`
-predated the column and selected every row, so this shipped for a day: the 2015
-low read 38.3% instead of 42.9%, putting today +5.3 points above rebuild
-conditions when it is really **+0.6**. Nothing raised — every value stayed a
-plausible heifer share, so a magnitude check would have passed it.
+Three rules hold it together, all in `herd.py`:
 
-`tests/test_heifer_share_channel.py` in the cme repo pins it. Drop the filter
-only together with a backfill carrying all three channels to the present — which
-means ~6,000 ESMIS PDFs back to Nov 2018, and is not started.
+- **One source per channel per week.** Legacy and MARS overlap on 26 auction
+  weeks and 19 video weeks; direct's halves abut with none. `CHANNEL_LEGACY_THROUGH`
+  says which archive owns a week. Summing them double-counts, and that was
+  written wrong twice in one session with nothing raising either time.
+- **All channels or the week is skipped.** They sit ~10 points apart, so two of
+  three is a different mix, not a smaller sample.
+- **2020 is dropped.** MARS direct starts at week 39, past the week-37 basis, so
+  a 2020 point would be legacy-only and legacy is a decaying remnant by then.
+
+The coverage guard (`MIN_PANEL_STATES`) still counts **auction** states only: it
+exists for the auction archive's thin early years, which is a property of that
+archive. `tests/test_heifer_share_channel.py` pins all of it.
+
+## TWO BACKENDS, AND "IT WORKS LOCALLY" PROVES NOTHING
+
+`snowflake_db.get_conn()` returns SQLite or Snowflake depending on
+`USE_SNOWFLAKE`. **The deployed page reads Snowflake. A local ingest writes
+SQLite.** Verifying the one you just wrote tells you nothing about the one the
+page uses.
+
+This shipped a live error on 2026-09-29: the MARS direct/video rows were loaded
+locally, `herd.py` was switched to all-channel and pushed, and because Snowflake
+had no direct/video after 2020 every later week was missing a channel and got
+skipped. The deployed chart **terminated in 2019 and labelled it "today"**, with
+a plausible-looking 43.5% and a 5.17-point distance. Nothing raised; the page
+rendered perfectly.
+
+- The canonical sync is `python snowflake/02_migrate_data.py --tables feeder_receipts`
+  (`feeder_receipts` is in `OPTIONAL_TABLES`), which the nightly job already runs
+  as `--optional-only`.
+- `scripts/check_run.py` sets `USE_SNOWFLAKE=1` with the comment "check what the
+  dashboard sees". That is the habit. Use it before believing a local verify.
 
 ## Deployment facts
 
