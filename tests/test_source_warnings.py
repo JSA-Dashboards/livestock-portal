@@ -305,3 +305,35 @@ def test_the_previous_row_is_no_longer_read_for_grading():
     code = "\n".join(ln.split("#", 1)[0] for ln in block.splitlines())
     assert "Pct_Choice_PW" in code
     assert "iloc[-2]" not in code, "grading is reading the previous row again"
+
+
+# ── the letter and the dashboard must agree ────────────────────────────────
+
+def test_the_fci_change_rounds_the_values_not_the_difference():
+    """
+    2026-09-29: the brief printed "-0.17 at 337.63" while the FCI dashboard
+    showed the same 337.63 down 0.16. Neither was wrong in isolation -- the
+    raw move was -0.169151, and the two differ only in WHERE they round.
+
+    The dashboard rounds each value to display precision first, on purpose
+    (see the day_chg comment in apps/cme_feeder_cattle/app.py). The letter now
+    does the same, because the letter PRINTS 337.63 today and printed 337.79
+    yesterday: a reader holding both subtracts them and gets 0.16. A change
+    that disagrees with the letter's own published figures is wrong however it
+    was computed.
+    """
+    a, b = 337.6253146459304, 337.7944658030682     # the real rows
+    rounded_difference = round(a - b, 2)
+    difference_of_rounded = round(round(a, 2) - round(b, 2), 2)
+    assert rounded_difference == -0.17               # what the letter used to do
+    assert difference_of_rounded == -0.16            # what the dashboard does
+
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "letter" / "sources.py").read_text(
+        encoding="utf-8")
+    block = src[src.index("def fetch_feeder_index("):]
+    block = block[:block.index("def fetch_douglas_ytd(")]
+    code = "\n".join(ln.split("#", 1)[0] for ln in block.splitlines())
+    assert "round(shown - prev_shown, 2)" in code
+    assert "round(value - prev_val, 2)" not in code, \
+        "the FCI change is rounding the difference again; it will disagree with the dashboard"

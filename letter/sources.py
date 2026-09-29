@@ -1496,10 +1496,27 @@ def fetch_feeder_index() -> dict:
         if not prev_row.empty:
             prev_val = float(prev_row.iloc[0]["fci_value"])
 
+    # ROUND BOTH VALUES TO DISPLAY PRECISION BEFORE DIFFERENCING, not after,
+    # and the reason is that the letter and the dashboard must agree.
+    #
+    # On 2026-09-29 the brief printed "-0.17 at 337.63" while the FCI dashboard
+    # showed the same 337.63 down 0.16. Neither was wrong in isolation: the raw
+    # move was -0.169151, which rounds to -0.17, while 337.63 minus a 337.79
+    # that itself came from 337.794466 is -0.16. The letter rounded the
+    # difference; the dashboard rounds the values first, deliberately -- see
+    # the comment on `day_chg` in apps/cme_feeder_cattle/app.py.
+    #
+    # The dashboard's convention wins here, and it is the better one anyway:
+    # this letter PRINTS 337.63 today and printed 337.79 yesterday, so a reader
+    # holding both subtracts them and gets 0.16. A change that disagrees with
+    # the letter's own published figures is wrong however it was computed.
+    shown = round(value, 2)
+    prev_shown = round(prev_val, 2) if prev_val is not None else None
+
     return {
-        "value": round(value, 2),
+        "value": shown,
         "date": headline.isoformat(),
-        "change": round(value - prev_val, 2) if prev_val is not None else None,
+        "change": round(shown - prev_shown, 2) if prev_shown is not None else None,
         "source": "JSA estimate (fci_daily)",
         "cme_last_published": last_published.isoformat() if last_published else None,
     }
