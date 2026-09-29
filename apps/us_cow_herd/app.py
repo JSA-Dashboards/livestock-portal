@@ -1024,9 +1024,9 @@ came for.
                     f"dairy share, solve for one: cattle on feed would need to be "
                     f"{_span} dairy-origin for this series to have moved exactly as "
                     f"the sale barn did since {_bench['year']}. The span is the "
-                    f"alignment, not the uncertainty in the data — {_bench['year']} "
-                    f"was moving fast enough that which quarter anchors it is worth "
-                    f"several points here.\n\n"
+                    f"alignment, not the uncertainty in the data: which quarter "
+                    f"anchors {_bench['year']} moves it by {abs(_hi_ - _lo):.1f} "
+                    f"points.\n\n"
                     + (f"Credible industry estimates put dairy-influenced fed cattle "
                        f"at **15–20%**, and this page assumed "
                        f"{ASSUMED_DAIRY_NOW:.0f}% before the comparison was made. "
@@ -1034,13 +1034,23 @@ came for.
                        f"something — two surveys run by different agencies over "
                        f"different populations, needing a third independently "
                        f"estimated number to agree, and getting one in the right "
-                       f"neighbourhood. It is not a confirmation to a decimal place."
+                       f"neighbourhood.\n\nIt is not a confirmation to a decimal "
+                       f"place, and benchmark years disagree: the implied share runs "
+                       f"from the low teens to the low twenties depending which year "
+                       f"anchors it, because the two series trough a year apart and a "
+                       f"common calendar year pairs them at different points in the "
+                       f"cycle. This year is among the closer agreements, not a "
+                       f"typical one."
                        if _overlaps else
                        f"Credible industry estimates put dairy-influenced fed cattle "
-                       f"at **15–20%**, and this lands below it on every alignment. "
-                       f"Dairy mix alone is then too small to explain the gap, and "
-                       f"the remainder is the feeding-period lag or something "
-                       f"neither series shows.")
+                       f"at **15-20%**, and this lands " + ("above" if _lo > 20.0
+                       else "below") + f" it on every alignment, so dairy mix is "
+                       f"the wrong SIZE to explain the gap rather than the wrong idea.\n\n"
+                       f"Benchmark years disagree here: the implied share runs from "
+                       f"the low teens to the low twenties depending which year "
+                       f"anchors it, because the two series trough a year apart and "
+                       f"a common calendar year pairs them at different points in "
+                       f"the cycle.")
                 )
 
         st.caption(
