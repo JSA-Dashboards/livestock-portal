@@ -337,3 +337,58 @@ def test_the_fci_change_rounds_the_values_not_the_difference():
     assert "round(shown - prev_shown, 2)" in code
     assert "round(value - prev_val, 2)" not in code, \
         "the FCI change is rounding the difference again; it will disagree with the dashboard"
+
+
+# ── the weekly kill is an estimate, and says so ────────────────────────────
+
+def test_the_weekly_slaughter_line_names_its_week_and_marks_it_estimated():
+    """
+    SJ_LS712 publishes on the FRIDAY for the week ending the SATURDAY AFTER,
+    so the headline count has two days still projected in it. Worse, the three
+    figures on that line are not the same kind of number -- USDA marks the
+    rows Estimate / Estimate / Actual in the file -- so the -8.5% that falls
+    out of the first two reads as a measurement when it is a projection
+    against a revised estimate.
+
+    Verified live 2026-09-29: report_date 2026-09-25, week_ending 2026-09-26.
+    """
+    from letter import render
+
+    assert render._week_tag("2026-09-26") == " (est., w/e 9/26)"
+    row = (f"Weekly slaughter{render._week_tag('2026-09-26')}: 484,000")
+    assert row.startswith("Weekly slaughter (est., w/e 9/26):")
+
+
+def test_an_unparseable_week_still_says_estimate():
+    """
+    The date is the nicety; "est." is the part that stops a projection being
+    read as a count. A label nobody can check is worse than none, so the date
+    drops and the warning stays.
+    """
+    from letter import render
+
+    for bad in (None, "", "garbage", "2026-13-45"):
+        assert render._week_tag(bad) == " (est.)"
+
+
+def test_the_docstring_no_longer_has_the_timing_backwards():
+    """
+    It said "covering the week ending the previous Saturday" until 2026-09-29,
+    which is a week out in the wrong direction and is why nobody questioned
+    the headline. A comment that is confidently wrong is worse than no comment.
+    """
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parent.parent / "letter" / "sources.py").read_text(
+        encoding="utf-8")
+    block = src[src.index("def fetch_slaughter("):]
+    block = block[:block.index('r = _session().get(AMS_SJ_LS712')]
+    assert "SATURDAY AFTER IT" in block, "the corrected timing is missing"
+    # THE OLD SENTENCE IS STILL IN THERE, ON PURPOSE -- the docstring quotes it
+    # to say it was wrong. So this checks it appears ONCE and only as history,
+    # not that it is absent. Searching for the bare phrase matched the very
+    # correction it was meant to verify, which is the fourth time in two days
+    # a test here has asserted against the prose explaining its own fix.
+    assert block.count("the week ending the previous Saturday") == 1
+    assert 'READ "the week ending the previous Saturday"' in block, \
+        "the old timing must be marked as superseded, not left reading as current"

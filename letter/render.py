@@ -311,6 +311,23 @@ def signed2(v) -> str:
     return MISSING if v is None else f"{float(v):+.2f}"
 
 
+def _week_tag(week_ending) -> str:
+    """
+    " (est., w/e 9/26)" for a week SJ_LS712 has not finished counting.
+
+    Empty when the date will not parse, because a label nobody can check is
+    worse than none -- the point of this is to let a reader see which week the
+    number describes.
+    """
+    if not week_ending:
+        return " (est.)"
+    try:
+        d = date.fromisoformat(str(week_ending)[:10])
+    except ValueError:
+        return " (est.)"
+    return f" (est., w/e {d.month}/{d.day})"
+
+
 def friday_rundown_block(fci: dict, slaughter: dict, cutout: dict,
                          daily: dict = None, weights: dict = None) -> str:
     """Friday's rundown: Tuesday's, plus the completed week and both YTD rates."""
@@ -323,8 +340,20 @@ def friday_rundown_block(fci: dict, slaughter: dict, cutout: dict,
         rows.append(f"Feeder Cattle Index: {money((fci or {}).get('value'))}")
 
     rows.append(f"Daily slaughter: {head_k(daily.get('current_day'))}")
+    # SAY WHICH WEEK, AND SAY IT IS AN ESTIMATE. SJ_LS712 publishes on the
+    # Friday for the week ending the SATURDAY AFTER, so this figure has two
+    # days still projected in it -- and the three counts on this line are not
+    # even the same kind of number. USDA marks the rows Estimate / Estimate /
+    # Actual in the file. Printed bare, a reader has no way to tell a
+    # projection from a count, and the -8.5% that falls out of the first two
+    # looks like a measurement.
+    #
+    # Six characters and a date on one existing line, not a new one -- this
+    # letter has a one-page budget. The Cattle Weights dashboard has always
+    # said "Live (Est.) - Wk Ending Sep 26, 2026"; this now agrees with it.
     rows.append(
-        f"Weekly slaughter: {head_k(wk.get('value'))} compared to "
+        f"Weekly slaughter{_week_tag(wk.get('week_ending'))}: "
+        f"{head_k(wk.get('value'))} compared to "
         f"{head_k(wk.get('last_week'))} head LW and {head_k(wk.get('year_ago'))} LY")
     rows.append(f"YTD slaughter: {yoy(wk.get('ytd_chg_pct'))}")
     rows.append(f"Beef production: {yoy(bp.get('ytd_chg_pct'))}")

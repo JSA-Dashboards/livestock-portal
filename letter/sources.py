@@ -1297,10 +1297,26 @@ def fetch_slaughter() -> dict:
 
     WHAT THIS REPORT IS, AND IS NOT. SJ_LS712 is "Estimated Weekly Meat
     Production Under Federal Inspection" -- published Friday, covering the week
-    ending the previous Saturday. It gives the completed week, the week before,
-    the same week a year ago, and year-to-date, which is exactly the
-    "529,000 compared to 505,000 head LW and 559,000 LY" line and both YTD
-    percentages.
+    ending the SATURDAY AFTER IT, which is the day after publication.
+
+    THAT SENTENCE READ "the week ending the previous Saturday" until
+    2026-09-29, and it is the reason the headline was never questioned. The
+    report dated Friday 2026-09-25 carries week_ending 2026-09-26: Saturday
+    entirely and most of Friday are PROJECTED, not counted. So this is not a
+    completed week at all, and the function's own name overstates it.
+
+    It gives that week, the week before, the same week a year ago, and
+    year-to-date, which is exactly the "529,000 compared to 505,000 head LW and
+    559,000 LY" line and both YTD percentages -- and those three head counts are
+    not the same KIND of number. USDA labels the rows in the file itself:
+
+        this week   Estimate   -- two days of it projected
+        last week   Estimate   -- revised once since
+        year ago    Actual
+
+    render.friday_rundown_block therefore prints the week ending date and an
+    "est." on that line. The Cattle Weights dashboard has always labelled its
+    tiles "Live (Est.) - Wk Ending Sep 26, 2026"; the letter now agrees with it.
 
     It contains NO DAILY FIGURES AT ALL -- the letter's "Daily slaughter" and
     "WTD slaughter" bullets come from AMS report 3208 instead (fetch_daily_
@@ -1311,6 +1327,10 @@ def fetch_slaughter() -> dict:
     Recent weeks are USDA ESTIMATES; only the year-ago row is actual. The report
     says so itself and the estimate is revised the following week -- which is
     why the weights here are reference only.
+
+    week_ending is carried through so the letter can say which week it means.
+    It is the report's own figure, not report_date + 1: relying on the offset
+    is how the docstring above came to be wrong for months.
     """
     r = _session().get(AMS_SJ_LS712, timeout=30)
     r.raise_for_status()
