@@ -537,11 +537,26 @@ if HS:
     _chg = ""
     if _sum["heifer_chg"] is not None and _sum["steer_chg"] is not None:
         _dir = "up" if _sum["steer_chg"] > 0 else "down"
+        # The reading DEPENDS ON THE SIGN and must not be written down as if it
+        # did not. This sentence used to end "the decline is females only",
+        # which was true on auction receipts, where steers rose while heifers
+        # fell. On all three channels both fall, and the claim became false the
+        # moment the basis changed -- so the conclusion is derived from the
+        # numbers rather than asserted alongside them.
+        #
+        # Both falling is not the same finding: it is consistent with retention
+        # AND with a smaller calf crop, and only the ratio separates them.
+        _both_down = _sum["steer_chg"] < 0
+        _tail = ("both are falling, so this says the mix shifted rather than "
+                 "that supply did — heifers are leaving the sale faster than "
+                 "steers, which is retention on top of a smaller calf crop"
+                 if _both_down else
+                 "the decline is females only, which is what retention looks "
+                 "like and what a general contraction in cattle numbers "
+                 "would not")
         _chg = (f" Against {_sum['chg_base_year']}, heifer receipts are down "
                 f"**{abs(_sum['heifer_chg']):,}** head while steer receipts are "
-                f"*{_dir}* **{abs(_sum['steer_chg']):,}** — the decline is females "
-                f"only, which is what retention looks like and what a general "
-                f"contraction in cattle numbers would not.")
+                f"*{_dir}* **{abs(_sum['steer_chg']):,}** — {_tail}.")
     # Derived, not hard-coded: a deployment without the legacy archive loaded
     # has no spliced year at all, and the caption should not claim one.
     _spl = [r["year"] for r in _ann if r["src"] == "spliced"]
