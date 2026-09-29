@@ -220,6 +220,26 @@ The coverage guard (`MIN_PANEL_STATES`) still counts **auction** states only: it
 exists for the auction archive's thin early years, which is a property of that
 archive. `tests/test_heifer_share_channel.py` pins all of it.
 
+## `@st.cache_data` does not notice that an imported module changed
+
+It keys on the DECORATED function's own code and its arguments. The modules that
+function calls are not part of the key. So a change confined to `herd.py`,
+`on_feed.py` or any other analytics module leaves the cached value in place, the
+auto-deploy hot-reloads the code, and the page keeps serving the old numbers
+with no error and no stale marker.
+
+Seen twice on 2026-09-29, both times looking like a data problem rather than a
+cache one: the second time `herd.py` had been changed to admit 2002-2004 into
+the caveated segment, Snowflake held all five years, a local run returned all
+five — and the deployed chart still drew two. The caption, which lives in
+`app.py` and is not cached, updated in the same deploy and told the reader about
+weeks the chart was not showing. That split is the tell: **text changes, numbers
+don't.**
+
+**A change to a module the page imports needs a reboot, not just a push.** A
+reboot restarts the process, so the cache starts empty. The push alone is enough
+only when the edit is inside the cached function itself, or in uncached page code.
+
 ## TWO BACKENDS, AND "IT WORKS LOCALLY" PROVES NOTHING
 
 `snowflake_db.get_conn()` returns SQLite or Snowflake depending on
