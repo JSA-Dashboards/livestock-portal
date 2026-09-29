@@ -34,6 +34,7 @@ import snowflake_db as db
 from herd import (BASELINE_YEARS, LEGACY_LAST_GOOD_WEEK, YTD_CUT, annual_ratio,
                   class_prices, decompose, heifer_share_annual,
                   heifer_share_rolling, heifer_share_summary, heifer_share_thin,
+                  receipts_volume_annual,
                   latest_date,
                   receipts_yoy)
 from dairy_mix import (ASSUMED_DAIRY_NOW, ASSUMED_DAIRY_THEN,
@@ -206,7 +207,11 @@ def load_heifer_share():
                 "rolling": heifer_share_rolling(conn),
                 # Kept apart from "annual" all the way to the chart. Nothing
                 # that computes a benchmark, a peak or a distance ever sees it.
-                "thin": heifer_share_thin(conn)}
+                "thin": heifer_share_thin(conn),
+                # Whole years and every week, unlike "annual" -- see the
+                # function's docstring for why a level needs different rules
+                # from a ratio.
+                "volume": receipts_volume_annual(conn)}
     except Exception:
         return None
     finally:
@@ -584,81 +589,92 @@ if HS:
         + f"{_spl_txt}{_chg}"
     )
 
-    # ---- receipts VOLUME, the share's own numerator and denominator ----
+    # ---- receipts VOLUME: whole-year head, the share's own numerator ----
     #
-    # PER REPORTING WEEK, NOT PER YEAR, and that is not a refinement. Years hold
-    # 30 to 37 weeks of this window, so raw annual head compares a short year
-    # with a whole one: 2005->2006 reads +27.3% raw and +3.2% per week, and the
-    # difference is entirely the seven weeks 2005 lacks.
+    # ANNUAL TOTALS, NOT HEAD PER WEEK. The first version of this normalised by
+    # reporting week so the Jan-Sep window's 30-37 weeks stayed comparable. That
+    # was a defensible statistic and the wrong chart: a cattleman wants to know
+    # how many head sold, and the short window amputates the autumn run, which is
+    # when a third of the year's cattle move. On full years the retention
+    # signature reads more clearly too -- 2015 shows steers RISING 1.1% while
+    # heifers fell 7.4%, which the Jan-Sep window had shown as steers -2.2%.
     #
-    # THE ERAS ARE DRAWN APART, like the 2000-2004 segment above, because head
-    # does NOT cross the archive handover cleanly even though share does. The
-    # 2019->2021 head ratio is 1.162 for auction and 1.304 for video against
-    # 0.985 for direct: both rosters widened at the seam. Joining them would
-    # print a ~14% national jump in 2021 that is entirely coverage. The SHARE
-    # chart above can span the seam; this one cannot, and the reason they differ
-    # is that a ratio cancels a roster change and a level does not.
-    _vol = [dict(r, per_wk_s=r["steers"] / r["weeks"],
-                 per_wk_h=r["heifers"] / r["weeks"],
-                 era="mars" if r["year"] >= 2021 else "legacy") for r in _ann]
+    # The current year is partial and is drawn as such rather than rescaled:
+    # annualising it would mean assuming the seasonal pattern it has not reached.
+    _vol = HS.get("volume") or []
     if len(_vol) > 4:
         st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
         st.markdown('<div class="sec-header">Receipts Volume</div>',
                     unsafe_allow_html=True)
+        _part = [r for r in _vol if not r["complete"]]
         _fv = go.Figure()
-        for _era, _dash in (("legacy", "solid"), ("mars", "solid")):
-            _seg = [r for r in _vol if r["era"] == _era]
+        for _era in ("legacy", "mars"):
+            _seg = [r for r in _vol if r["era"] == _era and r["complete"]]
             if not _seg:
                 continue
-            for _key, _col, _nm in ((("per_wk_s"), JPSI_BLUE, "steers"),
-                                    (("per_wk_h"), POS, "heifers")):
+            for _k, _col, _nm in (("steers", JPSI_BLUE, "steers"),
+                                  ("heifers", POS, "heifers")):
                 _fv.add_trace(go.Scatter(
-                    x=[r["year"] for r in _seg], y=[r[_key] / 1000 for r in _seg],
-                    mode="lines+markers", name=_nm,
-                    legendgroup=_nm, showlegend=(_era == "legacy"),
+                    x=[r["year"] for r in _seg],
+                    y=[r[_k] / 1e6 for r in _seg],
+                    mode="lines+markers", name=_nm, legendgroup=_nm,
+                    showlegend=(_era == "legacy"),
                     line=dict(color=_col, width=2.5),
                     marker=dict(size=6, color=_col),
-                    hovertemplate="%{x}<br>" + _nm + " %{y:,.0f}k head/week<extra></extra>"))
+                    hovertemplate="%{x}<br>" + _nm + " %{y:.2f}M head<extra></extra>"))
+        # The partial year as hollow markers, joined to nothing.
+        for _r in _part:
+            for _k, _col in (("steers", JPSI_BLUE), ("heifers", POS)):
+                _fv.add_trace(go.Scatter(
+                    x=[_r["year"]], y=[_r[_k] / 1e6], mode="markers",
+                    showlegend=False,
+                    marker=dict(size=9, color="#ffffff",
+                                line=dict(color=_col, width=2)),
+                    hovertemplate="%{x} (partial, " + str(_r["weeks"])
+                                  + " wks)<br>%{y:.2f}M head<extra></extra>"))
         _fv.update_layout(height=320, margin=dict(l=0, r=10, t=40, b=0),
                           plot_bgcolor="white", paper_bgcolor="white",
                           legend=dict(orientation="h", yanchor="bottom", y=1.04,
                                       xanchor="left", x=0, font=dict(size=11),
                                       bgcolor="rgba(0,0,0,0)"),
-                          yaxis_title="thousand head per reporting week")
+                          yaxis_title="million head sold, whole year")
         _fv.update_yaxes(showgrid=True, gridcolor="#f1f5f9")
         _fv.update_xaxes(showgrid=False,
                          tickvals=[r["year"] for i, r in enumerate(_vol)
-                                   if i % 2 == 0 or r["year"] == _cur["year"]])
+                                   if i % 3 == 0 or r["year"] == _vol[-1]["year"]])
         with st.container(key="wm-heifer-vol"):
             st.plotly_chart(_fv, use_container_width=True)
 
-        # YoY is computed only WITHIN an era, so the one comparison that would
-        # straddle the handover is absent rather than wrong.
-        _yoy = []
+        # Year-over-year only WITHIN an era and only between complete years.
+        _yy = []
         for _i in range(1, len(_vol)):
             _a, _b = _vol[_i - 1], _vol[_i]
-            if _a["era"] != _b["era"] or _b["year"] - _a["year"] != 1:
+            if (_a["era"] != _b["era"] or _b["year"] - _a["year"] != 1
+                    or not (_a["complete"] and _b["complete"])):
                 continue
-            _yoy.append((_b["year"],
-                         100 * (_b["per_wk_s"] / _a["per_wk_s"] - 1),
-                         100 * (_b["per_wk_h"] / _a["per_wk_h"] - 1)))
-        if _yoy:
-            _ly, _ls, _lh = _yoy[-1]
+            _yy.append((_b["year"], 100 * (_b["steers"] / _a["steers"] - 1),
+                        100 * (_b["heifers"] / _a["heifers"] - 1)))
+        if _yy:
+            _ly, _ls, _lh = _yy[-1]
+            _pt = (f" {_part[0]['year']} is drawn hollow and joined to nothing: "
+                   f"{_part[0]['weeks']} of 52 weeks are in, so it is a part-year "
+                   f"total, not a small one." if _part else "")
             st.caption(
-                f"Head per reporting week, so a year short of weeks is not read "
-                f"as a year short of cattle. **{_ly}: steers {_ls:+.1f}%, heifers "
-                f"{_lh:+.1f}%** — heifers are "
-                + ("leaving the sale faster than steers, which is what retention "
-                   "looks like in volume rather than in mix."
-                   if _lh < _ls else
+                f"Whole-year head, both sexes. Last complete year, **{_ly}: steers "
+                f"{_ls:+.1f}%, heifers {_lh:+.1f}%** — heifers "
+                + ("leaving the sale faster than steers, which is retention in "
+                   "volume rather than in mix." if _lh < _ls else
                    "falling no faster than steers, so the mix is not shifting "
                    "toward retention on this measure.")
-                + f" The two eras are drawn apart and no year-over-year spans them: "
-                f"head does not cross the 2020 archive handover cleanly even though "
-                f"share does — both the auction and video rosters widened there, by "
-                f"16% and 30% — so a line joining them would show a jump that is "
-                f"coverage, not cattle."
+                + _pt
+                + " The eras are drawn apart and no year-over-year spans them: "
+                "head does not cross the 2020 archive handover cleanly even "
+                "though share does, because both the auction and video rosters "
+                "widened there, by 16% and 30%. 2020 itself is absent — legacy "
+                "direct decays before its replacement starts, leaving that year "
+                "at 74% of 2019."
             )
+
 
     _roll = HS["rolling"]
     if len(_roll) > 8:
