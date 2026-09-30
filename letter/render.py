@@ -609,6 +609,9 @@ table.cof td:first-child { font-weight: 600; }
 .dayfact-label { font-size: 7pt; letter-spacing: 0.06em; text-transform: uppercase;
                  color: #5e7164; font-weight: 700; margin-bottom: 2px; }
 .dayfact-text { font-size: 8.5pt; line-height: 1.34; color: #222; }
+/* Space between facts when there is more than one, and none after the last,
+   so a single line is spaced exactly as it was before this became a list. */
+.dayfact-text + .dayfact-text { margin-top: 4px; }
 /* One page is the product: a three-minute brief that spills its
    disclaimer onto a second sheet has stopped being one. Tightened for
    the morning only -- the evening letter keeps its roomier spacing. */
@@ -819,10 +822,15 @@ def dayfact_block(text: str) -> str:
     """
     if not (text or "").strip():
         return ""
+    # ONE LINE PER LINE. Newlines collapse in HTML, so several facts pasted
+    # into the box would have run together into one paragraph -- readable as
+    # nothing. Each becomes its own block, and the label goes plural when it
+    # should.
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    body = "".join(f'<div class="dayfact-text">{_esc(ln)}</div>' for ln in lines)
     return ('<div class="dayplot-wrap dayfact">'
             '<div class="dayfact-label">On this day</div>'
-            f'<div class="dayfact-text">{_esc(text.strip())}</div>'
-            '</div>')
+            f'{body}</div>')
 
 
 def _signature_html(issue, own_page: bool = True) -> str:

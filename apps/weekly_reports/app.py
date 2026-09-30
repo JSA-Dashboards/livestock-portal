@@ -606,19 +606,35 @@ with st.expander("On this day — for a closing line", expanded=False):
     if _otd:
         for _e in _otd.get("errors", []):
             st.warning(_e)
+        # CHECKBOXES AND ONE BUTTON, like the headline panel, so several can go
+        # over at once. The per-item "Use this" button replaced the box with a
+        # single line and there was no way to take two.
+        #
+        # THE GENERATION COUNTER IS NOT DECORATION. Ticking a box instantiates
+        # that widget, and Streamlit refuses a write to an instantiated
+        # widget's key -- so the boxes cannot be cleared after a rerun, they
+        # have to be replaced by NEW widgets with new keys. Exactly what
+        # wcr_head_gen does above, and for the same crash.
+        _gen = st.session_state.get("wcr_otd_gen", 0)
+        _picked = []
         for _n, _i in enumerate(_otd.get("items", [])):
-            st.markdown(f"**{_i['year']}** — {_i['text']}")
-            _c1, _c2 = st.columns([1, 5])
-            with _c1:
-                # SAFE TO WRITE THE BOX'S KEY FROM HERE, and only from here:
-                # this panel renders ABOVE the chart section, so wcr_dayfact
-                # has not been instantiated yet on this run. Same reasoning
-                # as the headline panel -- below it, Streamlit refuses.
-                if st.button("Use this", key=f"otd_{_n}"):
-                    st.session_state["wcr_dayfact"] = f"{_i['year']} — {_i['text']}"
-                    st.rerun()
-            with _c2:
-                st.caption(" · ".join(_i["tags"]) + f" · {_i['source']}")
+            _line = f"{_i['year']} — {_i['text']}"
+            if st.checkbox(_line, key=f"otd_{_gen}_{_n}"):
+                _picked.append(_line)
+            st.caption(" · ".join(_i["tags"]) + f" · {_i['source']}")
+
+        if _picked and st.button(f"Add {len(_picked)} to the line box",
+                                 type="primary", key="otd_add"):
+            # APPENDS, never replaces -- anything already typed survives.
+            # Writing wcr_dayfact is safe from HERE and only here: this panel
+            # renders above the chart section, so that text area has not been
+            # instantiated yet on this run.
+            _have = [ln for ln in st.session_state.get("wcr_dayfact", "").splitlines()
+                     if ln.strip()]
+            _have.extend(ln for ln in _picked if ln not in _have)
+            st.session_state["wcr_dayfact"] = "\n".join(_have)
+            st.session_state["wcr_otd_gen"] = _gen + 1
+            st.rerun()
         if not _otd.get("items"):
             st.caption("Nothing worth offering for today — some days are quiet, "
                        "and the filter drops anything grim rather than padding "
@@ -774,13 +790,23 @@ if kind == "am":
     # rule, nothing to toggle. "Use this" in the On This Day panel above
     # seeds it -- edit it into your own words before sending.
     _fact = st.text_area(
-        "Or a line instead of the chart", key="wcr_dayfact", height=68,
+        "Or a line instead of the chart", key="wcr_dayfact", height=110,
         placeholder="1962 — Cesar Chavez and Dolores Huerta establish the "
                     "National Farm Workers Association",
         help="Takes the chart's place in the bottom right. Leave empty for the chart.")
     ctx_for_render["dayfact"] = _fact
     if _fact.strip():
-        st.caption("The letter will print this instead of the chart.")
+        _lines = len([ln for ln in _fact.splitlines() if ln.strip()])
+        st.caption(f"The letter will print {_lines} line(s) instead of the chart.")
+        # THE BAND IS 1.89in AND THE BRIEF IS ONE PAGE. Each wrapped line is
+        # roughly 0.16in at 8.5pt across 3.1in, so about eleven fit before the
+        # float outgrows the whitespace it was chosen to sit in and the letter
+        # runs to two. Warned rather than truncated -- silently dropping a
+        # line he picked would be worse than a long letter he can see.
+        if _lines > 6:
+            st.warning(f"{_lines} lines is a lot for the corner slot. Over about "
+                       "eight the float outgrows the band beside the signature "
+                       "and the brief runs to a second page — check the preview.")
 
 html = render.build_html(ctx_for_render)
 
