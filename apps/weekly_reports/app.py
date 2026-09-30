@@ -606,9 +606,19 @@ with st.expander("On this day — for a closing line", expanded=False):
     if _otd:
         for _e in _otd.get("errors", []):
             st.warning(_e)
-        for _i in _otd.get("items", []):
+        for _n, _i in enumerate(_otd.get("items", [])):
             st.markdown(f"**{_i['year']}** — {_i['text']}")
-            st.caption(" · ".join(_i["tags"]) + f" · {_i['source']}")
+            _c1, _c2 = st.columns([1, 5])
+            with _c1:
+                # SAFE TO WRITE THE BOX'S KEY FROM HERE, and only from here:
+                # this panel renders ABOVE the chart section, so wcr_dayfact
+                # has not been instantiated yet on this run. Same reasoning
+                # as the headline panel -- below it, Streamlit refuses.
+                if st.button("Use this", key=f"otd_{_n}"):
+                    st.session_state["wcr_dayfact"] = f"{_i['year']} — {_i['text']}"
+                    st.rerun()
+            with _c2:
+                st.caption(" · ".join(_i["tags"]) + f" · {_i['source']}")
         if not _otd.get("items"):
             st.caption("Nothing worth offering for today — some days are quiet, "
                        "and the filter drops anything grim rather than padding "
@@ -758,6 +768,19 @@ if kind == "am":
         _c = ctx_for_render.get("chart") or {}
         st.caption(f"**{_c.get('title', 'no chart')}** — {_c.get('reason', 'unavailable')}"
                    if _c else "No chart: no series came back for any market in the pool.")
+
+    # A LINE INSTEAD, IF YOU WANT ONE. Anything in this box takes the chart's
+    # place in the letter; clear it and the chart comes back. One slot, one
+    # rule, nothing to toggle. "Use this" in the On This Day panel above
+    # seeds it -- edit it into your own words before sending.
+    _fact = st.text_area(
+        "Or a line instead of the chart", key="wcr_dayfact", height=68,
+        placeholder="1962 — Cesar Chavez and Dolores Huerta establish the "
+                    "National Farm Workers Association",
+        help="Takes the chart's place in the bottom right. Leave empty for the chart.")
+    ctx_for_render["dayfact"] = _fact
+    if _fact.strip():
+        st.caption("The letter will print this instead of the chart.")
 
 html = render.build_html(ctx_for_render)
 

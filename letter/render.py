@@ -599,6 +599,16 @@ table.cof td:first-child { font-weight: 600; }
    taller than that band and the letter runs to two pages; a test checks. */
 .dayplot-wrap { float: right; margin: 2px 0 6px 18px; }
 .dayplot { display: block; }
+/* A LINE INSTEAD OF A CHART, in the same float and the same width, so the
+   page geometry does not change with the choice. Sized to the chart's 3.1in
+   and kept well inside the 1.89in band -- three lines of 8.5pt is about
+   0.55in, so this can never be the thing that costs a second page.
+   Hairline rule in the frame's sage rather than a box: it should read as a
+   footnote on stationery, not as a callout competing with the market. */
+.dayfact { width: 3.1in; border-top: 0.75pt solid #5e7164; padding-top: 5px; }
+.dayfact-label { font-size: 7pt; letter-spacing: 0.06em; text-transform: uppercase;
+                 color: #5e7164; font-weight: 700; margin-bottom: 2px; }
+.dayfact-text { font-size: 8.5pt; line-height: 1.34; color: #222; }
 /* One page is the product: a three-minute brief that spills its
    disclaimer onto a second sheet has stopped being one. Tightened for
    the morning only -- the evening letter keeps its roomier spacing. */
@@ -793,6 +803,28 @@ def am_blocks(ctx: dict, c: dict) -> list:
     return out
 
 
+def dayfact_block(text: str) -> str:
+    """
+    One line in the chart's slot, for a morning when a fact beats a chart.
+
+    SAME FLOAT, SAME WIDTH, so choosing one over the other cannot change the
+    page. The chart occupies a band beside the signature that is empty
+    anyway; this occupies the same band and less of it.
+
+    It takes whatever Ross typed. The On This Day panel seeds the box from
+    history.com, but the words that reach a client are his -- the events are
+    facts and free to use, the phrasing is theirs and is not, and the panel
+    says so. Escaped, like every other line he writes: it is prose, not
+    markup.
+    """
+    if not (text or "").strip():
+        return ""
+    return ('<div class="dayplot-wrap dayfact">'
+            '<div class="dayfact-label">On this day</div>'
+            f'<div class="dayfact-text">{_esc(text.strip())}</div>'
+            '</div>')
+
+
 def _signature_html(issue, own_page: bool = True) -> str:
     """The signature and disclaimer. Identical in every session and format."""
     s = config.SIGNATURE
@@ -888,7 +920,11 @@ def build_html(ctx: dict) -> str:
         body.extend(am_blocks(ctx, c))
         # BEFORE the sign-off in source order, which is what puts a float in the
         # bottom-right corner: everything after it flows up its left side.
-        body.append(chart_mod.chart_block(ctx.get("chart")))
+        # A TYPED LINE WINS OVER THE CHART. One slot, and the rule is simply
+        # whether anything is in the box -- no mode to set and get wrong, and
+        # emptying it puts the chart straight back.
+        body.append(dayfact_block(ctx.get("dayfact"))
+                    or chart_mod.chart_block(ctx.get("chart")))
         body.append(f'<p class="signoff">{_esc(sign_off)}</p>')
         body.append(_signature_html(issue, own_page=False))
         return _page(title, stamp, body, body_class="am")

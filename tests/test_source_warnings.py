@@ -392,3 +392,50 @@ def test_the_docstring_no_longer_has_the_timing_backwards():
     assert block.count("the week ending the previous Saturday") == 1
     assert 'READ "the week ending the previous Saturday"' in block, \
         "the old timing must be marked as superseded, not left reading as current"
+
+
+# ── the release calendar is Central, and says so ───────────────────────────
+
+def test_release_times_are_converted_to_central_and_labelled():
+    """
+    ESMIS sends a tz-AWARE EASTERN stamp -- "2026-10-23T15:00:00-0400" -- and
+    reading .hour off that gives the Eastern hour. The letter printed
+    "Grain Stocks: Wed 9/30, 12:00pm" for a release at noon EASTERN, which is
+    11am where Ross and his clients are. Reported 2026-09-30.
+
+    The hour is now converted and the zone is named, because an unlabelled
+    hour is what caused this in the first place.
+    """
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "letter" / "sources.py").read_text(
+        encoding="utf-8")
+    block = src[src.index("def fetch_report_calendar("):]
+    block = block[:block.index("def _ls712_section(")]
+    code = "\n".join(ln.split("#", 1)[0] for ln in block.splitlines())
+    assert "tz_convert(config.LETTER_TZ)" in code, "the Eastern hour is printed as-is"
+    assert "tz_localize(\"America/New_York\")" in code, "a naive stamp needs a zone too"
+    assert "CT" in code, "the zone must be named on the line"
+
+
+def test_central_is_the_letters_one_timezone():
+    """
+    config.LETTER_TZ already drives which session the page opens on. The
+    calendar uses the same constant rather than a second copy, so there is one
+    answer to 'what time is it for this letter'.
+    """
+    from letter import config
+    assert config.LETTER_TZ == "America/Chicago"
+
+
+def test_the_conversion_survives_the_daylight_saving_switch():
+    """
+    The feed carries the offset per release -- -0400 in October, -0500 in
+    November -- so converting to the NAMED zone stays right through the
+    switch, where a fixed -1 hour would drift.
+    """
+    import pandas as pd
+    from letter import config
+
+    oct_et = pd.to_datetime("2026-10-23T15:00:00-0400").tz_convert(config.LETTER_TZ)
+    nov_et = pd.to_datetime("2026-11-20T15:00:00-0500").tz_convert(config.LETTER_TZ)
+    assert (oct_et.hour, nov_et.hour) == (14, 14), "3pm Eastern is 2pm Central in both"

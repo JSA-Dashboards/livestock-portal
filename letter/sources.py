@@ -28,6 +28,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from . import config
 from . import settle_log
 
 REPO = Path(__file__).resolve().parent.parent
@@ -1207,6 +1208,28 @@ def fetch_report_calendar(as_of: date) -> dict:
                     when = pd.to_datetime(stamp)
                 except (ValueError, TypeError):
                     continue
+
+                # CONVERT TO CENTRAL. ESMIS sends a tz-AWARE Eastern stamp --
+                # "2026-10-23T15:00:00-0400" -- and reading .hour off that
+                # gives the Eastern hour. The letter printed "Grain Stocks:
+                # Wed 9/30, 12:00pm" for a release at noon EASTERN, which is
+                # 11am where Ross and his clients are. Reported 2026-09-30.
+                #
+                # The feed gets daylight saving right on its own (the very next
+                # release in the same list carries -0500), so converting to the
+                # named zone rather than a fixed offset keeps that correct
+                # through the switch in November.
+                #
+                # The DATE can move with the hour in principle; taking it after
+                # the conversion rather than before is what stops a late-evening
+                # Eastern release being filed under the wrong Central day.
+                try:
+                    when = (when.tz_convert(config.LETTER_TZ) if when.tzinfo
+                            else when.tz_localize("America/New_York")
+                                     .tz_convert(config.LETTER_TZ))
+                except Exception:           # noqa: BLE001 -- a bad stamp, not a bad zone
+                    pass
+
                 d = when.date()
                 if not (as_of <= d <= horizon):
                     continue
@@ -1214,8 +1237,10 @@ def fetch_report_calendar(as_of: date) -> dict:
                 # ValueError on Windows, which is where this runs.
                 hour = when.hour % 12 or 12
                 ampm = "am" if when.hour < 12 else "pm"
+                # LABELLED, because an unlabelled hour is what caused this. CT
+                # covers both CDT and CST without the reader doing arithmetic.
                 scheduled.append({"date": d, "name": name,
-                                  "time": f"{hour}:{when.minute:02d}{ampm}"})
+                                  "time": f"{hour}:{when.minute:02d}{ampm} CT"})
 
     # WASDE: ESMIS lists it as an active monthly publication but returns
     # upcoming_releases: [] for it -- WAOB publishes it, not NASS, and the
