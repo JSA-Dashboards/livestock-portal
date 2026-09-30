@@ -31,6 +31,7 @@ and they cost the same six numbers off last week's letter to re-enter. Same
 table, KIND = "weekbase", keyed by the Friday rather than by the letter.
 """
 import os
+import re
 import sys
 from datetime import date
 from pathlib import Path
@@ -824,20 +825,68 @@ if missing:
 # result as Build PDF, and it works on the deployed app.
 #
 # The button hides itself in the print output -- it is chrome, not letter.
-_print_ui = """
-<style>
+_PRINT_STYLE = """<style>
   #jsa-print { position: sticky; top: 0; z-index: 99; display: block; width: 100%;
     padding: 7px 0; font: 600 14px/1.2 "Segoe UI", system-ui, sans-serif;
     color: #fff; background: #5e7164; border: 0; border-radius: 4px;
     cursor: pointer; margin: 0 0 10px; }
   #jsa-print:hover { background: #4d5d52; }
   @media print { #jsa-print { display: none !important; } }
-</style>
-<button id="jsa-print" onclick="window.focus();window.print();">
+</style>"""
+
+_PRINT_BUTTON = """<button id="jsa-print" onclick="window.focus();window.print();">
   Print / Save as PDF &nbsp;·&nbsp; uses this browser
-</button>
-"""
-st.components.v1.html(_print_ui + html, height=720, scrolling=True)
+</button>"""
+
+
+def _with_print_button(doc: str) -> str:
+    """
+    Put the button INSIDE the letter's document, not in front of it.
+
+    THE OBVIOUS VERSION IS `_print_ui + html` AND IT BREAKS THE DOCUMENT.
+    `render.build_html` returns a complete page beginning `<!DOCTYPE html>`.
+    Concatenating anything ahead of that doctype means the doctype is no longer
+    first, so the parser DISCARDS it and the whole letter renders in QUIRKS
+    MODE. Measured 2026-09-30 on the real preview, in a real browser:
+
+        document.compatMode   "BackCompat"   (standards: "CSS1Compat")
+        document.doctype      null
+        <meta>, <title> and the letter's ENTIRE stylesheet -> inside <body>
+        first cash band       102px tall, against 108px in standards mode
+
+    Quirks mode changes table row heights and margin collapsing, so the letter
+    the reader prints from this preview was NOT laying out the same as the one
+    `Build PDF` produces -- two print paths that are supposed to be identical,
+    silently diverging in the one direction nobody checks. Nothing raised, and
+    the page count happened to stay at one, which is why it survived.
+
+    So: the style goes in <head> and the button just inside <body>, leaving the
+    doctype where the parser needs it. Both halves fall back to prepending if
+    the letter ever stops having a head or a body -- a preview with the button
+    in the wrong place beats a preview with no button at all.
+    """
+    head_end = doc.lower().find("</head>")
+    if head_end != -1:
+        doc = doc[:head_end] + _PRINT_STYLE + doc[head_end:]
+        # LOOK FOR <body> ONLY AFTER </head>, and this is not defensive
+        # programming -- a plain search finds the wrong one. render.py's
+        # stylesheet carries the comment "put a background on <body> and this
+        # disappears underneath it", so the FIRST "<body" in the letter is
+        # prose inside a CSS comment. Inserting there puts the button inside a
+        # comment, where it is inert: the preview lost its print button
+        # entirely and nothing raised. Caught 2026-09-30 by checking the live
+        # DOM rather than the string.
+        after_head = head_end + len(_PRINT_STYLE) + len("</head>")
+    else:
+        doc = _PRINT_STYLE + doc
+        after_head = 0
+    m = re.compile(r"<body\b[^>]*>", re.I).search(doc, after_head)
+    if m:
+        return doc[:m.end()] + _PRINT_BUTTON + doc[m.end():]
+    return _PRINT_BUTTON + doc
+
+
+st.components.v1.html(_with_print_button(html), height=720, scrolling=True)
 st.caption("**Print / Save as PDF** prints the preview above from your own browser — "
            "same print CSS as Build PDF, and it works on the deployed app where "
            "Build PDF cannot. Choose *Save as PDF* as the destination.")

@@ -260,6 +260,46 @@ don't.**
 reboot restarts the process, so the cache starts empty. The push alone is enough
 only when the edit is inside the cached function itself, or in uncached page code.
 
+### ...and the last sentence of that is not reliable either -- 2026-09-30
+
+**The same symptom occurred on a path with NO CACHE ANYWHERE, so do not reach
+for `cache_data` to explain every stale reading.**
+
+The USDA report calendar was changed to convert ESMIS's tz-aware Eastern stamp
+to Central (`sources.fetch_report_calendar`, commit `7920931`). After the push
+the deployed page went on printing `Grain Stocks: Wed 9/30, 12:00pm` -- the
+Eastern hour -- **across repeated presses of "Fetch latest data"**. A reboot
+fixed it; the page then read `11:00am CT`.
+
+There was nothing for a cache to hold onto:
+
+- `grep -rn "cache_data\|cache_resource\|lru_cache" letter/` returns exactly
+  one hit, `render._asset_uri` (the logo data URI). The calendar is not cached.
+- The Fetch button calls `letter_build.gather()` directly and rewrites
+  `out/data_<slug>_<date>.json`. There is no memoised layer between the click
+  and the HTTP request.
+- Run locally against the live feed at the same time, the pushed code returned
+  `Wed 9/30, 11:00am CT`. The code was right; the deployment was not running it.
+
+**The mechanism was never established, and guessing at one is how this entry
+would go wrong.** It was first written up as "the running process's imported
+`letter.sources` was stale", which is a hypothesis and was stated as a finding.
+Streamlit's watcher does evict changed modules from `sys.modules` (see the
+`KeyError` section above, which depends on it doing exactly that), so "the
+module was simply never re-imported" is not free -- it needs evidence nobody
+collected. A plain race between the click and the auto-deploy completing fits
+the observations just as well.
+
+What is actually load-bearing, and all that should be relied on:
+
+- **The reboot habit is right, and the cache is only one of its reasons.**
+  Treat "pushed, but the page disagrees with a local run" as a reboot, not as a
+  diagnosis.
+- **A local run against the live source is the cheap discriminator.** It
+  separates "the code is wrong" from "the deployment is not running the code"
+  in one command, before any theory. Here it took under a minute and pointed
+  straight at the deployment.
+
 ## The video "seam" was not one, and the mistake is worth keeping
 
 For most of 2026-09-29 this file, `herd.py` and several answers to Ross cited a
