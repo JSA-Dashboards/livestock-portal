@@ -1291,6 +1291,99 @@ def _first_col(rows: list, kind: str, index: int):
     return hits[index][2][0], hits[index][1]
 
 
+# The chart of the day's cutout series. Six years, because a five-year average
+# needs five prior years plus the running one.
+CUTOUT_CHART_YEARS = 6
+CUTOUT_SECTION = "Current Cutout Values"
+
+
+def fetch_cutout_history(reports: int = 1700) -> "pd.Series":
+    """
+    Daily Choice cutout, indexed by report date, for the chart of the day.
+
+    THE SECTION GOES IN THE PATH, and that is the whole difference between
+    this being viable and not. `allSections=true` -- what fetch_cutout uses
+    for a handful of reports -- returns all ELEVEN sections of LM_XB403,
+    including every individual Choice and Select cut. At 1,700 reports that is
+    **37.8 seconds and 183 MB**, which no 90-second build can spend. Asking for
+    one section as a path segment returns the same 1,700 rows in 3.5s and
+    1.3 MB: 140 times less data for exactly the numbers wanted.
+
+    1,700 reports is about 6.7 years, which covers the five-year average with
+    room to spare. The archive goes back further -- to 2004-01-05 in practice,
+    NOT the 2001-04-03 the earliest report_date claims, because choice and
+    select are null on all 699 rows before then -- but a chart does not need
+    it and the full pull costs 9s.
+
+    Keyless: the public AMS datamart, the same LMR_BASE the letter already uses.
+    """
+    r = _session().get(f"{LMR_BASE}/{XB403_ID}/{CUTOUT_SECTION}",
+                       params={"lastReports": int(reports)}, timeout=90)
+    r.raise_for_status()
+    rows = r.json().get("results") or []
+    if not rows:
+        return pd.Series(dtype=float)
+    df = pd.DataFrame(rows)
+    df["d"] = pd.to_datetime(df.get("report_date"), errors="coerce")
+    df["v"] = pd.to_numeric(df.get("choice_600_900_current"), errors="coerce")
+    df = df.dropna(subset=["d", "v"]).sort_values("d")
+    return pd.Series(df["v"].values, index=df["d"].dt.date.values, dtype=float)
+
+
+def cutout_premium_series(weeks: int = 52, years: int = 5, reports: int = 1700) -> dict:
+    """
+    Choice cutout as a premium to the same week's five-year average, $/cwt.
+
+    ONE LINE, NOT TWO, AND THAT IS THE POINT. The obvious seasonal chart plots
+    this year against the five-year average and lets the reader take the
+    difference. Measured in the letter's actual 3.10 x 1.62in box that is a bad
+    chart in 2026: cattle is running 26-27% over the five-year average, the two
+    lines never cross, and the average drags the axis out until this year uses
+    29% of the plot band. That is precisely the failure _nice_bounds' own
+    docstring was written against -- an axis so wide the move reads as a drift.
+
+    Subtracting first gives the same insight in one honest line that uses 82%
+    of the band, and it answers the question directly: how far above normal is
+    the cutout, and is that gap widening. Zero is "normal".
+
+    WEEKLY MEANS, NOT DAILY. 52 weekly points fit the box; 260 daily ones are a
+    smear at this size, and the day-to-day noise is not the story a seasonal
+    chart tells.
+
+    Matched on ISO week, so week 14 is compared with week 14 -- the calendar
+    dates differ by definition and matching on them would compare a Tuesday
+    with a Friday.
+    """
+    daily = fetch_cutout_history(reports)
+    if daily.empty:
+        return {}
+
+    f = pd.DataFrame({"v": daily.values},
+                     index=pd.to_datetime(pd.Series(list(daily.index))))
+    iso = f.index.isocalendar()
+    f["yr"], f["wk"] = iso["year"].values, iso["week"].values
+    wk = f.groupby(["yr", "wk"])["v"].mean()
+
+    out_dates, out_vals = [], []
+    for (yr, w), v in wk.tail(int(weeks)).items():
+        base = [wk.get((yr - n, w)) for n in range(1, int(years) + 1)]
+        base = [b for b in base if b is not None and not pd.isna(b)]
+        # ALL FIVE OR NONE. An "average" over two of the five years is a
+        # different statistic wearing the same label, and the gap it implies
+        # would be wrong rather than approximate.
+        if len(base) < int(years):
+            continue
+        # Monday of that ISO week, so the axis carries a real date.
+        out_dates.append(date.fromisocalendar(int(yr), int(w), 1))
+        out_vals.append(round(float(v) - sum(base) / len(base), 2))
+
+    if len(out_vals) < 5:
+        return {}
+    return {"dates": out_dates, "values": out_vals,
+            "title": f"Choice cutout vs {years}-yr avg ($/cwt)",
+            "style": "decimal"}
+
+
 def fetch_slaughter() -> dict:
     """
     Completed-week cattle slaughter and carcass weights from AMS SJ_LS712.

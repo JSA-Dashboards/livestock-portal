@@ -224,9 +224,16 @@ def _rotation(issue: date, n: int):
     random.Random(cycle).shuffle(order)
     # A chart landing last in one cycle and first in the next is the only way
     # this repeats two days running. Cheap to avoid.
+    #
+    # NOT GATED ON pos, AND THAT WAS A BUG. The swap used to fire only when
+    # pos == 0, so day 0 of a cycle got a different permutation from days 1..n
+    # of the same cycle -- the order stopped being a function of the cycle
+    # alone, and the day-0 chart could duplicate the day-1 chart. Five entries
+    # never happened to trigger it; adding a sixth did, on the first cycle
+    # tested. The order must depend on `cycle` and nothing else.
     prev = list(range(n))
     random.Random(cycle - 1).shuffle(prev)
-    if n > 1 and pos == 0 and order[0] == prev[-1]:
+    if n > 1 and order[0] == prev[-1]:
         order[0], order[1] = order[1], order[0]
     return order, pos
 
@@ -246,25 +253,60 @@ def _fmt(v: float, style: str = "decimal") -> str:
     return f"{v:,.2f}"
 
 
-def line_chart(dates: list, values: list, title: str = "", style: str = "decimal",
-               width_in: float = WIDTH_IN, height_in: float = HEIGHT_IN) -> str:
-    """
-    One series over time, as an <svg> string. Returns "" if there is nothing
-    worth drawing -- two points is not a chart.
+COMPARE_LINE = "#9aa3a8"      # the average, behind and quieter than this year
 
-    Single series, so no legend: the title says what is plotted, and a one-swatch
+
+def line_chart(dates: list, values: list, title: str = "", style: str = "decimal",
+               width_in: float = WIDTH_IN, height_in: float = HEIGHT_IN,
+               compare: list = None, compare_label: str = "5-yr avg") -> str:
+    """
+    One series over time, as an <svg> string, optionally against a second.
+    Returns "" if there is nothing worth drawing -- two points is not a chart.
+
+    ONE SERIES, NO LEGEND: the title says what is plotted, and a one-swatch
     legend box would only restate it and cost space that is not available here.
     Only the endpoint is labelled; a number on every point is unreadable at this
     size and goes unread at any size.
+
+    TWO SERIES, STILL NO LEGEND BOX, because 3.1 x 1.75 inches does not have
+    room for one. Identity is carried three ways instead, none of them colour
+    alone -- which matters on a letter that is printed, photocopied and read by
+    people who do not all see colour the same way:
+
+        this year    solid, full weight, endpoint dot, the value spelled out
+        comparison   dashed, thinner, muted, labelled at its own end
+
+    `compare` must be index-aligned with `values` -- same length, same x
+    positions, Nones allowed where a year has no observation. Aligning by
+    position rather than by date is deliberate: a seasonal chart puts this
+    year's week 14 against the average of week 14, and the calendar dates
+    differ by definition.
     """
     pts = [(d, float(v)) for d, v in zip(dates or [], values or []) if v is not None]
     if len(pts) < 5:
         return ""
 
+    # Kept as an index-aligned list against the ORIGINAL values, then filtered
+    # the same way, so a None in either series cannot shift the two apart.
+    cmp_pts = []
+    if compare:
+        padded = list(compare) + [None] * len(values or [])
+        i = 0
+        for v, c in zip(values or [], padded):
+            if v is None:
+                continue          # dropped from pts, so it takes no x position
+            if c is not None:
+                cmp_pts.append((i, float(c)))
+            i += 1
+
     w, h = width_in * IN, height_in * IN
     x0, x1 = PAD_L, w - PAD_R
     y0, y1 = PAD_T, h - PAD_B
-    lo, hi, ticks = _nice_bounds(min(v for _, v in pts), max(v for _, v in pts))
+    # BOTH SERIES SET THE SCALE. Bounding on this year alone would push the
+    # average off the top or bottom of the box, which is the one thing a
+    # comparison chart must not do.
+    seen = [v for _, v in pts] + [c for _, c in cmp_pts]
+    lo, hi, ticks = _nice_bounds(min(seen), max(seen))
 
     def sx(i):
         return x0 + (x1 - x0) * (i / (len(pts) - 1))
@@ -287,6 +329,16 @@ def line_chart(dates: list, values: list, title: str = "", style: str = "decimal
         parts.append(f'<text x="{x0 - 4}" y="{y + 2.6:.1f}" font-size="7" '
                      f'fill="{AXIS_TEXT}" text-anchor="end" '
                      f'style="font-variant-numeric:tabular-nums">{t:g}</text>')
+
+    # THE COMPARISON GOES DOWN FIRST, so this year draws over it rather than
+    # under. Dashed and a weight thinner: the reading is "where are we against
+    # normal", and normal is the backdrop, not the subject.
+    if len(cmp_pts) >= 5:
+        cd = " ".join(("M" if n == 0 else "L") + f"{sx(i):.1f} {sy(c):.1f}"
+                      for n, (i, c) in enumerate(cmp_pts))
+        parts.append(f'<path d="{cd}" fill="none" stroke="{COMPARE_LINE}" '
+                     f'stroke-width="1.25" stroke-dasharray="3 2" '
+                     f'stroke-linejoin="round" stroke-linecap="round"/>')
 
     d = " ".join(("M" if i == 0 else "L") + f"{sx(i):.1f} {sy(v):.1f}"
                  for i, (_, v) in enumerate(pts))
@@ -312,6 +364,18 @@ def line_chart(dates: list, values: list, title: str = "", style: str = "decimal
                  f'fill="#111" font-weight="600" '
                  f'style="font-variant-numeric:tabular-nums">{_fmt(ev, style)}</text>')
 
+    # DIRECT-LABEL THE COMPARISON at its own end, and push it clear of this
+    # year's endpoint rather than trusting them not to collide -- on a
+    # seasonal chart the two lines converge exactly where both labels sit.
+    if len(cmp_pts) >= 5 and compare_label:
+        ci, cv = cmp_pts[-1]
+        cy = sy(cv)
+        cy += 9 if cv < pts[-1][1] else -6
+        cy = min(max(cy, PAD_T + 6), h - PAD_B - 1)
+        parts.append(f'<text x="{sx(ci) + 6:.1f}" y="{cy:.1f}" font-size="6.5" '
+                     f'fill="{COMPARE_LINE}" font-weight="600">'
+                     f'{_esc(compare_label)}</text>')
+
     parts.append("</svg>")
     return "".join(parts)
 
@@ -327,7 +391,9 @@ def chart_block(chart: dict) -> str:
     if not chart:
         return ""
     svg = line_chart(chart.get("dates"), chart.get("values"),
-                     chart.get("title", ""), chart.get("style", "decimal"))
+                     chart.get("title", ""), chart.get("style", "decimal"),
+                     compare=chart.get("compare"),
+                     compare_label=chart.get("compare_label", "5-yr avg"))
     if not svg:
         return ""
     return f'<div class="dayplot-wrap">{svg}</div>'

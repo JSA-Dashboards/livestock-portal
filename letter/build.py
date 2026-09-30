@@ -792,14 +792,35 @@ def build_chart(ctx: dict, issue: date, api_key: str, errors: list,
 
     order = [entry] + [e for e in config.CHART_POOL if e["key"] != entry["key"]]
     for candidate in order:
-        got = sources.fetch_front_history(candidate["code"], api_key, issue,
-                                          config.CHART_SESSIONS, completed_only=True)
+        # TWO KINDS OF ENTRY NOW. A futures entry carries a CME product code
+        # and goes through fetch_front_history as it always has. A `series`
+        # entry names a sources function that returns a finished chart dict --
+        # its own dates, values and title -- because a cutout premium is not a
+        # front-month curve and pretending otherwise would put the framing in
+        # here rather than beside the data it describes.
+        #
+        # The fall-forward is deliberately unchanged and covers both: a series
+        # that does not come back is skipped exactly like a futures one, and a
+        # letter with the second-choice chart still beats a letter with a hole.
+        try:
+            if candidate.get("series"):
+                got = getattr(sources, candidate["series"])()
+                title = got.get("title") if got else None
+            else:
+                got = sources.fetch_front_history(candidate["code"], api_key, issue,
+                                                  config.CHART_SESSIONS,
+                                                  completed_only=True)
+                title = (f"{got['month']} {candidate['label']} "
+                         f"— {got['sessions']} sessions") if got else None
+        except Exception as e:                      # noqa: BLE001
+            errors.append(f"chart ({candidate['key']}): {type(e).__name__}: {e}")
+            continue
         if got:
             if candidate is not entry:
                 why += f" (fell back from {entry['key']}: no series)"
             return {"key": candidate["key"],
-                    "title": f"{got['month']} {candidate['label']} — {got['sessions']} sessions",
-                    "style": candidate["style"],
+                    "title": title,
+                    "style": got.get("style", candidate["style"]),
                     "reason": why,
                     "dates": got["dates"], "values": got["values"]}
     errors.append("chart: no series available for any market in the pool")

@@ -322,6 +322,22 @@ CHART_POOL = [
                "risk off", "federal reserve", "macro", "recession")},
     {"key": "crude", "label": "Crude", "code": "CL", "style": "decimal",
      "words": ("crude", "oil", "energy", "diesel", "fuel", "opec", "gasoline")},
+    # NOT A FUTURES CURVE, and the first entry here that is not. `series` names
+    # a sources function instead of a CME product; build_chart dispatches on it
+    # and falls back to the futures fetch when it is absent, so every entry
+    # above is untouched.
+    #
+    # It is the cutout as a PREMIUM TO THE FIVE-YEAR AVERAGE, one line, rather
+    # than this year against the average as two. Measured in the real 3.10 x
+    # 1.62in box, the two-line version gives this year 29% of the plot band --
+    # cattle is 26-27% over the average, the lines never cross, and the axis
+    # stretches until the move reads as a drift. Subtracting first uses 82% of
+    # the band and answers the question directly: how far above normal, and is
+    # the gap widening.
+    {"key": "cutout", "label": "Choice cutout", "series": "cutout_premium_series",
+     "style": "decimal",
+     "words": ("cutout", "boxed", "boxed beef", "choice", "select", "carcass",
+               "packer", "margin", "grading", "wholesale", "retail", "demand")},
 ]
 
 # WHICH NET CHANGE THE EVENING LETTER QUOTES -- CONFIRMED 2026-09-23.

@@ -80,7 +80,7 @@ for _name in _ALLOWED_SECRETS:
 
 from letter import build as letter_build  # noqa: E402
 from letter import (archive, commentary, config, draft_store, headlines,  # noqa: E402
-                    mailbox, render, settle_log, topdf)
+                    mailbox, onthisday, render, settle_log, topdf)
 
 # ...then .env, for anything the secrets did not supply.
 #
@@ -586,6 +586,40 @@ if _head_key:
                 st.session_state[_box] = "\n".join(lines)
                 st.session_state["wcr_head_gen"] = gen + 1
                 st.rerun()
+
+
+# -- On this day --------------------------------------------------------------
+# A PROMPT, NOT A PASTE, and deliberately not wired to any box. The headline
+# panel writes its picks into a text area because a headline IS the letter's
+# content; a fun fact is someone else's editorial writing. The events are
+# facts and free to use, the wording is history.com's and is not, so this
+# shows the year and the headline as a reminder and links out. Ross writes the
+# line himself, which is also the only reason the filter below is safe enough
+# to ship -- see letter/onthisday.py on the morning it offered a mass shooting
+# as an agriculture fact.
+with st.expander("On this day — for a closing line", expanded=False):
+    if st.button("Find today's facts", use_container_width=False):
+        with st.spinner("Reading This Day in History…"):
+            st.session_state["wcr_otd"] = onthisday.candidates(issue)
+
+    _otd = st.session_state.get("wcr_otd")
+    if _otd:
+        for _e in _otd.get("errors", []):
+            st.warning(_e)
+        for _i in _otd.get("items", []):
+            st.markdown(f"**{_i['year']}** — {_i['text']}")
+            st.caption(" · ".join(_i["tags"]) + f" · {_i['source']}")
+        if not _otd.get("items"):
+            st.caption("Nothing worth offering for today — some days are quiet, "
+                       "and the filter drops anything grim rather than padding "
+                       "the list.")
+        st.caption(f"Source: [{_otd.get('source_url','')}]({_otd.get('source_url','')}) "
+                   "— write it in your own words; nothing here goes into the "
+                   "letter on its own.")
+    else:
+        st.caption("Sporting firsts, US milestones and the odd agricultural one, "
+                   "for the bottom of the letter. Nothing is inserted for you.")
+
 
 st.subheader("Your read")
 st.caption("One bullet per line. Blank sections are left out of the letter entirely.")
