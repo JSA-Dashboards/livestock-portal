@@ -524,7 +524,16 @@ CSS = """
    context. Printed from the app it simply vanished, with nothing to say why.
    No negative offsets anywhere now: the frame sits at inset 0, which is the
    page box, and the text is moved in from it. */
-@page { size: letter; margin: 0.52in; }
+/* "portrait" IS LOAD-BEARING, not redundant with "letter". US Letter is a
+   portrait size, so the page BOX is 8.5x11 either way and the PDF was always
+   right -- but without the keyword Chromium leaves its print dialog's
+   orientation control on whatever the reader used last, and Ross's Edge was
+   stuck on Landscape (seen 2026-09-30). The dialog then fits its preview pane
+   to a WIDE sheet while the CSS still lays out a tall one, so the letter
+   overflowed the pane and had to be scrolled to read. An explicit orientation
+   is what the dialog keys on. Headless --print-to-pdf is unaffected: it
+   already produced portrait, and the content stream is unchanged. */
+@page { size: letter portrait; margin: 0.52in; }
 * { box-sizing: border-box; }
 body {
   font-family: Calibri, Carlito, "Segoe UI", system-ui, sans-serif;

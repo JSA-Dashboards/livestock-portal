@@ -140,6 +140,29 @@ def test_a_letter_without_a_head_or_body_still_gets_a_button(doc):
     assert "jsa-print" in out
 
 
+def test_the_page_rule_states_the_orientation():
+    """
+    "portrait" is not redundant with "letter", and removing it is invisible.
+
+    US Letter is a portrait size, so the page box and the PDF are identical
+    either way -- verified, the content stream is byte-for-byte the same. What
+    the keyword changes is Chromium's PRINT DIALOG: without it the orientation
+    control keeps whatever the reader last used, and Ross's Edge was stuck on
+    Landscape. The dialog then fits its preview pane to a wide sheet while the
+    CSS lays out a tall one, and the letter has to be scrolled to read.
+
+    Nothing about the output can catch this, which is why it is pinned here.
+    """
+    from letter import render
+
+    m = re.search(r"@page\s*\{([^}]*)\}", render.CSS)
+    assert m, "@page rule is gone"
+    assert "portrait" in m.group(1), (
+        "@page lost its orientation -- Edge will default the print dialog to "
+        "whatever was used last, which is how this was found"
+    )
+
+
 def test_the_page_does_not_concatenate_the_chrome_onto_the_front():
     """
     Pins the REGRESSION, not just the fix.
