@@ -28,6 +28,8 @@ import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from . import draft_store
+
 GRAPH = "https://graph.microsoft.com/v1.0"
 SCOPES = ["Mail.Read"]
 
@@ -127,10 +129,51 @@ def _app():
     return app, cache
 
 
+_TOKEN_SYNCED = False
+
+
+def sync_token(force: bool = False) -> str:
+    """
+    Reconcile the cached sign-in with Snowflake. Newest wins.
+
+    WHY THIS EXISTS. TOKEN_CACHE lives under letter/data/, which is gitignored
+    and which a Streamlit Cloud reboot rebuilds empty -- so the deployed
+    headline panel lost the mailbox on every restart and showed "Connect
+    mailbox" until someone did the device-code flow again. The addresses were
+    never the problem; the session was.
+
+    ONCE PER PROCESS unless the file is missing. A container that has just
+    started has no cache and must pull; after that the local copy is the live
+    one, MSAL rewrites it on every refresh, and a SELECT per headline fetch
+    would be waste. `force` is there for a caller that knows better.
+    """
+    global _TOKEN_SYNCED
+    if not draft_store.enabled():
+        return ""
+    if _TOKEN_SYNCED and not force and TOKEN_CACHE.exists():
+        return ""
+    _TOKEN_SYNCED = True
+    try:
+        return draft_store.restore(TOKEN_CACHE, draft_store.SINGLETON_DATE,
+                                   draft_store.GRAPH_TOKEN_KIND,
+                                   label="Mailbox sign-in")
+    except Exception:
+        return ""          # a token that will not sync is not a broken letter
+
+
 def _save(cache) -> None:
     if cache.has_state_changed:
         TOKEN_CACHE.parent.mkdir(parents=True, exist_ok=True)
         TOKEN_CACHE.write_text(cache.serialize(), encoding="utf-8")
+        # UP AS WELL AS DOWN, or a sign-in done on the deployed app is lost at
+        # the next reboot exactly as before. Swallowed: the file write has
+        # already succeeded, and an unreachable Snowflake must never be the
+        # reason a headline panel stops working.
+        try:
+            draft_store.backup(TOKEN_CACHE, draft_store.SINGLETON_DATE,
+                               draft_store.GRAPH_TOKEN_KIND, "mailbox")
+        except Exception:
+            pass
 
 
 def token(interactive: bool = False):
@@ -144,6 +187,9 @@ def token(interactive: bool = False):
     """
     if not configured():
         return None, {"error": "GRAPH_CLIENT_ID / GRAPH_TENANT_ID not set"}
+    # BEFORE _app() READS THE FILE. On a fresh container there is nothing on
+    # disk, and this is the step that puts the sign-in back.
+    sync_token()
     app, cache = _app()
     accounts = app.get_accounts()
     if accounts:

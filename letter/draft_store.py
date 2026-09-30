@@ -75,6 +75,31 @@ WEEK_BASE_KIND = "weekbase"
 # merge instead of clobbering, and `settle_log.sync()` folds them.
 SETTLE_LOG_KIND = "settlelog"
 
+# THE MAILBOX SIGN-IN, AND IT IS THE ONE ROW HERE THAT IS A CREDENTIAL.
+#
+# letter/mailbox.py caches an MSAL token at letter/data/graph_token.json, and
+# letter/data/ is gitignored -- so on Streamlit Cloud every reboot destroys the
+# sign-in and the headline panel loses all four digests until someone runs the
+# device-code flow again. Seven reboots in two days made that untenable.
+#
+# WHAT IS ACTUALLY STORED is a serialised MSAL cache containing a delegated
+# Mail.Read refresh token for Ross's mailbox. That is a real credential in a
+# database row, accepted deliberately on 2026-09-30 as the price of a headline
+# panel that survives a restart. Two things follow:
+#
+#   * This table is append-only BY DESIGN, so refreshed tokens accumulate --
+#     every row is a credential that was valid when written. There is no DELETE
+#     here and adding one for this would undermine the property the drafts rely
+#     on.
+#   * The remedy is therefore REVOCATION AT THE IDENTITY PROVIDER, not deletion
+#     from the table. Revoking the app's sessions in Entra invalidates every
+#     copy at once, wherever it sits. If this ever needs undoing, do it there.
+#
+# A singleton, so it has no meaningful ISSUE_DATE. 1900-01-01 is a slot, not a
+# date, and is deliberately absurd so nobody reads it as one.
+GRAPH_TOKEN_KIND = "graphtoken"
+SINGLETON_DATE = "1900-01-01"
+
 # Schema, created 2026-09-25 and owned by SYSADMIN rather than living in
 # JSA.CME_FEEDER_CATTLE, on purpose: ACCOUNTADMIN owns that schema and SYSADMIN
 # was never granted MODIFY on its tables, so a table put there could never be

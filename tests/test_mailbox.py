@@ -263,3 +263,125 @@ def test_the_from_clause_is_built_in_one_place():
         "an inline From filter has come back; build it with from_clause()"
     assert not re.search(r"startswith\(from/emailAddress/name,'\{", elsewhere), \
         "an inline display-name filter has come back"
+
+
+# -- The sign-in has to survive a reboot ---------------------------------------
+# letter/data/ is gitignored, so a Streamlit Cloud restart destroyed the MSAL
+# cache and the headline panel lost all four digests until someone ran the
+# device-code flow again. Seven reboots in two days made that untenable. The
+# cache now rides JSA.LETTER.DRAFTS like the drafts, the week base and the
+# settle log -- see the note on GRAPH_TOKEN_KIND, which is the one row in that
+# table that is a credential.
+
+
+@pytest.fixture(autouse=True)
+def _forget_sync():
+    """_TOKEN_SYNCED is module state; a leaked True makes the next test lie."""
+    mailbox._TOKEN_SYNCED = False
+    yield
+    mailbox._TOKEN_SYNCED = False
+
+
+def test_the_token_kind_does_not_collide_with_the_others():
+    from letter import config, draft_store
+
+    taken = {draft_store.WEEK_BASE_KIND, draft_store.SETTLE_LOG_KIND}
+    taken |= set(config.FORMAT_FOR_DAY.values()) | {"am"}
+    assert draft_store.GRAPH_TOKEN_KIND not in taken
+
+
+def test_the_token_is_a_singleton_not_a_per_issue_row():
+    """It has no meaningful issue date, so it gets one fixed slot."""
+    from letter import draft_store
+
+    assert draft_store.SINGLETON_DATE == "1900-01-01"
+
+
+def test_no_snowflake_means_no_sync_and_no_error(monkeypatch):
+    """A letter must build with USE_SNOWFLAKE unset exactly as before."""
+    monkeypatch.setattr(mailbox.draft_store, "enabled", lambda: False)
+    assert mailbox.sync_token() == ""
+
+
+def test_the_pull_happens_once_per_process(monkeypatch, tmp_path):
+    """
+    A SELECT per headline fetch is waste: after the first pull the local file
+    is the live one and MSAL rewrites it on every refresh.
+    """
+    calls = []
+    cache = tmp_path / "graph_token.json"
+    cache.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(mailbox, "TOKEN_CACHE", cache)
+    monkeypatch.setattr(mailbox.draft_store, "enabled", lambda: True)
+    monkeypatch.setattr(mailbox.draft_store, "restore",
+                        lambda *a, **k: calls.append(1) or "")
+
+    mailbox.sync_token()
+    mailbox.sync_token()
+    mailbox.sync_token()
+    assert len(calls) == 1
+
+
+def test_a_missing_cache_always_pulls(monkeypatch, tmp_path):
+    """
+    THE REBOOT CASE. A fresh container has no file, and that is exactly when
+    the pull must happen however many times it is asked.
+    """
+    calls = []
+    monkeypatch.setattr(mailbox, "TOKEN_CACHE", tmp_path / "gone.json")
+    monkeypatch.setattr(mailbox.draft_store, "enabled", lambda: True)
+    monkeypatch.setattr(mailbox.draft_store, "restore",
+                        lambda *a, **k: calls.append(1) or "")
+
+    mailbox.sync_token()
+    mailbox._TOKEN_SYNCED = True          # as if an earlier call had run
+    mailbox.sync_token()
+    assert len(calls) == 2
+
+
+def test_an_unreachable_snowflake_does_not_break_the_mailbox(monkeypatch, tmp_path):
+    """A token that will not sync is not a broken letter."""
+    monkeypatch.setattr(mailbox, "TOKEN_CACHE", tmp_path / "gone.json")
+    monkeypatch.setattr(mailbox.draft_store, "enabled", lambda: True)
+
+    def boom(*a, **k):
+        raise RuntimeError("snowflake is down")
+
+    monkeypatch.setattr(mailbox.draft_store, "restore", boom)
+    assert mailbox.sync_token() == ""
+
+
+def test_a_new_sign_in_is_pushed_up(monkeypatch, tmp_path):
+    """
+    BOTH DIRECTIONS, or a sign-in done ON the deployed app is lost at the next
+    reboot exactly as before -- which is the case this whole change is for.
+    """
+    pushed = []
+    cache = tmp_path / "graph_token.json"
+    monkeypatch.setattr(mailbox, "TOKEN_CACHE", cache)
+    monkeypatch.setattr(mailbox.draft_store, "backup",
+                        lambda *a, **k: pushed.append(a[1:3]) or "")
+
+    class _Cache:
+        has_state_changed = True
+
+        def serialize(self):
+            return '{"RefreshToken": {}}'
+
+    mailbox._save(_Cache())
+    assert cache.exists()
+    from letter import draft_store
+    assert pushed == [(draft_store.SINGLETON_DATE, draft_store.GRAPH_TOKEN_KIND)]
+
+
+def test_token_syncs_before_it_reads_the_file():
+    """
+    ORDER. _app() reads TOKEN_CACHE off disk, so a pull afterwards would be a
+    pull after the answer was already wrong. Structural, because both calls
+    exist either way.
+    """
+    import re
+    body = SRC[SRC.index("def token("):SRC.index("def complete_sign_in(")]
+    code = "\n".join(ln.split("#", 1)[0] for ln in body.splitlines())
+    assert re.search(r"sync_token\(\)[\s\S]*_app\(\)", code), \
+        "the cache is read before it is restored"
