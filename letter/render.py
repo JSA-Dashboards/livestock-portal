@@ -524,16 +524,32 @@ CSS = """
    context. Printed from the app it simply vanished, with nothing to say why.
    No negative offsets anywhere now: the frame sits at inset 0, which is the
    page box, and the text is moved in from it. */
-/* "portrait" IS LOAD-BEARING, not redundant with "letter". US Letter is a
-   portrait size, so the page BOX is 8.5x11 either way and the PDF was always
-   right -- but without the keyword Chromium leaves its print dialog's
-   orientation control on whatever the reader used last, and Ross's Edge was
-   stuck on Landscape (seen 2026-09-30). The dialog then fits its preview pane
-   to a WIDE sheet while the CSS still lays out a tall one, so the letter
-   overflowed the pane and had to be scrolled to read. An explicit orientation
-   is what the dialog keys on. Headless --print-to-pdf is unaffected: it
-   already produced portrait, and the content stream is unchanged. */
-@page { size: letter portrait; margin: 0.52in; }
+/* A FIXED SIZE IS WHAT HIDES THE PRINT DIALOG'S ORIENTATION CONTROL, and
+   "letter" on its own already does it.
+
+   DO NOT ADD "portrait". Blink DISCARDS an orientation keyword that is
+   redundant with an already-portrait named size -- Size::ParseSingleValue in
+   longhands_custom.cc appends the orientation only when there is no page size
+   or the keyword is not `portrait`. So `size: letter portrait` parses to
+   exactly `size: letter`; read back through the CSSOM it serialises without
+   the keyword. A commit added it on 2026-09-30 to fix a dialog stuck on
+   landscape, changed literally nothing, and was reverted to this.
+
+   What does the work: GetPageSizeAndOrientationInfo marks every page kFixed
+   when @page names a size, which sets all_pages_have_custom_orientation, and
+   the preview then REMOVES the Layout control rather than pre-selecting
+   Portrait -- the ticket falls back to the setting's unavailableValue, which
+   is portrait. `size: auto` would hand the control back, along with whatever
+   orientation that reader last used, because Chromium persists `layout` as a
+   sticky setting per profile.
+
+   IT ONLY HOLDS FOR CHROMIUM'S OWN "Save as PDF" DESTINATION. Choose a system
+   printer instead -- "Microsoft Print to PDF" is the trap, it reads as the
+   same thing -- and the Layout control comes back with the sticky value. The
+   page box stays portrait because the CSS still wins, so a tall sheet sits in
+   a preview pane sized for a wide one and the letter has to be scrolled to
+   read. That is exactly what Ross saw on 2026-09-30. */
+@page { size: letter; margin: 0.52in; }
 * { box-sizing: border-box; }
 body {
   font-family: Calibri, Carlito, "Segoe UI", system-ui, sans-serif;

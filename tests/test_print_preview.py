@@ -140,26 +140,49 @@ def test_a_letter_without_a_head_or_body_still_gets_a_button(doc):
     assert "jsa-print" in out
 
 
-def test_the_page_rule_states_the_orientation():
+def test_the_page_rule_names_a_fixed_size():
     """
-    "portrait" is not redundant with "letter", and removing it is invisible.
+    A FIXED size is what suppresses the print dialog's orientation control.
 
-    US Letter is a portrait size, so the page box and the PDF are identical
-    either way -- verified, the content stream is byte-for-byte the same. What
-    the keyword changes is Chromium's PRINT DIALOG: without it the orientation
-    control keeps whatever the reader last used, and Ross's Edge was stuck on
-    Landscape. The dialog then fits its preview pane to a wide sheet while the
-    CSS lays out a tall one, and the letter has to be scrolled to read.
+    Chromium's GetPageSizeAndOrientationInfo marks every page kFixed when
+    @page names a size, which sets all_pages_have_custom_orientation, and the
+    preview then REMOVES the Layout control instead of pre-selecting Portrait;
+    the ticket falls back to unavailableValue, which is portrait. `size: auto`
+    would give the control back along with the reader's sticky landscape.
 
-    Nothing about the output can catch this, which is why it is pinned here.
+    Nothing about the PDF can catch a regression here -- the page box is
+    8.5x11 either way -- which is why it is pinned.
     """
     from letter import render
 
     m = re.search(r"@page\s*\{([^}]*)\}", render.CSS)
     assert m, "@page rule is gone"
-    assert "portrait" in m.group(1), (
-        "@page lost its orientation -- Edge will default the print dialog to "
-        "whatever was used last, which is how this was found"
+    size = re.search(r"size:\s*([^;]+)", m.group(1))
+    assert size, "@page no longer names a size"
+    assert size.group(1).strip() != "auto", (
+        "@page size went to auto -- Chromium will show the Layout control "
+        "again and honour the reader's sticky orientation"
+    )
+
+
+def test_the_page_rule_does_not_carry_a_redundant_portrait_keyword():
+    """
+    Pins a fix that was WRONG, so nobody re-applies it.
+
+    `size: letter portrait` was committed on 2026-09-30 to fix a dialog stuck
+    on landscape. Blink discards an orientation keyword that is redundant with
+    an already-portrait named size, so it parses to exactly `size: letter` --
+    confirmed by reading the rule back through a live CSSOM, where it
+    serialises without the keyword. The commit could not have done anything,
+    and leaving it in the file would document a mechanism that does not exist.
+    """
+    from letter import render
+
+    m = re.search(r"@page\s*\{([^}]*)\}", render.CSS)
+    size = re.search(r"size:\s*([^;]+)", m.group(1)).group(1).strip().lower()
+    assert "portrait" not in size, (
+        "Blink drops `portrait` after a portrait named size -- this is inert, "
+        "and it misrepresents why the orientation control disappears"
     )
 
 

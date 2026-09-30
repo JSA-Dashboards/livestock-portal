@@ -596,6 +596,71 @@ including the deployed app. A frame drawn with negative `position: fixed`
 offsets renders in the first and is clipped in the second — that shipped once.
 Verify layout on the path Ross actually uses.
 
+### The preview must stay a WELL-FORMED document — 2026-09-30
+
+The button was added as `_print_ui + html`. `render.build_html` returns a
+complete page starting `<!DOCTYPE html>`, so putting anything in front of the
+doctype means it is no longer first, the parser **discards it**, and the whole
+letter renders in **quirks mode** — `document.compatMode == "BackCompat"`,
+`document.doctype == null`, and the letter's `<meta>`, `<title>` and entire
+stylesheet hoisted into `<body>`.
+
+Not cosmetic. Diffing the PDF content streams, the first divergence is a
+drawing operator — `388 519 297 1 re` against `388 513 297 1 re`, the same
+rule **six points lower**. The two print paths documented above as producing
+the identical letter were not, and the one that diverged is the one Ross uses.
+The page count stayed at one, which is why it survived unnoticed.
+
+The style now goes in `<head>` and the button just inside `<body>`
+(`_with_print_button`), and the preview's content stream is byte-identical to
+the bare letter's. `tests/test_print_preview.py` pins it.
+
+**The first attempt at that fix failed silently**, in this repo's signature
+way: `doc.find("<body")` matched render.py's own stylesheet comment — "put a
+background on `<body>` and this disappears underneath it" — so the button went
+**inside a CSS comment**, inert. The preview rendered perfectly and simply had
+no print button. The search is anchored after `</head>` now, and a test feeds
+in a letter whose CSS mentions `<body>`.
+
+### Why the print dialog opens on Landscape — and what does NOT fix it
+
+Ross's dialog came up **Layout: Landscape**, so the letter sat below the fold
+of the preview pane and had to be scrolled to read.
+
+**`@page { size: letter portrait }` DOES NOT FIX IT AND WAS REVERTED.** Blink
+discards an orientation keyword that is redundant with an already-portrait
+named size (`Size::ParseSingleValue`), so it parses to exactly
+`size: letter`. Confirmed by reading the rule back through a live CSSOM, where
+it serialises without the keyword, and by the PDF content stream being
+byte-identical. The commit that added it changed nothing. Do not re-apply it;
+a test now pins its absence.
+
+The real mechanism: `GetPageSizeAndOrientationInfo` marks every page `kFixed`
+when `@page` names a size, which sets `all_pages_have_custom_orientation`, and
+the preview **removes** the Layout control rather than pre-selecting Portrait
+— the ticket falls back to the setting's `unavailableValue`, which is
+portrait. `size: letter` alone already does this. `size: auto` would hand the
+control back.
+
+**But it only holds for Chromium's own "Save as PDF" destination.** Choose a
+system printer — **"Microsoft Print to PDF" is the trap**, it reads as the
+same thing — and the Layout control returns, carrying the orientation that
+reader last used. Chromium persists `layout` as a sticky setting per profile
+(`printing.print_preview_sticky_settings`), and both of Ross's Edge profiles
+held `"isLandscapeEnabled": true`. The page box stays portrait because the CSS
+still wins, so a tall sheet sits in a pane sized for a wide one.
+
+So the fix is in the dialog, not the letter: pick **Save as PDF** rather than
+Microsoft Print to PDF, or set Layout to Portrait once and let it stick.
+Nothing in the letter can do either for a client.
+
+One hypothesis was investigated and **refuted**: that the button prints the
+Streamlit page rather than the letter iframe. Chromium's scripted print prints
+the frame that called `print()`, the button is injected inside the letter
+document, and that document is the component iframe. Do not rebuild the letter
+as a Blob in a new tab to "fix" this — it addresses a problem that does not
+exist.
+
 The **chart of the day** is AM only, bottom right, floated into the empty band
 beside the signature so it costs no vertical space. Which market it shows is
 picked from the letter's own text, then the day's candidate headlines, then the
