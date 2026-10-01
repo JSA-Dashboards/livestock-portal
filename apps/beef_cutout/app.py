@@ -215,6 +215,118 @@ def cutout_attribution(sections: dict, grade: str):
     return out.sort_values("Effect"), rms
 
 
+def cutout_recap(sections: dict, hist: pd.DataFrame, grade: str = "choice") -> list:
+    """
+    Short bullets on why the cutout did what it did, as a list of strings.
+
+    EVERY BULLET IS ARITHMETIC. This page can say that chuck accounted for
+    46% of today's move, because that is a sum. It cannot say why packers
+    bid chuck lower, because nothing in LM_XB403 knows -- and a line of
+    invented causality in a market report is worse than no line at all. The
+    recap therefore reports WHAT moved and HOW MUCH of the move it was, and
+    stops where the data stops. Same rule the daily letter runs on: a figure
+    is right or it is marked, and prose that is neither gets a human.
+
+    Three things in here that a reader cannot get from the tiles:
+
+    - WHICH primal actually did it, as a share of the move. The tiles give
+      the total; the biggest primal MOVE is routinely not the biggest cause.
+    - OFFSET. A quiet cutout can be two large primals cancelling, which
+      reads as "nothing happened" and is not the same fact at all.
+    - Whether the move came on heavier or lighter trade, which is the
+      difference between a market and a thin print.
+    """
+    out = []
+    attr = cutout_attribution(sections, grade)
+    if attr is None:
+        return out
+    tbl, _rms = attr
+    total = float(tbl["Effect"].sum())
+    label = grade.capitalize()
+
+    # 1. the move itself, with the other grade for contrast
+    cur = hist[grade].dropna()
+    if len(cur) >= 2:
+        other = "select" if grade == "choice" else "choice"
+        o = hist[other].dropna()
+        bit = (f"**{label} cutout {total:+.2f} to {cur.iloc[-1]:,.2f}**")
+        if len(o) >= 2:
+            od = o.iloc[-1] - o.iloc[-2]
+            sp_now = hist["spread"].dropna()
+            if len(sp_now) >= 2:
+                sp_d = sp_now.iloc[-1] - sp_now.iloc[-2]
+                widened = "widened" if sp_d > 0 else ("narrowed" if sp_d < 0 else "flat")
+                bit += (f", {other.capitalize()} {od:+.2f} — the Choice–Select "
+                        f"spread {widened} {abs(sp_d):.2f} to {sp_now.iloc[-1]:,.2f}")
+        out.append(bit + ".")
+
+    # 2. who did it, as a share of the move
+    if abs(total) > 0.005:
+        lead = tbl.reindex(tbl["Effect"].abs().sort_values(ascending=False).index).iloc[0]
+        share = abs(lead["Effect"] / total) * 100
+        out.append(
+            f"**{lead['Primal'].replace('Primal ', '')} did most of it** — "
+            f"{lead['Move']:+.2f} on {lead['Weight']:.2f}% of the carcass is "
+            f"{lead['Effect']:+.2f} of the {total:+.2f}, or {share:.0f}% of the move."
+        )
+
+    # 3. breadth, and the odd one out
+    up = tbl[tbl["Move"] > 0]
+    dn = tbl[tbl["Move"] < 0]
+    if len(up) and len(dn):
+        minority, direction = (up, "higher") if len(up) <= len(dn) else (dn, "lower")
+        names = ", ".join(f"{r['Primal'].replace('Primal ', '')} {r['Move']:+.2f}"
+                          for _, r in minority.iterrows())
+        out.append(f"{len(dn)} of {len(tbl)} primals lower, {len(up)} higher — "
+                   f"the {direction} side was {names}.")
+    elif len(dn) == len(tbl):
+        out.append(f"All {len(tbl)} primals lower — broad, not one cut.")
+    elif len(up) == len(tbl):
+        out.append(f"All {len(tbl)} primals higher — broad, not one cut.")
+
+    # 4. OFFSET. A quiet cutout built from large opposing moves is a
+    #    different fact from a quiet day, and the tiles cannot show it.
+    gross = float(tbl["Effect"].abs().sum())
+    if gross > 0 and abs(total) < gross * 0.55:
+        out.append(
+            f"Largely offsetting: {gross:.2f} of gross primal movement netted "
+            f"to {total:+.2f}, so the quiet headline hides two sides pulling "
+            f"against each other."
+        )
+
+    # 5. did it come on trade, or on nobody?
+    loads = hist["total_loads"].dropna() if "total_loads" in hist.columns else pd.Series(dtype=float)
+    if len(loads) >= 11:
+        now, avg = loads.iloc[-1], loads.iloc[-11:-1].mean()
+        if avg:
+            pct = (now / avg - 1) * 100
+            how = ("heavy" if pct >= 15 else "light" if pct <= -15 else "normal")
+            out.append(f"Volume {how}: {now:.1f} loads against a 10-day average of "
+                       f"{avg:.1f} ({pct:+.0f}%).")
+
+    # 6. the loudest CUTS, volume-screened -- a thin print will out-move
+    #    everything on percentage and mean nothing.
+    cuts = _cut_numbers(sections.get(f"{label} Cuts", pd.DataFrame()))
+    if not cuts.empty:
+        piv = cuts.pivot_table(index="report_date", columns="item_description",
+                               values="weighted_average", aggfunc="last").sort_index()
+        vol = cuts.pivot_table(index="report_date", columns="item_description",
+                               values="total_pounds", aggfunc="last").sort_index()
+        if len(piv) >= 2:
+            d = (piv.iloc[-1] - piv.iloc[-2]).dropna()
+            lbs = vol.iloc[-1].reindex(d.index)
+            floor = lbs.median()
+            keep = d[lbs >= floor]
+            if len(keep):
+                hi, lo = keep.idxmax(), keep.idxmin()
+                out.append(
+                    f"Among cuts trading at least the day's median {floor:,.0f} lbs: "
+                    f"**{hi}** {keep[hi]:+.2f}, **{lo}** {keep[lo]:+.2f}. "
+                    f"Thinner cuts moved further and are left out on purpose."
+                )
+    return out
+
+
 # ── Individual cuts ──────────────────────────────────────────────────────────
 #
 # THE DATA WAS ALREADY BEING DOWNLOADED AND THROWN AWAY. fetch_lmr asks for
@@ -775,6 +887,13 @@ if _attr is not None:
     st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
     st.markdown('<div class="sec-header">What Moved the Cutout — Choice</div>',
                 unsafe_allow_html=True)
+
+    # THE RECAP IN WORDS, above the table it summarises. Every bullet is
+    # arithmetic -- see cutout_recap's docstring for why there is no line in
+    # here guessing at a reason.
+    for _b in cutout_recap(sections, hist, "choice"):
+        st.markdown(f"- {_b.replace('$', chr(92) + '$')}")
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
     st.dataframe(
         _tbl, hide_index=True, use_container_width=True,
         height=38 + 35 * len(_tbl),

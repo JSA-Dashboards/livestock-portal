@@ -43,7 +43,7 @@ TRUE = {"Primal Chuck": 0.2962, "Primal Round": 0.2232, "Primal Loin": 0.2126,
 def _load():
     """Exec the attribution helpers out of the Streamlit script, via ast."""
     return load_from_app(APP, "_cut_numbers", "primal_weights",
-                         "cutout_attribution",
+                         "cutout_attribution", "cutout_recap",
                          consts=("CUT_NUM_COLS", "CUT_PRICE_COLS"),
                          globals_={"pd": pd, "np": np})
 
@@ -146,3 +146,67 @@ def test_missing_sections_are_refused():
     ns = _load()
     assert ns["primal_weights"]({}, "choice") == (None, None, None)
     assert ns["cutout_attribution"]({}, "choice") is None
+
+
+# ── the written recap ────────────────────────────────────────────────────────
+
+def _hist_from(sections, ns):
+    cut = ns["_cut_numbers"](sections["Current Cutout Values"])
+    return pd.DataFrame({
+        "report_date": cut["report_date"],
+        "choice": cut["choice_600_900_current"],
+        "select": cut["select_600_900_current"],
+        "spread": cut["choice_600_900_current"] - cut["select_600_900_current"],
+        "total_loads": np.linspace(90, 110, len(cut)),
+    })
+
+
+def test_the_recap_names_the_biggest_CAUSE_not_the_biggest_mover():
+    """
+    The bullet has to agree with the Effect column. A 20-point flank move
+    against a 5-point chuck move must still credit chuck.
+    """
+    ns = _load()
+    sections = _sections()
+    primal = sections["Composite Primal Values"]
+    last = primal["report_date"].max()
+
+    def bump(desc, amt):
+        m = (primal["report_date"] == last) & (primal["primal_desc"] == desc)
+        primal.loc[m, "choice_600_900"] = (
+            float(primal.loc[m, "choice_600_900"].iloc[0].replace(",", "")) + amt)
+
+    bump("Primal Flank", 20.0)
+    bump("Primal Chuck", 5.0)
+    text = " ".join(ns["cutout_recap"](sections, _hist_from(sections, ns), "choice"))
+    assert "Chuck did most of it" in text, text
+
+
+def test_the_recap_states_a_share_that_adds_up():
+    ns = _load()
+    sections = _sections()
+    bullets = ns["cutout_recap"](sections, _hist_from(sections, ns), "choice")
+    assert bullets, "no recap produced"
+    # the lead bullet quotes the cutout move; it must match the attribution
+    tbl, _ = ns["cutout_attribution"](sections, "choice")
+    assert f"{tbl['Effect'].sum():+.2f}" in " ".join(bullets)
+
+
+def test_the_recap_invents_no_causes():
+    """
+    EVERY BULLET IS ARITHMETIC. Nothing in LM_XB403 knows why packers bid a
+    primal lower, and a market report that guesses is worse than one that
+    stops. This pins the absence of the words that would mean guessing.
+    """
+    ns = _load()
+    sections = _sections()
+    text = " ".join(ns["cutout_recap"](sections, _hist_from(sections, ns), "choice")).lower()
+    for word in ("because", "due to", "driven by demand", "packers", "buyers",
+                 "likely", "suggests", "expect", "should"):
+        assert word not in text, f"the recap is editorialising: {word!r}"
+
+
+def test_no_recap_when_the_fit_is_bad():
+    ns = _load()
+    sections = _sections(noise=40.0, seed=3)
+    assert ns["cutout_recap"](sections, _hist_from(sections, ns), "choice") == []
