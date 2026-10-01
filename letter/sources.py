@@ -1620,11 +1620,14 @@ def fetch_feeder_index() -> dict:
             "SELECT report_date AS date, fci_value FROM fci_daily "
             "WHERE fci_value IS NOT NULL", conn)
         try:
-            published = db.read_sql_lower("SELECT report_date AS date FROM cme_ftp_daily", conn)
+            # fci_value TOO, not just the date. See the merge below -- reading
+            # this table for its date alone is what produced a wrong change.
+            published = db.read_sql_lower(
+                "SELECT report_date AS date, fci_value FROM cme_ftp_daily", conn)
         except Exception:
             # A missing CME table degrades to the newest estimate rather than
             # to nothing -- headline_index_date() handles last_published=None.
-            published = pd.DataFrame(columns=["date"])
+            published = pd.DataFrame(columns=["date", "fci_value"])
     finally:
         conn.close()
 
@@ -1645,18 +1648,45 @@ def fetch_feeder_index() -> dict:
     if headline is None:
         return {}
 
-    row = ours[ours["date"].dt.date == headline]
-    if row.empty:
+    # CME'S PUBLISHED VALUE WINS FOR ANY DATE IT COVERS. fci_daily is JSA's
+    # MARS reconstruction, and its job is the trailing day or two CME has not
+    # printed yet -- a prediction, not a stand-in for data CME has already
+    # released. The dashboard's load_data() says exactly that in its priority
+    # order, and this function did not honour it: it read cme_ftp_daily for
+    # its DATE and threw the value away.
+    #
+    # What that cost, 2026-10-01. CME published 09-29 at 338.03; our estimate
+    # for the same date was 338.68 and was never superseded. The brief printed
+    #
+    #     339.05 - 338.68 (our stale estimate)  = +0.37
+    #
+    # where the dashboard, taking CME's print, showed
+    #
+    #     339.05 - 338.03 (CME's published)     = +1.02
+    #
+    # Reported by Ross as "the daily fci estimate is 1.02 higher". Same class
+    # of failure as the rounding disagreement below: a letter whose change
+    # contradicts the dashboard is wrong however it was computed, and nothing
+    # raised because both numbers were real.
+    #
+    # The headline date is by definition the first business day AFTER CME's
+    # last file, so its own value always stays ours. It is the PRIOR date that
+    # CME has usually printed by now.
+    merged = {d.date(): float(v) for d, v in zip(ours["date"], ours["fci_value"])}
+    if not published.empty and "fci_value" in published.columns:
+        pub2 = published.copy()
+        pub2["date"] = pd.to_datetime(pub2["date"], errors="coerce")
+        pub2 = pub2.dropna(subset=["date", "fci_value"])
+        for d, v in zip(pub2["date"], pub2["fci_value"]):
+            merged[d.date()] = float(v)
+
+    if headline not in merged:
         return {}
-    value = float(row.iloc[0]["fci_value"])
+    value = merged[headline]
 
     # Prior available date, for the day-on-day move.
     earlier = sorted(d for d in available if d < headline)
-    prev_val = None
-    if earlier:
-        prev_row = ours[ours["date"].dt.date == earlier[-1]]
-        if not prev_row.empty:
-            prev_val = float(prev_row.iloc[0]["fci_value"])
+    prev_val = merged.get(earlier[-1]) if earlier else None
 
     # ROUND BOTH VALUES TO DISPLAY PRECISION BEFORE DIFFERENCING, not after,
     # and the reason is that the letter and the dashboard must agree.

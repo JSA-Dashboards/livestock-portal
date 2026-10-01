@@ -437,6 +437,36 @@ if the CME feed breaks the headline freezes while the rest of the page keeps
 moving. That happened 2026-09-14 through 09-17. If the headline stops advancing
 while the Daily line does not, suspect the CME ingest, not this page.
 
+### The letter and the dashboard must agree on the FCI, and twice they did not
+
+Both read the same two tables and both are "right in isolation", which is why
+each disagreement went unnoticed until Ross put the two side by side.
+
+- **2026-09-29, rounding.** The brief printed `-0.17 at 337.63` where the
+  dashboard showed the same 337.63 down 0.16. The raw move was -0.169151; the
+  letter rounded the DIFFERENCE, the dashboard rounds the VALUES first. The
+  dashboard's convention won, and it is the better one: the letter prints
+  337.63 today and printed 337.79 yesterday, so a reader holding both
+  subtracts them and must get 0.16.
+- **2026-10-01, source precedence.** The brief printed `+0.37 at 339.05`
+  where the dashboard showed `+1.02`. `fci_daily` is JSA's MARS
+  reconstruction; `cme_ftp_daily` is CME's published file. **CME's value wins
+  for any date it covers** — the reconstruction's job is the trailing day or
+  two CME has not printed yet, and `load_data()` in the dashboard says so in
+  its priority order. `fetch_feeder_index` read `cme_ftp_daily` for its DATE
+  and threw the value away, so our superseded 338.68 estimate for 09-29 stayed
+  in the subtraction against CME's published 338.03.
+
+The headline date itself is by definition the first business day AFTER CME's
+last file, so its value is always ours. It is the PRIOR date that CME has
+usually printed by the time the letter goes out, and that is the one to take
+from them. `tests/test_feeder_index.py` pins it with the real 09-29/09-30
+numbers and runs the REAL `index_dates` rule rather than a fake.
+
+The general lesson, since it has now cost two mornings: **when the letter and
+a dashboard quote the same figure, a disagreement is a bug even when both
+numbers are defensible.** Neither will raise.
+
 ## The COF Recap tab
 
 The client one-pager, added 2026-09-22. It does not read QuickStats like the
