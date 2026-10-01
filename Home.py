@@ -33,6 +33,13 @@ st.set_page_config(
     layout="wide",
 )
 
+# Hide the Streamlit Community Cloud viewer badge (the profile avatar that links
+# to the creator's other apps) for a clean, client-facing footer.
+st.markdown(
+    "<style>[class*='_profileContainer_']{display:none !important;}</style>",
+    unsafe_allow_html=True,
+)
+
 DASHBOARDS = [
     {"title": "CME Feeder Cattle Index", "page": "apps/cme_feeder_cattle/app.py", "url_path": "cme-feeder-cattle-index",
      "desc": "12-state feeder steer index trend, weekly rundown, and basis by sale location."},
