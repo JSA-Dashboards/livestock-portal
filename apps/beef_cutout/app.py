@@ -1,4 +1,5 @@
 import streamlit as st
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import requests
@@ -132,6 +133,88 @@ def fmt_loads(v):
     return f"{v:.1f}" if v is not None else "—"
 
 
+# ── What moved the cutout ────────────────────────────────────────────────────
+#
+# THE WEIGHTS ARE SOLVED FROM THE DATA, NOT TYPED IN. The cutout is a fixed
+# weighted average of the seven primals, and USDA publishes both sides of
+# that equation every day -- the primal values and the resulting cutout. So
+# the weights can be recovered by least squares rather than quoted from
+# memory, and the residual says whether the answer is trustworthy.
+#
+# Solved over 260 reports on 2026-10-01:
+#
+#     Chuck 29.62%  Round 22.32%  Loin 21.26%  Rib 11.40%
+#     Plate  7.10%  Brisket 4.95%  Flank 3.35%          -> 100.000%
+#
+# Summing to 100% was NOT imposed, and the maximum residual across those 260
+# reports is 0.008 $/cwt. Choice and Select give the same weights to three
+# decimals, which is the expected answer: they are carcass proportions, not
+# prices. Recovering them each run means the page follows USDA if they are
+# ever re-based, instead of quietly drifting against a hard-coded table.
+
+def primal_weights(sections: dict, grade: str):
+    """
+    (names, weights, rms) for the grade, or (None, None, None) if unsolvable.
+
+    Returns the residual so the caller can refuse to show a decomposition it
+    cannot stand behind -- a fit that has gone bad must not be presented as
+    an explanation of anything.
+    """
+    primal = _cut_numbers(sections.get("Composite Primal Values", pd.DataFrame()))
+    cutout = _cut_numbers(sections.get("Current Cutout Values", pd.DataFrame()))
+    pcol, ccol = f"{grade}_600_900", f"{grade}_600_900_current"
+    if primal.empty or cutout.empty or pcol not in primal.columns:
+        return None, None, None
+    if "primal_desc" not in primal.columns or ccol not in cutout.columns:
+        return None, None, None
+
+    P = primal.pivot_table(index="report_date", columns="primal_desc",
+                           values=pcol, aggfunc="last").sort_index()
+    y = cutout.set_index("report_date")[ccol].sort_index()
+    df = P.join(y.rename("_cut"), how="inner").dropna()
+    names = [c for c in df.columns if c != "_cut"]
+    # Need more reports than primals for the system to be determined at all.
+    if len(df) <= len(names) + 2 or not names:
+        return None, None, None
+    A, b = df[names].to_numpy(float), df["_cut"].to_numpy(float)
+    try:
+        w, *_ = np.linalg.lstsq(A, b, rcond=None)
+    except np.linalg.LinAlgError:
+        return None, None, None
+    rms = float(np.sqrt(((b - A @ w) ** 2).mean()))
+    return names, w, rms
+
+
+def cutout_attribution(sections: dict, grade: str):
+    """
+    Which primals moved the cutout today, and by how much of it.
+
+    WHY A DECOMPOSITION RATHER THAN A LIST OF PRIMAL MOVES. The biggest mover
+    is routinely not the biggest cause. On 2026-10-01 Choice brisket fell
+    2.23 and chuck fell 9.22, but brisket is 4.95% of the carcass and chuck
+    is 29.62%, so chuck did -2.73 of the cutout's -6.00 and brisket did
+    -0.11 -- twenty-five times less. Reading the primal column alone gets
+    that ordering wrong, which is the whole reason this panel exists.
+    """
+    names, w, rms = primal_weights(sections, grade)
+    if names is None or rms is None or rms > 0.25:
+        return None
+    primal = _cut_numbers(sections.get("Composite Primal Values", pd.DataFrame()))
+    P = primal.pivot_table(index="report_date", columns="primal_desc",
+                           values=f"{grade}_600_900", aggfunc="last").sort_index()
+    P = P[names].dropna()
+    if len(P) < 2:
+        return None
+    d = P.iloc[-1] - P.iloc[-2]
+    out = pd.DataFrame({
+        "Primal": names,
+        "Move": d.to_numpy(float),
+        "Weight": w * 100,
+        "Effect": d.to_numpy(float) * w,
+    })
+    return out.sort_values("Effect"), rms
+
+
 # ── Individual cuts ──────────────────────────────────────────────────────────
 #
 # THE DATA WAS ALREADY BEING DOWNLOADED AND THROWN AWAY. fetch_lmr asks for
@@ -148,12 +231,19 @@ def fmt_loads(v):
 # of three.
 CUT_NUM_COLS = ("weighted_average", "total_pounds", "number_trades",
                 "price_range_low", "price_range_high",
-                "choice_600_900", "select_600_900")
+                "choice_600_900", "select_600_900",
+                # Current Cutout Values, a FOURTH schema. primal_weights()
+                # read these and only worked because .to_numpy(float) parses
+                # a comma-free string -- which the cutout is today at ~$376
+                # and the ribeye already is not at $1,361. Coerce them here
+                # rather than rely on the value staying under four figures.
+                "choice_600_900_current", "select_600_900_current")
 
 
 # The columns where 0.00 means "did not trade", never "cost nothing".
 CUT_PRICE_COLS = ("weighted_average", "price_range_low", "price_range_high",
-                  "choice_600_900", "select_600_900")
+                  "choice_600_900", "select_600_900",
+                  "choice_600_900_current", "select_600_900_current")
 
 
 def _cut_numbers(df: pd.DataFrame) -> pd.DataFrame:
@@ -233,6 +323,11 @@ def cuts_panel(sections: dict):
         ppiv = primal.pivot_table(index="report_date", columns="primal_desc",
                                   values="choice_600_900", aggfunc="last").sort_index()             if "choice_600_900" in primal.columns else pd.DataFrame()
         if not ppiv.empty and len(ppiv) > 1:
+            # The carcass share beside each primal, so the tiles say how much
+            # a move there is worth. Chuck at 29.62% and brisket at 4.95%
+            # move the cutout six times differently for the same $1.
+            _wn, _wv, _wr = primal_weights(sections, "choice")
+            share = dict(zip(_wn, _wv)) if _wn and _wr is not None and _wr <= 0.25 else {}
             names = [c for c in ppiv.columns if pd.notna(ppiv.iloc[-1][c])]
             for chunk in [names[i:i + 4] for i in range(0, len(names), 4)]:
                 cols = st.columns(len(chunk))
@@ -240,8 +335,11 @@ def cuts_panel(sections: dict):
                     cur = ppiv.iloc[-1][name]
                     pri = ppiv.iloc[-2][name]
                     d = (cur - pri) if pd.notna(pri) else None
+                    lbl = str(name)
+                    if name in share:
+                        lbl += f" · {share[name] * 100:.1f}% of carcass"
                     with col:
-                        st.markdown(tile(str(name), fmt(cur), delta_html(d)),
+                        st.markdown(tile(lbl, fmt(cur), delta_html(d)),
                                     unsafe_allow_html=True)
             st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
@@ -664,6 +762,46 @@ with cols[2]:
 with cols[3]:
     st.markdown(tile("Loads Day Change", fmt_loads(loads_d1), delta_html(loads_d1, " lds"), "tile-vol"),
                 unsafe_allow_html=True)
+
+
+# ── What moved the cutout ────────────────────────────────────────────────────
+# Directly under the tiles that state the move, because it is the answer to
+# the question those tiles raise. Anything inserted between them separates
+# the number from its explanation.
+
+_attr = cutout_attribution(sections, "choice")
+if _attr is not None:
+    _tbl, _rms = _attr
+    st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="sec-header">What Moved the Cutout — Choice</div>',
+                unsafe_allow_html=True)
+    st.dataframe(
+        _tbl, hide_index=True, use_container_width=True,
+        height=38 + 35 * len(_tbl),
+        column_config={
+            "Primal": st.column_config.TextColumn(width="medium"),
+            "Move": st.column_config.NumberColumn(
+                "Primal move", format="%+.2f",
+                help="The primal's own change since the prior report, $/cwt"),
+            "Weight": st.column_config.NumberColumn(
+                "Share of carcass", format="%.2f%%",
+                help="Solved from USDA's own primal values and cutout, "
+                     "not typed in"),
+            "Effect": st.column_config.NumberColumn(
+                "Effect on cutout", format="%+.2f",
+                help="Primal move x share — this is what actually moved the "
+                     "cutout, and it is what to read"),
+        },
+    )
+    st.caption(
+        f"**Effect on cutout** is the column that answers the question — the "
+        f"biggest mover is routinely not the biggest cause. The seven effects "
+        f"sum to **{_tbl['Effect'].sum():+.2f}**, against the published day "
+        f"change of **{cd1:+.2f}**. Shares are recovered from USDA's own "
+        f"primal values and cutout by least squares over "
+        f"{len(hist)} reports (residual {_rms:.3f} $/cwt), so they follow "
+        f"USDA rather than a hard-coded table."
+    )
 
 
 # ── Cutout Trend Chart ───────────────────────────────────────────────────────

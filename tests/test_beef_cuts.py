@@ -23,6 +23,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+sys.path.insert(0, str(Path(__file__).parent))
+from streamlit_source import load_from_app  # noqa: E402
+
 APP = ROOT / "apps" / "beef_cutout" / "app.py"
 
 
@@ -34,18 +37,13 @@ def _cut_numbers():
     dashboard and hits the USDA API. Exec'ing the one function keeps this a
     unit test of the thing that actually goes wrong.
     """
-    src = APP.read_text(encoding="utf-8")
-    parts = []
-    for name in ("CUT_NUM_COLS", "CUT_PRICE_COLS"):
-        m = re.search(rf"^{name} = \((.*?)\)$", src, re.S | re.M)
-        assert m, f"{name} not found in app.py"
-        parts.append(f"{name} = ({m.group(1)})")
-    m = re.search(r"^def _cut_numbers\(df: pd\.DataFrame\) -> pd\.DataFrame:.*?(?=\n\S)",
-                  src, re.S | re.M)
-    assert m, "_cut_numbers not found in app.py"
-    ns = {"pd": pd}
-    exec("\n".join(parts) + "\n\n" + m.group(0), ns)
-    return ns["_cut_numbers"]
+    # ast, NOT a regex. A regex for `NAME = (...)` broke the moment a comment
+    # inside the tuple contained a bracket -- eleven tests failing on the
+    # extraction rather than on the thing under test. Parsing the module is
+    # exact and cannot be fooled by prose, which this repo keeps proving.
+    return load_from_app(APP, "_cut_numbers",
+                         consts=("CUT_NUM_COLS", "CUT_PRICE_COLS"),
+                         globals_={"pd": pd})
 
 
 def _frame(**cols):
