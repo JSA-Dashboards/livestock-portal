@@ -64,7 +64,11 @@ _SPORT = re.compile(
     r"\b(world series|super bowl|olympic\w*|baseball|football|basketball|hockey|"
     r"golf|tennis|boxing|nascar|kentucky derby|championship|pennant|home run|"
     r"homer|no-hitter|perfect game|nba|nfl|mlb|nhl|pga|u\.s\. open|world record|"
-    r"gold medal|triple crown|heisman|heavyweight|pitcher|quarterback)\b", re.I)
+    r"gold medal|triple crown|heisman|heavyweight|pitcher|quarterback|"
+    # Added 2026-10-01: Pele's farewell game carried NO tag at all, because
+    # the one sport most of the world plays was missing from the list.
+    r"soccer|world cup|stanley cup|wimbledon|the masters|indy 500|marathon|"
+    r"grand slam|hall of fame|batting|touchdown|pitched|ballpark|athlete)\b", re.I)
 
 _AG = re.compile(
     r"\b(farm\w*|ranch\w*|cattle|livestock|beef|corn|wheat|soybean\w*|harvest\w*|"
@@ -73,15 +77,45 @@ _AG = re.compile(
 
 # "first" BUT NOT "first lady". That one matched a COVID diagnosis and offered
 # it as a fun fact; the trailing negative lookahead is the whole fix.
+#
+# IT IS A MILESTONE LIST, NOT LITERALLY "first". Widened 2026-10-01 after the
+# Model T being unveiled, Jimmy Carter being born and Johnny Carson's first
+# Tonight Show all failed to register as anything. A thing being made, begun
+# or born is the shape of a fun fact; "first" was only ever a proxy for it.
 _FIRST = re.compile(
     r"\b(first(?! lady| famil| gentleman)|becomes? the first|opened?|opens|"
     r"founded|establish\w*|dedicat\w*|"
-    r"patent\w*|inaugurat\w*|invent\w*|debut\w*|premiere\w*|record)\b", re.I)
+    r"patent\w*|inaugurat\w*|invent\w*|debut\w*|premiere\w*|record|"
+    r"unveil\w*|\bborn\b|launch\w*|introduc\w*|christen\w*|"
+    r"complete[sd]?|broadcast|televis\w*|took office)\b", re.I)
 
+# AMERICAN-NESS IS USUALLY IN A PROPER NOUN, not in the word "American".
+# Widened 2026-10-01 for the same three misses: "Ford Motor Company", "Jimmy
+# Carter" and "Tonight Show" are each unmistakably American and none of them
+# contained a single term this pattern knew.
+#
+# Presidents are listed by surname, but the ambiguous ones are deliberately
+# LEFT OUT -- Grant, Bush, Pierce, Taylor, Arthur, Hayes, Polk and Tyler are
+# ordinary English words and would tag half the list as American. The ones
+# kept are distinctive enough to mean the person. A US tag is never sufficient
+# on its own anyway: it still has to pair with a milestone.
 _US = re.compile(
     r"\b(united states|american|u\.s\.|\bus\b|nasa|congress|president|"
     r"washington|new york|california|texas|chicago|wyoming|iowa|kansas|"
-    r"nebraska|missouri|oklahoma|colorado|montana|dakota|mississippi)\b", re.I)
+    r"nebraska|missouri|oklahoma|colorado|montana|dakota|mississippi|"
+    r"boston|philadelphia|detroit|atlanta|seattle|denver|pittsburgh|"
+    r"los angeles|san francisco|minnesota|michigan|ohio|indiana|illinois|"
+    r"wisconsin|tennessee|kentucky|georgia|virginia|carolina|alabama|"
+    r"arkansas|louisiana|arizona|nevada|utah|idaho|oregon|alaska|hawaii|"
+    r"massachusetts|connecticut|pennsylvania|maryland|florida|"
+    r"lincoln|roosevelt|kennedy|reagan|truman|eisenhower|nixon|carter|"
+    r"jefferson|madison|monroe|obama|clinton|mckinley|garfield|harding|"
+    r"coolidge|hoover|\btaft\b|biden|trump|"
+    r"ford motor|model t|general motors|chevrolet|coca-cola|disney|"
+    r"hollywood|broadway|tonight show|wall street|harvard|yale|smithsonian|"
+    r"apollo|boeing|edison|wright brothers|statue of liberty|empire state|"
+    r"golden gate|route 66|yellowstone|white house|supreme court|senate|"
+    r"ellis island|world's fair|major league|super bowl)\b", re.I)
 
 
 def _get(url: str, timeout: int = 25) -> str:
