@@ -26,6 +26,18 @@ SELECT_COLOR = "#6fa8c4"
 SPREAD_COLOR = "#c4b456"
 VOL_COLOR    = "#9b89c4"
 
+# Shared Plotly axis styling. DEFINED UP HERE WITH THE OTHER STYLE CONSTANTS,
+# not beside the first chart that uses it: cuts_panel() reads it too and runs
+# from the view switch, which is well above where this used to sit. Module
+# level means it resolved at call time and would have raised NameError only
+# for the reader who clicked the new view.
+AXIS = dict(
+    gridcolor=DM_BORDER, linecolor=DM_BORDER, showgrid=True,
+    tickfont=dict(color=DM_MUTED, size=11),
+    title_font=dict(color=DM_MUTED, size=11),
+    zeroline=False,
+)
+
 JSA_LOGO_WHITE = "https://www.jpsi.com/wp-content/themes/gate39media/img/logo-white.png"
 
 # ── USDA LMR API (no key required) ──────────────────────────────────────────
@@ -118,6 +130,226 @@ def fmt(v, prefix="$"):
 
 def fmt_loads(v):
     return f"{v:.1f}" if v is not None else "—"
+
+
+# ── Individual cuts ──────────────────────────────────────────────────────────
+#
+# THE DATA WAS ALREADY BEING DOWNLOADED AND THROWN AWAY. fetch_lmr asks for
+# allSections, which is eleven sections including "Choice Cuts" (42 items),
+# "Select Cuts" (42) and "Composite Primal Values" (7). The page used three of
+# them. So this view costs no extra request and no extra second -- it reads
+# what the existing fetch already paid for.
+
+# EVERY numeric column across all three sections, because they do not share a
+# schema: the cut sections carry weighted_average/total_pounds, and Composite
+# Primal Values carries choice_600_900/select_600_900 instead. Leaving the
+# primal pair out left them as STRINGS and the panel died on "str - str" the
+# first time it rendered -- a column list that was right for two sections out
+# of three.
+CUT_NUM_COLS = ("weighted_average", "total_pounds", "number_trades",
+                "price_range_low", "price_range_high",
+                "choice_600_900", "select_600_900")
+
+
+# The columns where 0.00 means "did not trade", never "cost nothing".
+CUT_PRICE_COLS = ("weighted_average", "price_range_low", "price_range_high",
+                  "choice_600_900", "select_600_900")
+
+
+def _cut_numbers(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Strings to numbers, with the two traps USDA sets in this feed.
+
+    COMMAS. These arrive as "239,801" and "1,361.58". pd.to_numeric on those
+    yields NaN silently, which empties the table rather than raising, so the
+    separators come out first.
+
+    AND 0.00 MEANS "NO TRADE", NOT A PRICE. When a cut did not trade in a
+    grade on a report, USDA prints 0.00 rather than leaving it blank. Over
+    259 reports that is 978 zeros across 18 Choice cuts and **3,612 across 38
+    of the 42 Select cuts** -- not an edge case, the normal state of the
+    thinner cuts.
+
+    Left as zeros they are wrong three separate ways, all of them quiet:
+    the Select column shows a cut trading at $0.00; the Choice-Select spread
+    becomes the entire Choice price wearing the word "spread"; and the chart's
+    y-axis is dragged to zero, which is how this was found -- a ribeye running
+    $826-$1,417 was plotted on an axis from -85 to 1502 with 40% of the panel
+    empty, so a $130 move read as a flat line.
+
+    NaN is the honest value: the cut did not trade, so there is no price.
+    """
+    out = df.copy()
+    for c in CUT_NUM_COLS:
+        if c in out.columns:
+            out[c] = pd.to_numeric(
+                out[c].astype(str).str.replace(",", "", regex=False), errors="coerce")
+    for c in CUT_PRICE_COLS:
+        if c in out.columns:
+            # mask(), not replace(0, pd.NA): the column is float64 from
+            # to_numeric, and pd.NA will not cast back into it -- that raised
+            # "float() argument must be a string or a real number, not
+            # 'NAType'". mask leaves a plain NaN in a float column.
+            out[c] = out[c].mask(out[c] == 0)
+    return out
+
+
+def cuts_panel(sections: dict):
+    """
+    Every individual cut, its move since the prior report, and its history.
+
+    WEIGHT IS SHOWN BESIDE EVERY PRICE, and that is the point of the table
+    rather than a decoration. These are negotiated sales: a cut that traded
+    4,700 lbs and one that traded 420,000 lbs both print a weighted average,
+    and the first will swing several percent on a handful of loads. On
+    2026-10-01 the lip-on ribeye printed 1,417.50 on 8,783 lbs and then
+    1,361.58 on 239,801 lbs the next day -- a "-55.92 day" that is mostly the
+    thin print correcting. Sorting by percent move without looking at the
+    pounds column will mislead you about that every week.
+    """
+    choice = _cut_numbers(sections.get("Choice Cuts", pd.DataFrame()))
+    select = _cut_numbers(sections.get("Select Cuts", pd.DataFrame()))
+    primal = _cut_numbers(sections.get("Composite Primal Values", pd.DataFrame()))
+
+    if choice.empty:
+        st.warning("USDA returned no individual-cut sections for this report.")
+        return
+
+    piv = choice.pivot_table(index="report_date", columns="item_description",
+                             values="weighted_average", aggfunc="last").sort_index()
+    vol = choice.pivot_table(index="report_date", columns="item_description",
+                             values="total_pounds", aggfunc="last").sort_index()
+    if len(piv) < 2:
+        st.warning("Only one report in range — no day-over-day move to show.")
+        return
+
+    last, prev = piv.index[-1], piv.index[-2]
+    st.markdown(
+        f'<div class="sec-header">Individual Cuts — {last:%b %d, %Y} '
+        f'vs {prev:%b %d}</div>', unsafe_allow_html=True)
+
+    # ── primal strip ────────────────────────────────────────────────────────
+    if not primal.empty and "primal_desc" in primal.columns:
+        ppiv = primal.pivot_table(index="report_date", columns="primal_desc",
+                                  values="choice_600_900", aggfunc="last").sort_index()             if "choice_600_900" in primal.columns else pd.DataFrame()
+        if not ppiv.empty and len(ppiv) > 1:
+            names = [c for c in ppiv.columns if pd.notna(ppiv.iloc[-1][c])]
+            for chunk in [names[i:i + 4] for i in range(0, len(names), 4)]:
+                cols = st.columns(len(chunk))
+                for col, name in zip(cols, chunk):
+                    cur = ppiv.iloc[-1][name]
+                    pri = ppiv.iloc[-2][name]
+                    d = (cur - pri) if pd.notna(pri) else None
+                    with col:
+                        st.markdown(tile(str(name), fmt(cur), delta_html(d)),
+                                    unsafe_allow_html=True)
+            st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+
+    # ── the movers table ────────────────────────────────────────────────────
+    chg = piv.loc[last] - piv.loc[prev]
+    tbl = pd.DataFrame({
+        "Cut": piv.columns,
+        "$/cwt": piv.loc[last].values,
+        "Day $": chg.values,
+        "Day %": (chg / piv.loc[prev] * 100).values,
+        "Pounds": vol.loc[last].reindex(piv.columns).values,
+    }).dropna(subset=["$/cwt", "Day $"]).sort_values("Day %", ascending=False)
+
+    sel_last = (select.pivot_table(index="report_date", columns="item_description",
+                                   values="weighted_average", aggfunc="last")
+                .sort_index().iloc[-1] if not select.empty else pd.Series(dtype=float))
+    tbl["Select"] = [sel_last.get(c) for c in tbl["Cut"]]
+    # Choice over Select on the same cut -- the quality spread cut by cut,
+    # which the composite number cannot show.
+    tbl["Ch-Se"] = tbl["$/cwt"] - tbl["Select"]
+
+    st.dataframe(
+        tbl, hide_index=True, use_container_width=True, height=430,
+        column_config={
+            "Cut": st.column_config.TextColumn(width="large"),
+            "$/cwt": st.column_config.NumberColumn(format="$%.2f"),
+            "Day $": st.column_config.NumberColumn(format="%+.2f"),
+            "Day %": st.column_config.NumberColumn(format="%+.2f%%"),
+            "Pounds": st.column_config.NumberColumn(format="%,d", help="Pounds traded "
+                                                    "on this report — a thin print "
+                                                    "moves several percent on a few loads"),
+            "Select": st.column_config.NumberColumn(format="$%.2f"),
+            "Ch-Se": st.column_config.NumberColumn("Ch−Se", format="%+.2f"),
+        },
+    )
+    st.caption("Sortable. **Read the Pounds column with the percentage** — these are "
+               "negotiated sales, and a cut that traded a few thousand pounds will "
+               "swing on a single load. Blank Select means that cut did not trade "
+               "in the Select grade on this report.")
+
+    # ── one cut's history ───────────────────────────────────────────────────
+    st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="sec-header">One cut over time</div>', unsafe_allow_html=True)
+
+    names = sorted(piv.columns)
+    # Default to the lip-on ribeye: the biggest-volume single cut on the
+    # report and the one that gets asked about.
+    default = next((i for i, n in enumerate(names) if "ribeye, lip-on" in n.lower()), 0)
+    pick = st.selectbox("Cut", names, index=default, label_visibility="collapsed")
+
+    line = piv[pick].dropna()
+    _span = [line.min(), line.max()]
+    fig_c = go.Figure()
+    fig_c.add_trace(go.Scatter(
+        x=line.index, y=line.values, name="Choice", mode="lines",
+        line=dict(color=CHOICE_COLOR, width=2),
+        hovertemplate="<b>Choice</b>: $%{y:.2f}<extra></extra>"))
+    if not select.empty:
+        spiv = select.pivot_table(index="report_date", columns="item_description",
+                                  values="weighted_average", aggfunc="last").sort_index()
+        if pick in spiv.columns:
+            sl = spiv[pick].dropna()
+            if not sl.empty:
+                fig_c.add_trace(go.Scatter(
+                    x=sl.index, y=sl.values, name="Select", mode="lines",
+                    line=dict(color=SELECT_COLOR, width=2),
+                    hovertemplate="<b>Select</b>: $%{y:.2f}<extra></extra>"))
+                _span = [min(_span[0], sl.min()), max(_span[1], sl.max())]
+
+    # AN EXPLICIT Y RANGE, because autorange put the floor at zero. Measured
+    # on the live chart: for a ribeye running 826-1417 the axis came back
+    # [-78.75, 1496.25], so about 40% of the plot was empty space under the
+    # line and a $130 move looked like a flat drift. A single cut never
+    # trades near zero, so there is nothing to be gained from a zero baseline
+    # here -- the question is always how far it has moved, not its ratio to
+    # nothing. 6% padding keeps the line off the frame.
+    _pad = max(1.0, (_span[1] - _span[0]) * 0.06)
+    fig_c.update_layout(
+        paper_bgcolor=DM_SURFACE2, plot_bgcolor=DM_SURFACE2,
+        font=dict(color=DM_TEXT, size=11), hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+                    font=dict(color=DM_TEXT, size=11), bgcolor="rgba(0,0,0,0)"),
+        margin=dict(l=55, r=20, t=15, b=40),
+        xaxis=dict(**AXIS, title="", type="date"),
+        yaxis=dict(**AXIS, title="$/cwt", tickprefix="$",
+                   range=[_span[0] - _pad, _span[1] + _pad]),
+        height=340,
+    )
+    st.plotly_chart(fig_c, use_container_width=True)
+
+    # ESCAPE THE DOLLAR SIGNS. Streamlit's markdown treats a $...$ pair as
+    # LaTeX, so "$1,361.58 · week ago $1,346.60" rendered as mathematics --
+    # the two prices vanished into an italic run reading "1,361.58 ⋅
+    # weekago1,346.60". Every figure on this line is a price, so every one of
+    # them needs it. The tiles above are unaffected: they go through
+    # st.markdown with unsafe_allow_html, which is HTML, not markdown.
+    d = "\\$"
+    cur = line.iloc[-1]
+    bits = [f"**{pick}** — {d}{cur:,.2f}"]
+    for label, days in (("week", 7), ("month", 30)):
+        past = line[line.index <= line.index[-1] - pd.Timedelta(days=days)]
+        if len(past):
+            v = past.iloc[-1]
+            bits.append(f"{label} ago {d}{v:,.2f} "
+                        f"({cur - v:+,.2f}, {(cur / v - 1) * 100:+.1f}%)")
+    lo, hi = line.min(), line.max()
+    bits.append(f"range over {len(line)} reports {d}{lo:,.2f}–{d}{hi:,.2f}")
+    st.caption(" · ".join(bits))
 
 
 # ── Data Fetching ────────────────────────────────────────────────────────────
@@ -332,6 +564,25 @@ if hist.empty:
     st.stop()
 
 
+# ── View switch ──────────────────────────────────────────────────────────────
+# A SWITCH, NOT AN EXTRA SECTION DOWN THE PAGE, and the same shape the Cattle
+# on Feed page uses for Cold Storage. This page already runs three Plotly
+# charts and a grading series; appending a 42-row table and a fourth chart
+# under all of it would make a long page longer and bury both views.
+#
+# st.stop() below is what makes it a switch rather than a tab. A hidden
+# Streamlit tab is hidden, NOT skipped -- its widgets execute on every rerun --
+# so as a tab the cutout charts would rebuild on every cuts interaction and
+# vice versa.
+_view = st.segmented_control(
+    "View", ["Cutout", "Individual Cuts"], default="Cutout",
+    label_visibility="collapsed", key="bc_view")
+
+if _view == "Individual Cuts":
+    cuts_panel(sections)
+    st.stop()
+
+
 # ── Compute Changes ──────────────────────────────────────────────────────────
 
 cn, cd1, cd30, cd365 = changes(hist, "choice")
@@ -399,13 +650,6 @@ with cols[3]:
 
 st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 st.markdown('<div class="sec-header">Cutout Trend</div>', unsafe_allow_html=True)
-
-AXIS = dict(
-    gridcolor=DM_BORDER, linecolor=DM_BORDER, showgrid=True,
-    tickfont=dict(color=DM_MUTED, size=11),
-    title_font=dict(color=DM_MUTED, size=11),
-    zeroline=False,
-)
 
 fig = go.Figure()
 
