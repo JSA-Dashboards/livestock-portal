@@ -149,8 +149,21 @@ def fmt_loads(v):
 # Summing to 100% was NOT imposed, and the maximum residual across those 260
 # reports is 0.008 $/cwt. Choice and Select give the same weights to three
 # decimals, which is the expected answer: they are carcass proportions, not
-# prices. Recovering them each run means the page follows USDA if they are
-# ever re-based, instead of quietly drifting against a hard-coded table.
+# prices.
+#
+# AND THEY ARE USDA'S PUBLISHED FIGURES, checked against the documented table
+# on 2026-10-01 rather than assumed from the fit. The primal-to-carcass
+# yields USDA uses are Rib 11.40, Chuck 29.62, Round 22.32, Loin 21.26,
+# Brisket 4.95, Short Plate 7.10, Flank 3.35 -- all seven identical to two
+# decimals, and the documented method is the same multiply-and-sum this does
+# (u.osu.edu/beef/2021/01/13/boxed-beef, which walks it through: primal rib
+# at 329.98 x 0.114 = 37.62 of the cutout).
+#
+# So why still solve them? Because the fit is then a CHECK rather than a
+# guess: if USDA ever re-bases the yields, the page follows them instead of
+# drifting against a hard-coded table, and the residual says loudly when the
+# identity has stopped holding. A table typed in from a web page in 2026
+# would go quietly wrong.
 
 def primal_weights(sections: dict, grade: str):
     """
