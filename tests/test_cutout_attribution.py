@@ -44,7 +44,7 @@ def _load():
     """Exec the attribution helpers out of the Streamlit script, via ast."""
     return load_from_app(APP, "_cut_numbers", "primal_weights",
                          "cutout_attribution", "cutout_recap",
-                         consts=("CUT_NUM_COLS", "CUT_PRICE_COLS"),
+                         consts=("CUT_NUM_COLS", "CUT_PRICE_COLS", "FIT_WINDOW"),
                          globals_={"pd": pd, "np": np})
 
 
@@ -210,3 +210,41 @@ def test_no_recap_when_the_fit_is_bad():
     ns = _load()
     sections = _sections(noise=40.0, seed=3)
     assert ns["cutout_recap"](sections, _hist_from(sections, ns), "choice") == []
+
+
+def test_the_fit_uses_a_recent_window_not_the_whole_archive():
+    """
+    USDA RE-BASED THE PRIMAL YIELDS, so one fit cannot cover 22 years.
+
+    Measured on the real feed, 2026-10-01:
+
+        2004-2010   Rib 11.31  Chuck 29.56  Brisket 4.97   rms 0.0032
+        2020-       Rib 11.40  Chuck 29.62  Brisket 4.95   rms 0.0032
+        all 5,775   Rib 11.40  Chuck 29.77  Brisket 5.16   rms 0.0949
+
+    Each era fits thirty times better than the pooled span, and the pooled
+    answer is correct for no year at all. It reached the primal tiles as
+    "5.2% of carcass" within minutes of the fetch going deep.
+
+    The panel always describes TODAY, so it must fit today's era. This feeds
+    in an old era followed by the current one and checks the current weights
+    come back.
+    """
+    ns = _load()
+    old = dict(TRUE)
+    old["Primal Brisket"], old["Primal Flank"] = 0.0600, 0.0230   # a different basis
+    a = _sections(n=400, weights=old, seed=1)
+    b = _sections(n=300, weights=TRUE, seed=2)
+    # shift the recent era after the old one so the join is chronological
+    for key in ("Composite Primal Values", "Current Cutout Values"):
+        b[key] = b[key].copy()
+        b[key]["report_date"] = b[key]["report_date"] + pd.Timedelta(900, unit="D")
+    merged = {k: pd.concat([a[k], b[k]], ignore_index=True) for k in a}
+
+    names, w, rms = ns["primal_weights"](merged, "choice")
+    got = dict(zip(names, w))
+    assert got["Primal Brisket"] == pytest.approx(TRUE["Primal Brisket"], abs=2e-3), (
+        f"brisket came back {got['Primal Brisket']:.4f} -- the fit is reaching "
+        f"into the superseded era"
+    )
+    assert rms < 0.02, f"rms {rms:.4f} -- pooling two eras again"

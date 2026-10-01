@@ -185,6 +185,24 @@ def primal_weights(sections: dict, grade: str):
                            values=pcol, aggfunc="last").sort_index()
     y = cutout.set_index("report_date")[ccol].sort_index()
     df = P.join(y.rename("_cut"), how="inner").dropna()
+    # A RECENT WINDOW, NOT THE WHOLE ARCHIVE -- USDA RE-BASED THE YIELDS.
+    #
+    # Fitting all 5,775 usable reports back to 2004 gives Brisket 5.16,
+    # Chuck 29.77, Flank 3.21 and an rms of 0.0949. Fitting an era gives
+    # 0.0032, thirty times better, and two different answers:
+    #
+    #     2004-2010   Rib 11.31  Chuck 29.56  Brisket 4.97  Flank 3.38
+    #     2020-       Rib 11.40  Chuck 29.62  Brisket 4.95  Flank 3.35
+    #
+    # The second set is USDA's current published table. So the yields
+    # changed somewhere between, and a whole-archive fit is a compromise
+    # that is correct for no year at all -- it quietly appeared on the
+    # primal tiles as "5.2% of carcass" the moment the fetch went deep.
+    #
+    # This panel always describes TODAY, so it fits today's era. The blown-up
+    # residual is the design working rather than failing: it is exactly the
+    # signal that said the weights had stopped being one number.
+    df = df.tail(FIT_WINDOW)
     names = [c for c in df.columns if c != "_cut"]
     # Need more reports than primals for the system to be determined at all.
     if len(df) <= len(names) + 2 or not names:
@@ -409,7 +427,7 @@ def _cut_numbers(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def cuts_panel(sections: dict):
+def cuts_panel(sections: dict, years: int = 1):
     """
     Every individual cut, its move since the prior report, and its history.
 
@@ -422,8 +440,21 @@ def cuts_panel(sections: dict):
     thin print correcting. Sorting by percent move without looking at the
     pounds column will mislead you about that every week.
     """
-    choice = _cut_numbers(sections.get("Choice Cuts", pd.DataFrame()))
-    select = _cut_numbers(sections.get("Select Cuts", pd.DataFrame()))
+    # THE DEEP PULL HAPPENS HERE, not at page load. The Cutout view needs two
+    # reports of cuts for the recap's last bullet; this view needs years of
+    # them for the chart, and paying that on every visit to the other view
+    # would be the one slow thing on the page.
+    deep = {}
+    if years:
+        with st.spinner(f"Loading {years} year(s) of individual cuts…"):
+            try:
+                deep = fetch_cut_sections(int(years))
+            except Exception:
+                deep = {}
+    choice = _cut_numbers(deep.get("Choice Cuts",
+                                   sections.get("Choice Cuts", pd.DataFrame())))
+    select = _cut_numbers(deep.get("Select Cuts",
+                                   sections.get("Select Cuts", pd.DataFrame())))
     primal = _cut_numbers(sections.get("Composite Primal Values", pd.DataFrame()))
 
     if choice.empty:
@@ -469,19 +500,49 @@ def cuts_panel(sections: dict):
             st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
     # ── the movers table ────────────────────────────────────────────────────
-    chg = piv.loc[last] - piv.loc[prev]
+    def _asof(when):
+        """
+        Each cut's last traded price on or before `when`.
+
+        ffill WITH A LIMIT, because a cut that stopped trading must not keep
+        reporting its last price forever -- several of the thin cuts go weeks
+        between prints, and carrying one forward a month would invent a
+        "no change" that never happened. Five reports is a trading week; past
+        that the comparison is blank, which is the honest answer.
+        """
+        sub = piv[piv.index <= when]
+        if sub.empty:
+            return pd.Series(index=piv.columns, dtype=float)
+        return sub.ffill(limit=5).iloc[-1]
+
+    base = piv.loc[prev]
+    wk_at, mo_at = last - pd.Timedelta(days=7), last - pd.Timedelta(days=30)
+    wk, mo = _asof(wk_at), _asof(mo_at)
+    now = piv.loc[last]
+
+    chg = now - base
     tbl = pd.DataFrame({
         "Cut": piv.columns,
-        "$/cwt": piv.loc[last].values,
+        "$/cwt": now.values,
         "Day $": chg.values,
-        "Day %": (chg / piv.loc[prev] * 100).values,
+        "Day %": (chg / base * 100).values,
+        "Wk $": (now - wk).values,
+        "Wk %": ((now - wk) / wk * 100).values,
+        "Mo $": (now - mo).values,
+        "Mo %": ((now - mo) / mo * 100).values,
         "Pounds": vol.loc[last].reindex(piv.columns).values,
-    }).dropna(subset=["$/cwt", "Day $"]).sort_values("Day %", ascending=False)
+    # ONLY $/cwt is required. A cut that traded today but not yesterday still
+    # belongs in the table with a blank day change -- dropping it hid cuts
+    # that had a perfectly good week-over-week move.
+    }).dropna(subset=["$/cwt"]).sort_values("Day %", ascending=False)
 
     sel_last = (select.pivot_table(index="report_date", columns="item_description",
                                    values="weighted_average", aggfunc="last")
                 .sort_index().iloc[-1] if not select.empty else pd.Series(dtype=float))
-    tbl["Select"] = [sel_last.get(c) for c in tbl["Cut"]]
+    # reindex, NOT a .get() comprehension: .get returns None for a missing cut
+    # and a column of mixed None/float renders the word "None" in the table
+    # rather than an empty cell. reindex gives NaN, which Streamlit leaves blank.
+    tbl["Select"] = sel_last.reindex(tbl["Cut"]).to_numpy(dtype=float)
     # Choice over Select on the same cut -- the quality spread cut by cut,
     # which the composite number cannot show.
     tbl["Ch-Se"] = tbl["$/cwt"] - tbl["Select"]
@@ -493,6 +554,12 @@ def cuts_panel(sections: dict):
             "$/cwt": st.column_config.NumberColumn(format="$%.2f"),
             "Day $": st.column_config.NumberColumn(format="%+.2f"),
             "Day %": st.column_config.NumberColumn(format="%+.2f%%"),
+            "Wk $": st.column_config.NumberColumn(
+                format="%+.2f", help="Against the last report on or before 7 days ago"),
+            "Wk %": st.column_config.NumberColumn(format="%+.2f%%"),
+            "Mo $": st.column_config.NumberColumn(
+                format="%+.2f", help="Against the last report on or before 30 days ago"),
+            "Mo %": st.column_config.NumberColumn(format="%+.2f%%"),
             "Pounds": st.column_config.NumberColumn(format="%,d", help="Pounds traded "
                                                     "on this report — a thin print "
                                                     "moves several percent on a few loads"),
@@ -500,10 +567,14 @@ def cuts_panel(sections: dict):
             "Ch-Se": st.column_config.NumberColumn("Ch−Se", format="%+.2f"),
         },
     )
-    st.caption("Sortable. **Read the Pounds column with the percentage** — these are "
-               "negotiated sales, and a cut that traded a few thousand pounds will "
-               "swing on a single load. Blank Select means that cut did not trade "
-               "in the Select grade on this report.")
+    st.caption(
+        f"Sortable. **Read the Pounds column with the percentage** — these are "
+        f"negotiated sales, and a cut that traded a few thousand pounds will "
+        f"swing on a single load. **Wk** is against {wk_at:%b %d} and **Mo** "
+        f"against {mo_at:%b %d} — the last report on or before those dates, "
+        f"blank if the cut had not traded within a week of them. Blank Select "
+        f"means that cut did not trade in the Select grade on this report."
+    )
 
     # ── one cut's history ───────────────────────────────────────────────────
     st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
@@ -590,6 +661,106 @@ def _lmr_session() -> requests.Session:
     return session
 
 
+# ── Archive depth, measured 2026-10-01 ───────────────────────────────────────
+#
+# LM_XB403 goes back MUCH further than this page was reading, and the reason
+# it was not is the fetch shape rather than the archive:
+#
+#   section                 rows    span                     cost
+#   Current Cutout Values   6,474   2001-04-03 -> today      6.0s / 5 MB
+#   Current Volume          6,474   2001-04-03 -> today      7.3s / 6.5 MB
+#   Choice Cuts            ~13k/yr  2001-04-03 -> today      ~7s per year
+#
+# USABLE values start LATER than the rows do, and differently for each: the
+# composite cutout is null until 2004-01-05, while the individual cuts carry
+# prices from 2001-04-03, the very first report. So the cuts have a longer
+# usable history than the cutout they add up to. 2000 does not exist in this
+# report at all.
+#
+# TWO THINGS MADE THE OLD DEPTH LOOK LIKE THE ARCHIVE'S LIMIT:
+#
+# - allSections=true returns all eleven sections at once and costs 91 MB and
+#   30s for a couple of years. Asking for ONE section as a path segment is
+#   about fifteen times cheaper, which is what makes full history viable.
+# - The API caps any single response at exactly 100,000 ROWS, silently. A
+#   full Choice Cuts pull returns 100,000 rows ending 2017-05-25 and looks
+#   for all the world like the series starting there. It does not; the cap
+#   truncated it. Paging by calendar year (~13k rows each) walks straight
+#   past it, and that is the only reason 2001-2016 is on this page.
+
+ARCHIVE_START = 2001          # first report_date in LM_XB403
+CUTOUT_FIRST_VALUE = "2004-01-05"   # composite is null before this
+
+# Reports the primal-weight fit is run over. Long enough to be stable, short
+# enough to sit entirely inside the CURRENT yield table -- see the re-basing
+# note in primal_weights(). A year is both.
+FIT_WINDOW = 260
+
+
+def _lmr_get(section: str, params: dict) -> pd.DataFrame:
+    sess = _lmr_session()
+    resp = sess.get(f"{LMR_BASE}/{REPORT_ID}/{section}", params=params, timeout=300)
+    resp.raise_for_status()
+    rows = resp.json().get("results") or []
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df["report_date"] = pd.to_datetime(df["report_date"], errors="coerce")
+    return df.dropna(subset=["report_date"]).sort_values("report_date")
+
+
+@st.cache_data(ttl=7200, persist="disk", show_spinner=False)
+def fetch_thin_sections() -> dict:
+    """
+    The one-row-per-report sections, at FULL archive depth.
+
+    These are small enough that there is no reason to window them: the whole
+    25 years is 11.5 MB and about 13 seconds, once per cache period. Primal
+    Values is seven rows a report, so ~45k -- still inside the 100k cap.
+    """
+    out = {}
+    for name in ("Summary", "Current Cutout Values", "Current Volume",
+                 "Change From Prior Day", "Composite Primal Values"):
+        try:
+            df = _lmr_get(name, {"lastReports": 9999})
+        except Exception:
+            df = pd.DataFrame()
+        if not df.empty:
+            out[name] = df
+    return out
+
+
+@st.cache_data(ttl=7200, persist="disk", show_spinner=False)
+def fetch_cut_sections(years: int, _today=None) -> dict:
+    """
+    Choice and Select Cuts for the last `years` calendar years.
+
+    PAGED BY YEAR BECAUSE OF THE 100,000-ROW CAP, not for politeness. A
+    single request for everything comes back truncated and looks complete.
+    Each year is ~13k rows and ~7s, so the cost is linear and predictable,
+    and `years` is the reader's choice rather than a number baked in here.
+    """
+    this_year = (_today or datetime.now()).year
+    # ONE MORE CALENDAR YEAR THAN ASKED FOR, because the pages are calendar
+    # years and the request is a span. `years=1` starting at this January
+    # would be four days of history on the 4th of January and the label would
+    # be a lie; including last year guarantees at least the span named, at
+    # the cost of one extra page.
+    first = max(ARCHIVE_START, this_year - years)
+    out = {}
+    for name in ("Choice Cuts", "Select Cuts"):
+        frames = []
+        for yr in range(first, this_year + 1):
+            try:
+                frames.append(_lmr_get(name, {"q": f"report_date=01/01/{yr}:12/31/{yr}"}))
+            except Exception:
+                continue
+        frames = [f for f in frames if not f.empty]
+        if frames:
+            out[name] = pd.concat(frames, ignore_index=True).sort_values("report_date")
+    return out
+
+
 # persist="disk" survives app sleep/wake cycles — users never hit a cold fetch
 @st.cache_data(ttl=7200, persist="disk", show_spinner=False)
 def fetch_lmr(last_n: int = 260):
@@ -644,6 +815,12 @@ def build_history(sections: dict) -> pd.DataFrame:
     df = cutout[["report_date"]].copy()
     df["choice"] = pd.to_numeric(cutout.get("choice_600_900_current"), errors="coerce")
     df["select"] = pd.to_numeric(cutout.get("select_600_900_current"), errors="coerce")
+    # DROP THE EMPTY LEAD-IN. LM_XB403 has report_date rows from 2001-04-03 but
+    # carries no composite value until 2004-01-05, so keeping them put nearly
+    # three blank years on the left of every chart once the fetch went to full
+    # depth. The rows are real and the values are not; a chart that starts
+    # where the data starts is the honest one.
+    df = df[df["choice"].notna() | df["select"].notna()]
     df["spread"] = df["choice"] - df["select"]
 
     if not volume.empty:
@@ -720,14 +897,23 @@ with st.sidebar:
     st.image(JSA_LOGO_WHITE, use_container_width=True)
     st.markdown("<hr>", unsafe_allow_html=True)
 
-    st.markdown('<div class="sec-header">History Window</div>', unsafe_allow_html=True)
-    history_n = st.selectbox(
-        "Reports to load",
-        [130, 260, 400],
-        index=1,
-        format_func=lambda x: {130: "~6 Months", 260: "~1 Year", 400: "~18 Months"}[x],
+    # THE CUTOUT TREND IS NO LONGER WINDOWED. The thin sections are the whole
+    # archive for 13 seconds, so there is nothing to choose -- the chart's own
+    # 1M/3M/6M/YTD/1Y/All buttons do the zooming, over 2004 onward rather than
+    # over whatever was fetched.
+    st.markdown('<div class="sec-header">Cuts History</div>', unsafe_allow_html=True)
+    cuts_years = st.selectbox(
+        "Years of individual-cut history",
+        [1, 3, 5, 10, 26],
+        index=0,
+        format_func=lambda y: {1: "1 Year", 3: "3 Years", 5: "5 Years",
+                               10: "10 Years", 26: "All (2001→)"}[y],
         label_visibility="collapsed",
+        help="Individual cuts are paged a year at a time, about 7 seconds each, "
+             "then cached for two hours. The cutout trend always loads its full "
+             "archive and is not affected by this.",
     )
+    st.caption("Cutout trend always loads 2004→ in full.")
 
     st.markdown("<hr>", unsafe_allow_html=True)
     st.markdown('<div class="sec-header">Data Refresh</div>', unsafe_allow_html=True)
@@ -752,7 +938,16 @@ with st.sidebar:
 
 with st.spinner("Loading USDA beef cutout data…"):
     try:
-        sections = fetch_lmr(last_n=history_n)
+        sections = fetch_thin_sections()
+        # A SHALLOW slice of the cuts rides along for the Cutout view: the
+        # recap's last bullet names the day's loudest cuts, and that needs
+        # two reports, not two decades. The deep pull happens only when the
+        # reader actually opens Individual Cuts.
+        try:
+            for _k, _v in fetch_cut_sections(1).items():
+                sections.setdefault(_k, _v)
+        except Exception:
+            pass
         hist     = build_history(sections)
         load_ok  = True
         err_msg  = ""
@@ -822,7 +1017,7 @@ _view = st.segmented_control(
     label_visibility="collapsed", key="bc_view")
 
 if _view == "Individual Cuts":
-    cuts_panel(sections)
+    cuts_panel(sections, cuts_years)
     st.stop()
 
 
@@ -930,9 +1125,11 @@ if _attr is not None:
         f"biggest mover is routinely not the biggest cause. The seven effects "
         f"sum to **{_tbl['Effect'].sum():+.2f}**, against the published day "
         f"change of **{cd1:+.2f}**. Shares are recovered from USDA's own "
-        f"primal values and cutout by least squares over "
-        f"{len(hist)} reports (residual {_rms:.3f} $/cwt), so they follow "
-        f"USDA rather than a hard-coded table."
+        f"primal values and cutout by least squares over the last "
+        f"{min(FIT_WINDOW, len(hist)):,} reports (residual {_rms:.3f} $/cwt), "
+        f"so they follow USDA rather than a hard-coded table. The window is "
+        f"recent on purpose — USDA re-based the yields since 2004, and a fit "
+        f"over the whole archive is correct for no year at all."
     )
 
 
