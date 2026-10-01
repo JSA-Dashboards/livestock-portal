@@ -12,6 +12,8 @@ import datetime as dt
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
@@ -105,11 +107,83 @@ def test_the_facts_ross_asked_for_are_admitted(monkeypatch):
         assert wanted in years, f"{wanted} is still being filtered out"
 
 
-def test_the_one_sport_most_of_the_world_plays(monkeypatch):
-    """Pele's farewell game carried no tag, because `soccer` was missing."""
+def test_soccer_is_not_a_sport_for_this_letter(monkeypatch):
+    """
+    Deliberately out, and it was briefly in.
+
+    `soccer` went into _SPORT with the other widenings on 2026-10-01 and Ross
+    took it straight back out -- this is a US cattle letter. Pele's farewell
+    game is exactly the item the omission exists to drop, so it is pinned
+    rather than left to the next person's judgement.
+    """
     _stub(monkeypatch, OCT_1)
     years = [i["year"] for i in onthisday.candidates(D, limit=20)["items"]]
-    assert 1977 in years
+    assert 1977 not in years
+
+
+@pytest.mark.parametrize("text", [
+    "President Theodore Roosevelt goes on a bear hunt",
+    "Abraham Lincoln delivers the Gettysburg Address",
+    "Ulysses S. Grant is inaugurated as president",
+    "Harry Truman addresses the nation from the Oval Office",
+    "Jimmy Carter is born",
+])
+def test_a_president_is_reason_enough(text):
+    """
+    Ross's call, 2026-10-01: "US President Facts as a whole should be
+    included" -- not only when the item is also a "first".
+    """
+    tags = onthisday._tags(text)
+    assert "pres" in tags, tags
+    assert onthisday._keep(text, tags)
+
+
+@pytest.mark.parametrize("text", [
+    "President Kennedy is assassinated in Dallas",
+    "Abraham Lincoln is shot at Ford's Theatre",
+    "President Garfield dies of his wounds",
+])
+def test_a_president_does_not_override_the_denylist(text):
+    """
+    The presidency is a reason to print, never a reason to ignore _GRIM.
+
+    Assassinations are the most famous presidential anniversaries there are,
+    which is exactly why this needs a test rather than an assumption.
+    """
+    assert not onthisday._keep(text, onthisday._tags(text))
+
+
+@pytest.mark.parametrize("text", [
+    "The US enacts first fugitive slave law",
+    "Enslaved people are freed in the District of Columbia",
+    "Japanese American internment begins",
+])
+def test_the_stems_cover_the_whole_word_family(text):
+    """
+    `slaver` matched "slavery" and NOT "slave law" -- so "The US enacts first
+    fugitive slave law" cleared every filter and reached the February 12 pick
+    list, tagged `US first`. Exactly the trailing-boundary mistake that let
+    four atrocities through the very first version.
+
+    It was found by spot-checking a SECOND day after a change, which is the
+    habit worth keeping: one day's feed is not a test suite.
+    """
+    assert not onthisday._keep(text, onthisday._tags(text))
+
+
+@pytest.mark.parametrize("text", [
+    "A research grant is awarded to a land-grant university",
+    "Bush fires sweep through New South Wales",
+    "The city of Cleveland opens a new bridge",
+])
+def test_ordinary_words_that_are_also_presidents_do_not_tag(text):
+    """
+    Grant, Bush, Pierce, Taylor, Arthur, Hayes, Polk and Tyler are ordinary
+    English words, and Cleveland, Wilson, Jackson and Madison are large
+    American things. They need a given name or the title. Cleveland earned
+    its place on that list by tagging a city bridge as presidential.
+    """
+    assert "pres" not in onthisday._tags(text)
 
 
 def test_widening_the_allowlist_let_nothing_grim_through(monkeypatch):

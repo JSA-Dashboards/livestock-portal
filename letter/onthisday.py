@@ -58,17 +58,25 @@ _GRIM = re.compile(
     r"overthrow|slaver|lynch|abuse|scandal|convict|prison|arrest|wound|injur|"
     r"casualt|victim|mauled|attack|assault|shelling|bombard|uprising|suppress|"
     r"\bcrisis\b|controvers|holocaust|segregat|desegregat|covid|virus|infect|"
-    r"illness|disease|hospital|quarantin|outbreak|impeach|indict|resign)", re.I)
+    r"illness|disease|hospital|quarantin|outbreak|impeach|indict|resign|"
+    # `slaver` matched "slavery" and NOT "slave law" or "enslaved", so
+    # "The US enacts first fugitive slave law" passed every filter and
+    # reached the February 12 pick list. Same trailing-stem mistake as the
+    # original \bmurder\b. Found 2026-10-01 while spot-checking a second day,
+    # which is the only reason it was found at all.
+    r"slave|enslav|lynch|internment|massacre|atrocit)", re.I)
 
 _SPORT = re.compile(
     r"\b(world series|super bowl|olympic\w*|baseball|football|basketball|hockey|"
     r"golf|tennis|boxing|nascar|kentucky derby|championship|pennant|home run|"
     r"homer|no-hitter|perfect game|nba|nfl|mlb|nhl|pga|u\.s\. open|world record|"
     r"gold medal|triple crown|heisman|heavyweight|pitcher|quarterback|"
-    # Added 2026-10-01: Pele's farewell game carried NO tag at all, because
-    # the one sport most of the world plays was missing from the list.
-    r"soccer|world cup|stanley cup|wimbledon|the masters|indy 500|marathon|"
-    r"grand slam|hall of fame|batting|touchdown|pitched|ballpark|athlete)\b", re.I)
+    # Widened 2026-10-01. SOCCER IS DELIBERATELY ABSENT -- it was added with
+    # these and Ross took it straight back out. This is a US cattle letter and
+    # the sports that land are the American ones; Pele's farewell game is the
+    # kind of item the omission is meant to drop. "world cup" goes with it.
+    r"stanley cup|wimbledon|the masters|indy 500|grand slam|hall of fame|"
+    r"batting|touchdown|pitched|ballpark|athlete)\b", re.I)
 
 _AG = re.compile(
     r"\b(farm\w*|ranch\w*|cattle|livestock|beef|corn|wheat|soybean\w*|harvest\w*|"
@@ -108,14 +116,46 @@ _US = re.compile(
     r"wisconsin|tennessee|kentucky|georgia|virginia|carolina|alabama|"
     r"arkansas|louisiana|arizona|nevada|utah|idaho|oregon|alaska|hawaii|"
     r"massachusetts|connecticut|pennsylvania|maryland|florida|"
-    r"lincoln|roosevelt|kennedy|reagan|truman|eisenhower|nixon|carter|"
-    r"jefferson|madison|monroe|obama|clinton|mckinley|garfield|harding|"
-    r"coolidge|hoover|\btaft\b|biden|trump|"
     r"ford motor|model t|general motors|chevrolet|coca-cola|disney|"
     r"hollywood|broadway|tonight show|wall street|harvard|yale|smithsonian|"
     r"apollo|boeing|edison|wright brothers|statue of liberty|empire state|"
     r"golden gate|route 66|yellowstone|white house|supreme court|senate|"
     r"ellis island|world's fair|major league|super bowl)\b", re.I)
+
+# EVERY PRESIDENT, AND THE PRESIDENCY ITSELF. Ross's call, 2026-10-01: a fact
+# about a US president is worth printing on its own, not only when it also
+# happens to be a "first". The surname list used to live inside _US and was
+# half-length, because the ambiguous names were dropped to avoid noise.
+#
+# They are all here now, and the reason that is safe is that the cost of a
+# FALSE positive here is tiny. _GRIM still runs first, so the worst a stray
+# match can do is admit one more harmless piece of Americana -- which is
+# roughly what this panel is for. A false NEGATIVE loses a fact Ross wanted.
+#
+# The eight surnames that are also ordinary English words -- Grant, Bush,
+# Pierce, Taylor, Arthur, Hayes, Polk, Tyler -- still need a given name or
+# the title, or "a research grant" and "the bush fire" would tag as
+# presidential. Everything distinctive enough to mean the person stands alone.
+_PRESIDENT = re.compile(
+    r"\b(president\w*|white house|oval office|commander in chief|"
+    r"state of the union|electoral college|inaugural address|"
+    # distinctive enough on their own
+    r"washington|jefferson|madison|monroe|van buren|fillmore|buchanan|"
+    r"lincoln|garfield|mckinley|roosevelt|\btaft\b|harding|coolidge|"
+    r"hoover|truman|eisenhower|kennedy|\bjfk\b|nixon|carter|reagan|obama|"
+    r"biden|trump|clinton|"
+    # ordinary words and big American place names: need the given name or the
+    # title. Cleveland earned its place here -- "the city of Cleveland opens a
+    # new bridge" tagged as presidential on the first run.
+    r"grover cleveland|president cleveland|"
+    r"woodrow wilson|president wilson|"
+    r"ulysses s?\.? ?grant|general grant|"
+    r"george w\.? bush|george h\.? ?w\.? bush|"
+    r"franklin pierce|zachary taylor|chester a?\.? ?arthur|"
+    r"rutherford b?\.? ?hayes|james k?\.? ?polk|john tyler|"
+    r"benjamin harrison|william henry harrison|"
+    r"andrew johnson|lyndon( b\.?)? johnson|\blbj\b|"
+    r"andrew jackson|john( quincy)? adams)\b", re.I)
 
 
 def _get(url: str, timeout: int = 25) -> str:
@@ -174,6 +214,8 @@ def _tags(text: str) -> list:
         tags.append("ag")
     if _SPORT.search(text):
         tags.append("sport")
+    if _PRESIDENT.search(text):
+        tags.append("pres")
     if _US.search(text):
         tags.append("US")
     if _FIRST.search(text):
@@ -186,9 +228,11 @@ def _keep(text: str, tags: list) -> bool:
         return False
     # POSITIVELY, OR NOT AT ALL. "American" on its own admitted Khashoggi and
     # Mogadishu; "first" on its own admitted Opus Dei and a Vancouver
-    # cathedral. Sport or agriculture stands alone; anything else needs to be
-    # a US first.
-    return bool(tags) and ("sport" in tags or "ag" in tags
+    # cathedral. Agriculture, sport and the presidency each stand alone --
+    # presidents by Ross's call on 2026-10-01, since a fact about one is worth
+    # printing whether or not it is also a "first". Anything else still has to
+    # be a US first.
+    return bool(tags) and ("sport" in tags or "ag" in tags or "pres" in tags
                            or ("US" in tags and "first" in tags))
 
 
@@ -231,8 +275,10 @@ def candidates(when: date = None, limit: int = 8) -> dict:
         if not _keep(text, tags):
             continue
         seen.add(key)
+        # Presidents rank with sport, above a bare US item: they are their own
+        # reason to print, and agriculture still outranks everything.
         weight = (3 if "ag" in tags else 0) + (2 if "sport" in tags else 0) \
-            + (1 if "US" in tags else 0)
+            + (2 if "pres" in tags else 0) + (1 if "US" in tags else 0)
         items.append({"year": year, "text": text, "tags": tags,
                       "source": source, "_w": weight})
 
