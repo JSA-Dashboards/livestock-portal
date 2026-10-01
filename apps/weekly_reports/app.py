@@ -871,16 +871,52 @@ _IMAGE_SCRIPT = """<script
     // DISPLAY:NONE, NOT VISIBILITY:HIDDEN. The toolbar is in the flow, so
     // merely hiding it would leave its 31px band at the top of the image.
     bar.style.display = 'none';
-    // THE FULL DOCUMENT AS THE VIEWPORT. The letter's frame and watermark are
-    // position:fixed, so at the iframe's own height they would be drawn
-    // around the first screenful and the rest of the letter would have no
-    // frame at all. Telling html2canvas the window IS the whole document puts
-    // them around the whole letter, which is what the printed page shows.
+    // PAGE MODE: lay the letter out as a PRINTED SHEET before capturing it.
+    // The screen layout is NOT the print layout, and the first version of
+    // this button shipped the screen one.
+    //
+    // render.py has no @media print rules at all, so the ONLY difference
+    // between the two is page geometry -- and it is not merely cosmetic:
+    //
+    //   print   8.5in sheet, @page margin 0.52in, so a 7.46in page area and
+    //           a 6.80in text block; the frame sits AT the page margin with
+    //           white outside it.
+    //   screen  the iframe's own width, about 7.42in, and no page margin --
+    //           a 6.76in text block and the frame flush to the very edge.
+    //
+    // A text block 0.04in narrower RE-WRAPS LINES, so the image was not even
+    // breaking its text where the PDF does. Forcing the sheet's geometry
+    // fixes the wrapping, the margin and the frame together.
+    //
+    // CSS inches are always 96px, so this arithmetic is exact rather than
+    // display-dependent.
+    var PX = 96, PAGE_W = 8.5 * PX, PAGE_H = 11 * PX;
+    var mode = document.createElement('style');
+    mode.textContent =
+      'html, body { width: 8.5in !important; }' +
+      // 0.52 page margin plus the body's own 0.20/0.33/0.38 -- exactly the
+      // figures render.py's comment works the printed block out to.
+      'body { padding: 0.72in 0.85in 0.90in !important; margin: 0 !important; }' +
+      // The frame is fixed at inset 0, which in PRINT means the page area,
+      // i.e. 0.52in in from the sheet. On screen inset 0 is the viewport.
+      '.frame { top: 0.52in !important; right: 0.52in !important;' +
+      ' bottom: 0.52in !important; left: 0.52in !important; }' +
+      '#jsa-bar { display: none !important; }';
+    document.head.appendChild(mode);
+
     var el = document.documentElement;
-    var w = el.scrollWidth, h = el.scrollHeight;
+    // WHOLE SHEETS, measured after page mode is applied, so a one-page brief
+    // comes out as a full 8.5x11 rather than cropped to its last line. That
+    // is what makes it read as the letter instead of as a screenshot.
+    var h = Math.max(1, Math.ceil(el.scrollHeight / PAGE_H)) * PAGE_H;
+
+    // THE SHEET AS THE VIEWPORT. The frame and watermark are position:fixed,
+    // so they lay out against whatever window html2canvas is told about; at
+    // the iframe's real size they would hug a ~712px box and the page margin
+    // would collapse again.
     html2canvas(el, {
       scale: 2, backgroundColor: '#ffffff', useCORS: true,
-      width: w, height: h, windowWidth: w, windowHeight: h,
+      width: PAGE_W, height: h, windowWidth: PAGE_W, windowHeight: h,
       scrollX: 0, scrollY: 0
     }).then(function (canvas) {
       var a = document.createElement('a');
@@ -891,6 +927,9 @@ _IMAGE_SCRIPT = """<script
       btn.textContent = 'Could not render: ' + (e && e.message ? e.message : e);
       return null;
     }).then(function () {
+      // Page mode comes off whatever happened -- leaving an 8.5in !important
+      // width behind would reflow the preview the reader is looking at.
+      mode.remove();
       bar.style.display = '';
       if (btn.textContent === 'Rendering…') { btn.textContent = label; }
       btn.disabled = false;
@@ -951,11 +990,11 @@ st.components.v1.html(_with_print_button(html), height=720, scrolling=True)
 st.caption("**Print / Save as PDF** prints the preview above from your own browser — "
            "same print CSS as Build PDF, and it works on the deployed app where "
            "Build PDF cannot. Choose *Save as PDF* as the destination. "
-           "**Save as image** downloads the same letter as a PNG at twice screen "
-           "size, for pasting into an email or a text. It is ONE continuous "
-           "image with no page breaks, so a two- or three-page evening letter "
-           "comes out as one tall picture — use the PDF when the pagination "
-           "matters.")
+           "**Save as image** downloads the letter as a PNG laid out as a printed "
+           "8.5×11 sheet — same margins, same frame, same line breaks as the PDF "
+           "— at twice print size. A multi-page evening letter comes out as one "
+           "tall image rounded up to whole sheets, with no page break drawn "
+           "across it; use the PDF when the pagination itself matters.")
 
 d1, d2 = st.columns(2)
 with d1:

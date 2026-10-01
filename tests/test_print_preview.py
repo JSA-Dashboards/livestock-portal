@@ -133,18 +133,58 @@ def test_the_image_button_is_hidden_when_printing():
     assert re.search(r"@media\s+print\s*\{[^}]*#jsa-png[^}]*display:\s*none", out)
 
 
-def test_the_image_capture_is_told_the_whole_document_is_the_viewport():
+def test_the_image_capture_is_told_the_sheet_is_the_viewport():
     """
     THE FRAME AND WATERMARK ARE position:fixed.
 
-    At the iframe's own height html2canvas draws them around the first
-    screenful only, and the rest of the letter comes out unframed. Passing the
-    document's full scroll size as the window is what puts them around the
-    whole letter, so it is pinned rather than left as a tweak someone tidies.
+    They lay out against whatever window html2canvas is told about. At the
+    iframe's real size they hug a ~712px box, the page margin collapses, and
+    the frame ends up flush to the image edge.
     """
     out = _compose()(LETTER)
     for opt in ("windowWidth", "windowHeight", "scrollX", "scrollY"):
         assert opt in out, f"{opt} is gone -- fixed-position chrome will mis-render"
+
+
+def test_the_image_is_captured_in_page_geometry_not_screen_geometry():
+    """
+    THE IMAGE MUST MATCH THE PDF, which is Ross's ask of 2026-10-01 and the
+    whole reason page mode exists.
+
+    render.py has no @media print rules, so the only screen/print difference
+    is the page box: an 8.5in sheet with a 0.52in @page margin, against the
+    iframe's ~7.42in and no margin. That is a 6.80in text block against a
+    6.76in one, which RE-WRAPS LINES -- the first version of this button did
+    not even break its text where the PDF does.
+
+    Verified at the time against both artifacts: the PNG came out 1632x2112
+    (8.5x11 at 2x) with the first sage pixel 0.5208in in, and the PDF draws
+    the frame as a 716x956 css-px rect, which is 8.5x11 less 0.52in a side.
+    """
+    out = _compose()(LETTER)
+    assert "8.5in" in out, "the capture no longer forces the sheet width"
+    assert "0.52in" in out, "the frame is no longer offset to the page margin"
+    # the body padding that puts the text block where print puts it
+    for pad in ("0.72in", "0.85in", "0.90in"):
+        assert pad in out, f"page-mode body padding {pad} is gone"
+
+
+def test_the_image_is_rounded_up_to_whole_sheets():
+    """
+    A one-page brief should be a full 8.5x11, not cropped to its last line --
+    that is what makes it read as the letter rather than as a screenshot.
+    """
+    out = _compose()(LETTER)
+    assert "Math.ceil" in out and "PAGE_H" in out
+
+
+def test_page_mode_is_removed_afterwards():
+    """
+    An 8.5in !important left behind would reflow the preview the reader is
+    looking at, and it would survive until they navigated away.
+    """
+    out = _compose()(LETTER)
+    assert "mode.remove()" in out
 
 
 def test_a_cdn_failure_says_so_on_the_button():
