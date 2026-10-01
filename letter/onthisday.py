@@ -202,8 +202,17 @@ def candidates(when: date = None, limit: int = 8) -> dict:
         items.append({"year": year, "text": text, "tags": tags,
                       "source": source, "_w": weight})
 
+    # TWO SORTS, AND BOTH ARE NEEDED. The weight decides WHICH facts survive
+    # the cut -- ag over sport over US -- so it has to run before the limit or
+    # the panel fills with whatever happens to be most recent. The display
+    # order is then chronological, NEWEST FIRST so the oldest sits at the
+    # bottom, which is how Ross wants them reading down the letter. Sorting
+    # by year before the cut would quietly change the selection, not just the
+    # order.
     items.sort(key=lambda i: (-i["_w"], -i["year"]))
-    for i in items:
+    chosen = items[:limit]
+    chosen.sort(key=lambda i: -i["year"])
+    for i in chosen:
         i.pop("_w", None)
-    return {"items": items[:limit], "errors": errors,
+    return {"items": chosen, "errors": errors,
             "source_url": HISTORY_URL.format(month=_MONTHS[d.month - 1], day=d.day)}

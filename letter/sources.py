@@ -1386,13 +1386,32 @@ def cutout_premium_series(weeks: int = 52, years: int = 5, reports: int = 1700) 
     f = pd.DataFrame({"v": daily.values},
                      index=pd.to_datetime(pd.Series(list(daily.index))))
     iso = f.index.isocalendar()
-    f["yr"], f["wk"] = iso["year"].values, iso["week"].values
+    f["yr"], f["wk"], f["dow"] = iso["year"].values, iso["week"].values, iso["day"].values
     wk = f.groupby(["yr", "wk"])["v"].mean()
+    # Keyed by (year, week, weekday) so a base year can be restricted to the
+    # same days the current week actually has. See below.
+    by_day = f.groupby(["yr", "wk", "dow"])["v"].mean()
 
     out_dates, out_vals = [], []
     for (yr, w), v in wk.tail(int(weeks)).items():
-        base = [wk.get((yr - n, w)) for n in range(1, int(years) + 1)]
-        base = [b for b in base if b is not None and not pd.isna(b)]
+        # LIKE-FOR-LIKE WEEKDAYS, because the newest week is almost always
+        # SHORT. The current week is only as long as the market has traded --
+        # on 2026-10-01 week 40 held Mon/Tue/Wed -- while every base year's
+        # week 40 is a full five days. Averaging three days of a rising market
+        # against five-day baselines overstated the premium by 0.75 $/cwt on
+        # the one point the chart labels. Holidays do the same thing to seven
+        # of the 52 plotted weeks.
+        #
+        # Matching the weekday set rather than dropping the short week keeps
+        # the letter's most recent reading on the chart, which is the point of
+        # having it.
+        present = sorted(f[(f["yr"] == yr) & (f["wk"] == w)]["dow"].unique())
+        base = []
+        for n in range(1, int(years) + 1):
+            days = [by_day.get((yr - n, w, d)) for d in present]
+            days = [x for x in days if x is not None and not pd.isna(x)]
+            if days:
+                base.append(sum(days) / len(days))
         # ALL FIVE OR NONE. An "average" over two of the five years is a
         # different statistic wearing the same label, and the gap it implies
         # would be wrong rather than approximate.
@@ -1404,8 +1423,13 @@ def cutout_premium_series(weeks: int = 52, years: int = 5, reports: int = 1700) 
 
     if len(out_vals) < 5:
         return {}
+    # "PREMIUM TO", NOT "VS". The line is the SPREAD, not the cutout, and
+    # "Choice cutout vs 5-yr avg" reads as though the cutout itself is
+    # plotted -- so a reader who knows the cutout is 382 sees 81.88 and
+    # reasonably calls it wrong. Reported 2026-10-01. The spread is still the
+    # right thing to draw (see above); only the label was lying about it.
     return {"dates": out_dates, "values": out_vals,
-            "title": f"Choice cutout vs {years}-yr avg ($/cwt)",
+            "title": f"Choice cutout premium to {years}-yr avg ($/cwt)",
             "style": "decimal"}
 
 
