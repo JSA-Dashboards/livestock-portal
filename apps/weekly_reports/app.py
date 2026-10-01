@@ -826,17 +826,78 @@ if missing:
 #
 # The button hides itself in the print output -- it is chrome, not letter.
 _PRINT_STYLE = """<style>
-  #jsa-print { position: sticky; top: 0; z-index: 99; display: block; width: 100%;
-    padding: 7px 0; font: 600 14px/1.2 "Segoe UI", system-ui, sans-serif;
+  #jsa-bar { position: sticky; top: 0; z-index: 99; display: flex; gap: 8px;
+    margin: 0 0 10px; }
+  #jsa-bar button { flex: 1; padding: 7px 0;
+    font: 600 14px/1.2 "Segoe UI", system-ui, sans-serif;
     color: #fff; background: #5e7164; border: 0; border-radius: 4px;
-    cursor: pointer; margin: 0 0 10px; }
-  #jsa-print:hover { background: #4d5d52; }
-  @media print { #jsa-print { display: none !important; } }
+    cursor: pointer; }
+  #jsa-bar button:hover { background: #4d5d52; }
+  #jsa-bar button[disabled] { opacity: 0.65; cursor: progress; }
+  @media print { #jsa-bar, #jsa-print, #jsa-png { display: none !important; } }
 </style>"""
 
-_PRINT_BUTTON = """<button id="jsa-print" onclick="window.focus();window.print();">
-  Print / Save as PDF &nbsp;·&nbsp; uses this browser
-</button>"""
+# Both buttons act on THIS document from the reader's own browser, which is why
+# they sit together and why both work on the deployed app where Build PDF
+# cannot. Build PDF stays where it is: it writes the file on the host that
+# `--archive` publishes, and no browser-side button can do that.
+_PRINT_BUTTON = """<div id="jsa-bar">
+<button id="jsa-print" onclick="window.focus();window.print();">
+  Print / Save as PDF
+</button>
+<button id="jsa-png">Save as image</button>
+</div>"""
+
+# html2canvas, and the failure mode is handled rather than hoped away: a CDN
+# that does not load leaves a button that silently does nothing, which is the
+# class of quiet failure this whole file is written against. The handler says
+# so on the button itself.
+_IMAGE_SCRIPT = """<script
+  src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"
+  crossorigin="anonymous"></script>
+<script>
+(function () {
+  var btn = document.getElementById('jsa-png');
+  if (!btn) return;
+  btn.addEventListener('click', function () {
+    if (typeof html2canvas !== 'function') {
+      btn.textContent = 'Image library did not load — use Print instead';
+      return;
+    }
+    var bar = document.getElementById('jsa-bar');
+    var label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Rendering…';
+    // DISPLAY:NONE, NOT VISIBILITY:HIDDEN. The toolbar is in the flow, so
+    // merely hiding it would leave its 31px band at the top of the image.
+    bar.style.display = 'none';
+    // THE FULL DOCUMENT AS THE VIEWPORT. The letter's frame and watermark are
+    // position:fixed, so at the iframe's own height they would be drawn
+    // around the first screenful and the rest of the letter would have no
+    // frame at all. Telling html2canvas the window IS the whole document puts
+    // them around the whole letter, which is what the printed page shows.
+    var el = document.documentElement;
+    var w = el.scrollWidth, h = el.scrollHeight;
+    html2canvas(el, {
+      scale: 2, backgroundColor: '#ffffff', useCORS: true,
+      width: w, height: h, windowWidth: w, windowHeight: h,
+      scrollX: 0, scrollY: 0
+    }).then(function (canvas) {
+      var a = document.createElement('a');
+      a.download = (document.title || 'letter').replace(/[\\\\/:*?"<>|]/g, '-') + '.png';
+      a.href = canvas.toDataURL('image/png');
+      a.click();
+    }).catch(function (e) {
+      btn.textContent = 'Could not render: ' + (e && e.message ? e.message : e);
+      return null;
+    }).then(function () {
+      bar.style.display = '';
+      if (btn.textContent === 'Rendering…') { btn.textContent = label; }
+      btn.disabled = false;
+    });
+  });
+})();
+</script>"""
 
 
 def _with_print_button(doc: str) -> str:
@@ -882,14 +943,19 @@ def _with_print_button(doc: str) -> str:
         after_head = 0
     m = re.compile(r"<body\b[^>]*>", re.I).search(doc, after_head)
     if m:
-        return doc[:m.end()] + _PRINT_BUTTON + doc[m.end():]
-    return _PRINT_BUTTON + doc
+        return doc[:m.end()] + _PRINT_BUTTON + _IMAGE_SCRIPT + doc[m.end():]
+    return _PRINT_BUTTON + _IMAGE_SCRIPT + doc
 
 
 st.components.v1.html(_with_print_button(html), height=720, scrolling=True)
 st.caption("**Print / Save as PDF** prints the preview above from your own browser — "
            "same print CSS as Build PDF, and it works on the deployed app where "
-           "Build PDF cannot. Choose *Save as PDF* as the destination.")
+           "Build PDF cannot. Choose *Save as PDF* as the destination. "
+           "**Save as image** downloads the same letter as a PNG at twice screen "
+           "size, for pasting into an email or a text. It is ONE continuous "
+           "image with no page breaks, so a two- or three-page evening letter "
+           "comes out as one tall picture — use the PDF when the pagination "
+           "matters.")
 
 d1, d2 = st.columns(2)
 with d1:
@@ -917,8 +983,10 @@ with d2:
         # Someone looking at a disabled control is asking why, and a hover they
         # have to guess at is not an answer.
         st.button("Build PDF", disabled=True, use_container_width=True)
-        st.caption("No browser on this host — download the HTML and print with "
-                   "Ctrl+P. Same layout, same result.")
+        st.caption("No browser on this host. Use **Print / Save as PDF** or "
+                   "**Save as image** above the preview — both run in your own "
+                   "browser and give the same layout. Build PDF only earns its "
+                   "place locally, where it writes the file `--archive` publishes.")
 
 if st.session_state.get("wcr_pdf"):
     st.download_button("Download PDF", data=st.session_state["wcr_pdf"],

@@ -41,11 +41,14 @@ def _compose():
     keeps this a unit test of the thing that actually broke.
     """
     src = APP.read_text(encoding="utf-8")
+    # EVERY module-level triple-quoted constant, discovered rather than listed.
+    # A hard-coded pair broke the whole file the moment _IMAGE_SCRIPT was added
+    # -- nine tests failing on a NameError that said nothing about the change.
     parts = []
-    for name in ("_PRINT_STYLE", "_PRINT_BUTTON"):
-        m = re.search(r'^' + name + r' = """(.*?)"""', src, re.S | re.M)
-        assert m, name + " not found in app.py"
-        parts.append(name + ' = """' + m.group(1) + '"""')
+    for m in re.finditer(r'^(_[A-Z][A-Z0-9_]*) = """(.*?)"""', src, re.S | re.M):
+        parts.append(m.group(1) + ' = """' + m.group(2) + '"""')
+    assert any("_PRINT_STYLE" in p for p in parts), "_PRINT_STYLE not found in app.py"
+    assert any("_PRINT_BUTTON" in p for p in parts), "_PRINT_BUTTON not found in app.py"
     m = re.search(r"^def _with_print_button\(doc: str\) -> str:.*?(?=\n\S)",
                   src, re.S | re.M)
     assert m, "_with_print_button not found in app.py"
@@ -115,6 +118,43 @@ def test_the_button_is_hidden_when_printing():
     """It is chrome. It must never appear on the client's letter."""
     out = _compose()(LETTER)
     assert re.search(r"@media\s+print\s*\{[^}]*#jsa-print[^}]*display:\s*none", out)
+
+
+def test_there_is_a_save_as_image_button(monkeypatch=None):
+    """Added 2026-10-01 at Ross's ask: a button to save the report as an image."""
+    out = _compose()(LETTER)
+    assert 'id="jsa-png"' in out
+    assert "html2canvas" in out
+
+
+def test_the_image_button_is_hidden_when_printing():
+    """Chrome, like the print button. It must never appear on a client letter."""
+    out = _compose()(LETTER)
+    assert re.search(r"@media\s+print\s*\{[^}]*#jsa-png[^}]*display:\s*none", out)
+
+
+def test_the_image_capture_is_told_the_whole_document_is_the_viewport():
+    """
+    THE FRAME AND WATERMARK ARE position:fixed.
+
+    At the iframe's own height html2canvas draws them around the first
+    screenful only, and the rest of the letter comes out unframed. Passing the
+    document's full scroll size as the window is what puts them around the
+    whole letter, so it is pinned rather than left as a tweak someone tidies.
+    """
+    out = _compose()(LETTER)
+    for opt in ("windowWidth", "windowHeight", "scrollX", "scrollY"):
+        assert opt in out, f"{opt} is gone -- fixed-position chrome will mis-render"
+
+
+def test_a_cdn_failure_says_so_on_the_button():
+    """
+    A CDN that does not load otherwise leaves a button that does nothing,
+    which is the exact class of silent failure this file exists to avoid.
+    """
+    out = _compose()(LETTER)
+    assert "typeof html2canvas !== 'function'" in out
+    assert "did not load" in out
 
 
 def test_the_letter_is_not_otherwise_altered():
