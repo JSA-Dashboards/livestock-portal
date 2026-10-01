@@ -459,7 +459,27 @@ def changes(df: pd.DataFrame, col: str):
         sub = valid[valid["report_date"] <= cdt - delta]
         return sub.iloc[-1][col] if not sub.empty else None
 
-    p1   = prior(timedelta(days=2))
+    # THE PRIOR REPORT, NOT A CALENDAR OFFSET -- this is the "Day Change"
+    # tile and it was wrong every day there was a report yesterday.
+    #
+    # It read prior(timedelta(days=2)), which takes the last row on or before
+    # today minus two days. On 2026-10-01 that is <= 09/29, so it skipped
+    # 09/30 completely and quoted a TWO-session move as a day change:
+    #
+    #     dashboard   Choice 376.79 - 382.66 (09/29) = -5.87
+    #                 Select 352.89 - 364.48 (09/29) = -11.59
+    #     USDA sheet  Choice 376.79 - 382.79 (09/30) =  -6.00
+    #                 Select 352.89 - 360.59 (09/30) =  -7.70
+    #
+    # Reported by Ross on 2026-10-01 against ams_2453.pdf: the cutout values
+    # matched and only the changes did not, which is exactly the shape of
+    # this bug -- the level comes straight from the feed and only the
+    # subtraction was reaching back too far.
+    #
+    # iloc[-2] is the prior PUBLISHED report, which is USDA's own basis and
+    # handles weekends and holidays for free: Monday 09/28's published +1.65
+    # is against Friday 09/25. A day offset cannot do that without a calendar.
+    p1   = valid.iloc[-2][col] if len(valid) > 1 else None
     p30  = prior(timedelta(days=30))
     p365 = prior(timedelta(days=365))
 
