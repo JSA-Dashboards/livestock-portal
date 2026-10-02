@@ -1,0 +1,200 @@
+"""Proof that the forecast scorecard is not marking its own homework.
+
+A scorecard is only worth the page space if two things hold, and both fail
+silently rather than loudly:
+
+  * it scores the code the page actually runs, not a second copy that drifts;
+  * it replays each past week seeing ONLY what had been published at the time.
+
+The second is the one that flatters. If the scored week's Friday-final file
+survives into the inputs, the "forecast" is reading the answer and the
+scorecard reports near-perfect accuracy for a method that has none.
+
+    python -m pytest tests/test_cash_scorecard.py -q
+"""
+
+import ast
+import sys
+from pathlib import Path
+
+import pandas as pd
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(ROOT / "apps" / "cash_trade"))
+from streamlit_source import load_from_app  # noqa: E402
+
+import scorecard as sc  # noqa: E402
+
+APP = ROOT / "apps" / "cash_trade" / "app.py"
+
+
+@pytest.fixture(scope="module")
+def fc():
+    return load_from_app(
+        APP, "_week_start", "weekly_5area_head", "weekly_national_head",
+        "wtd_checkpoints", "_front_of", "forecast_5area", "forecast_national",
+        consts=("CUT_ORDER", "FORECAST_GAP_WEEKS", "FORECAST_BAND_WEEKS"),
+        globals_={"pd": pd},
+    )
+
+
+def _vol(rows):
+    df = pd.DataFrame(rows, columns=["trade_date", "region", "cut", "period", "head"])
+    df["trade_date"] = pd.to_datetime(df["trade_date"])
+    df["head_week_ago"] = None
+    return df
+
+
+def _week_rows(monday, per_day, region="Nebraska"):
+    """per_day: five (afternoon_wtd, morning_wtd) pairs, None to omit a file."""
+    out, base = [], pd.Timestamp(monday)
+    for i, (aftn, final) in enumerate(per_day):
+        d = base + pd.Timedelta(days=i)
+        if aftn is not None:
+            out.append((d, region, "afternoon", "wtd", aftn))
+        if final is not None:
+            out.append((d, region, "morning", "wtd", final))
+    return out
+
+
+def _history(n_weeks, start="2026-01-05", late=3000):
+    """Identical weeks: Fri 1:30 cut at 40,000, finishing `late` higher."""
+    rows, finals = [], pd.Timestamp(start)
+    fin = {}
+    for i in range(n_weeks):
+        wk = finals + pd.Timedelta(days=7 * i)
+        rows += _week_rows(wk, [(None, None), (None, None), (None, 36000),
+                                (None, 36000), (40000, 40000 + late)])
+        fin[wk] = 40000.0 + late
+    return rows, pd.Series(fin)
+
+
+# ── the integrity test ───────────────────────────────────────────────────────
+
+def test_truncation_hides_the_scored_week_s_own_answer(fc):
+    """The Friday FINAL is the answer and must not survive into the inputs.
+
+    USDA publishes it the following Monday, so a forecast standing at Friday's
+    1:30 pm cut cannot have seen it. If it leaks, every scored week reports a
+    near-zero miss and the scorecard is worthless while looking excellent.
+    """
+    rows, _ = _history(6)
+    vol = _vol(rows)
+    week = pd.Timestamp("2026-02-02")
+    t = sc._truncate(vol, week, 4, fc["CUT_ORDER"]["afternoon"], fc["CUT_ORDER"])
+
+    leaked = t[(t["trade_date"] == week + pd.Timedelta(days=4)) & (t["cut"] == "morning")]
+    assert leaked.empty, "the scored week's final survived truncation"
+    # ...and the truncated frame must still END on the scored week, or
+    # forecast_5area would pick a different week as "current".
+    cps = fc["wtd_checkpoints"](t)
+    assert pd.Timestamp(cps["week"].max()) == week
+    # earlier weeks keep their finals, which is what the analogue pool needs
+    earlier = t[(t["trade_date"] == week - pd.Timedelta(days=3)) & (t["cut"] == "morning")]
+    assert not earlier.empty
+
+
+def test_a_leaked_answer_would_change_the_score(fc):
+    """Guard the guard: show the truncation is load-bearing, not decorative."""
+    rows, finals = _history(8)
+    # The live week must be OPEN -- no Friday final yet -- or the page is in its
+    # "week is closed" state and the scorecard steps back a checkpoint instead.
+    cur = pd.Timestamp("2026-03-02")
+    rows += _week_rows(cur, [(None, None), (None, None), (None, 36000),
+                             (None, 36000), (40000, None)])
+    vol = _vol(rows)
+    board = sc.build_scorecard(vol, finals, finals * 1.5, fc["forecast_5area"],
+                               fc["forecast_national"], fc["CUT_ORDER"], weeks=5)
+    assert not board.empty
+    # Standing at the Friday cut, the forecast sees 40,000 and adds the median
+    # late trade from identical past weeks -- landing exactly on the answer.
+    # The point is that it got there by INFERENCE: the 43,000 it reports is
+    # built from other weeks, and the wtd it stood on is the pre-final 40,000.
+    assert (board["wtd"] == 40000).all()
+    assert (board["f5"] == 43000).all()
+
+
+# ── scoring the real thing ───────────────────────────────────────────────────
+
+def test_the_scorecard_imports_no_forecast_of_its_own(fc):
+    """It must receive the page's functions, never define or import a copy.
+
+    A reimplementation grades a copy: the copy drifts, the page keeps its own
+    behaviour, and the scorecard reports on code nobody runs.
+    """
+    tree = ast.parse(APP.with_name("scorecard.py").read_text(encoding="utf-8"))
+    defined = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    assert "forecast_5area" not in defined
+    assert "forecast_national" not in defined
+    imported = {a.name.split(".")[0] for n in ast.walk(tree)
+                if isinstance(n, ast.Import) for a in n.names}
+    imported |= {n.module.split(".")[0] for n in ast.walk(tree)
+                 if isinstance(n, ast.ImportFrom) and n.module}
+    assert "app" not in imported
+    # and the entry point really does take them as parameters
+    fn = next(n for n in tree.body
+              if isinstance(n, ast.FunctionDef) and n.name == "build_scorecard")
+    args = [a.arg for a in fn.args.args]
+    assert "forecast_5area" in args and "forecast_national" in args
+
+
+def test_only_weeks_at_the_same_checkpoint_are_scored(fc):
+    """A Thursday call must never be scored as though it were a Friday one.
+
+    How much of a week is still to come depends entirely on where in the week
+    you stand, so mixing checkpoints compares two different questions.
+    """
+    rows, finals = _history(5)          # weeks 01-05 .. 02-02
+    # one past week that published NO Friday afternoon file at all. It must sit
+    # OUTSIDE the generated run or it collides and gives published5 a duplicate
+    # index, which is impossible in production -- weekly_5area_head de-dupes.
+    odd = pd.Timestamp("2026-02-09")
+    rows += _week_rows(odd, [(None, None), (None, None), (None, 30000),
+                             (None, 33000), (None, 35000)])
+    finals = pd.concat([finals, pd.Series({odd: 35000.0})]).sort_index()
+    # current week, standing at the Friday cut
+    cur = pd.Timestamp("2026-02-16")
+    rows += _week_rows(cur, [(None, None), (None, None), (None, 36000),
+                             (None, 36000), (40000, None)])
+    vol = _vol(rows)
+
+    board = sc.build_scorecard(vol, finals, finals * 1.5, fc["forecast_5area"],
+                               fc["forecast_national"], fc["CUT_ORDER"], weeks=10)
+    assert odd not in set(board["week"]), "scored a week that never hit the checkpoint"
+    assert cur not in set(board["week"]), "scored the live week against itself"
+
+
+# ── the summary ──────────────────────────────────────────────────────────────
+
+def test_summary_uses_the_median_not_the_mean():
+    """Misses are right-skewed, so a mean describes none of the weeks.
+
+    Late trade can surprise upward without limit and cannot go below zero. One
+    back-loaded week in ten drags a mean well past every individual miss.
+    """
+    board = pd.DataFrame({
+        "week": pd.date_range("2026-01-05", periods=5, freq="7D"),
+        "miss5": [100.0, 100.0, 100.0, 100.0, 50_000.0],
+        "a5": [50_000.0] * 5,
+        "in5": [True] * 5,
+        "missn": [0.0] * 5, "an": [1.0] * 5, "inn": [True] * 5,
+    })
+    board["pct5"] = board["miss5"] / board["a5"]
+    board["pctn"] = board["missn"] / board["an"]
+    s = sc.summarise(board)
+    assert s["five"]["median_abs_head"] == 100.0        # not the 10,080 mean
+    assert s["five"]["in_band"] == 1.0
+    assert s["n"] == 5
+
+
+def test_empty_when_there_is_nothing_to_score(fc):
+    """No history means no accuracy claim, not a claim built on one week."""
+    rows, finals = _history(1)
+    vol = _vol(rows)
+    board = sc.build_scorecard(vol, finals, finals * 1.5, fc["forecast_5area"],
+                               fc["forecast_national"], fc["CUT_ORDER"])
+    assert board.empty
+    assert sc.summarise(board) == {}
