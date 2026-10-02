@@ -1022,6 +1022,22 @@ _IMAGE_SCRIPT = """<script
       for (var i = 1; i < pages; i++) { cuts.push(cutNear(Math.round(i * pageH))); }
       cuts.push(canvas.height);
 
+      // "Page 2 of 3" BURNED INTO THE IMAGE, not just into the filename.
+      //
+      // A client sees pixels in a message bubble and never sees the
+      // filename, so without this there is no way to tell that a page
+      // arrived out of order or did not arrive at all. MMS does not
+      // guarantee ordering, and three separate texts certainly do not.
+      //
+      // IT GETS ITS OWN STRIP RATHER THAN SHARING THE PAGE'S BOTTOM MARGIN.
+      // Measured on the 2026-10-02 letter, the white below the last line of
+      // text was 23px on page 1 against 83 and 99 on pages 2 and 3 -- the
+      // cuts land wherever the blank run happens to be, so there is no
+      // offset that is clear of the text on every page. Adding a strip
+      // makes the space exist instead of hoping for it. A single-page
+      // letter gets no strip and no label, matching the filename rule.
+      var LABEL_H = pages > 1 ? 52 : 0;
+
       function save(idx) {
         if (idx >= pages) return;
         var top = cuts[idx], bot = cuts[idx + 1];
@@ -1030,12 +1046,21 @@ _IMAGE_SCRIPT = """<script
         // Every sheet is a FULL page tall even when its cut fell short, so
         // the images are a consistent size in the message thread rather than
         // one tall and one stubby.
-        slice.height = Math.max(bot - top, pageH);
+        slice.height = Math.max(bot - top, pageH) + LABEL_H;
         var c = slice.getContext('2d');
         c.fillStyle = '#ffffff';
         c.fillRect(0, 0, slice.width, slice.height);
         c.drawImage(canvas, 0, top, canvas.width, bot - top,
                             0, 0, canvas.width, bot - top);
+        if (LABEL_H) {
+          // The frame's own sage, so it reads as the letter's furniture
+          // rather than as something the browser stamped on afterwards.
+          c.fillStyle = '#5e7164';
+          c.font = '600 22px Calibri, Carlito, "Segoe UI", system-ui, sans-serif';
+          c.textAlign = 'center';
+          c.fillText('Page ' + (idx + 1) + ' of ' + pages,
+                     slice.width / 2, slice.height - 18);
+        }
         var a = document.createElement('a');
         a.download = pages > 1 ? base + ' (page ' + (idx + 1) + ' of ' + pages + ').png'
                                : base + '.png';
@@ -1122,9 +1147,11 @@ st.caption("**Print / Save as PDF** prints the preview above from your own brows
            "**Save as image** downloads the letter as PNGs laid out as printed "
            "8.5×11 sheets — same margins, same frame, same line breaks as the "
            "PDF — at twice print size. A multi-page letter saves as **one file "
-           "per page**, because a single tall image is unreadable once a phone "
-           "fits it to a message bubble. Cuts land in whitespace, not through "
-           "a line. Your browser may ask once to allow several downloads.")
+           "per page**, each stamped *Page N of M* along the bottom, because a "
+           "single tall image is unreadable once a phone fits it to a message "
+           "bubble and a client never sees the filename. Cuts land in "
+           "whitespace, not through a line. Your browser may ask once to "
+           "allow several downloads.")
 
 # THE FILENAME SAYS WHICH COPY IT IS. Two near-identical PDFs of the same
 # letter land in the same folder every day, and the only difference is six

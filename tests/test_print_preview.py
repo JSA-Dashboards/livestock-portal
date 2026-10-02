@@ -336,6 +336,64 @@ def test_the_cut_is_centred_in_the_blank_run():
     assert "midOfRun" in out
 
 
+def test_each_page_image_is_stamped_with_its_number():
+    """
+    THE CLIENT NEVER SEES THE FILENAME. The pages go out as three separate
+    texts, and MMS guarantees no ordering across carriers, so a reader
+    holding a bubble of pixels has no way to tell that page 2 is missing or
+    that it arrived before page 1. The filename carries it; the image did
+    not. Now it does.
+    """
+    out = _compose()(LETTER)
+    assert "'Page ' + (idx + 1) + ' of ' + pages" in out
+    assert "c.fillText(" in out
+
+
+def test_the_page_label_gets_its_own_strip():
+    """
+    IT CANNOT SHARE THE PAGE'S BOTTOM MARGIN, because that margin is not a
+    fixed size. The cut lands wherever the blank run is, so on the real
+    2026-10-02 letter the white below the last line of text measured 23px on
+    page 1 against 83 and 99 on pages 2 and 3 — there is no offset clear of
+    the text on all three. Reserving a strip makes the space exist.
+    """
+    out = _compose()(LETTER)
+    assert "Math.max(bot - top, pageH) + LABEL_H" in out, (
+        "the label no longer has reserved space and can land on the text"
+    )
+
+
+def test_a_single_page_letter_is_not_stamped():
+    """
+    The morning brief is one page. "Page 1 of 1" on it would be noise, and
+    the strip would make it taller than a sheet for no reason. Same rule the
+    filename already follows.
+    """
+    out = _compose()(LETTER)
+    assert "pages > 1 ? 52 : 0" in out
+
+
+def test_the_label_fits_inside_its_strip():
+    """
+    Arithmetic rather than a string match, because the failure here is
+    silent: a font bumped past the strip height, or a baseline offset raised
+    above it, draws the label over the last line of the letter and nothing
+    raises. Checks the glyph box sits inside the reserved band.
+    """
+    out = _compose()(LETTER)
+    strip = int(re.search(r"pages > 1 \? (\d+) : 0", out).group(1))
+    baseline = int(re.search(r"slice\.height - (\d+)\)", out).group(1))
+    size = int(re.search(r"c\.font = '\d+ (\d+)px", out).group(1))
+
+    # Baseline measured up from the slice bottom; the descender hangs below
+    # it and the cap height rises above. 0.25/0.8 of the em is generous for
+    # Calibri and keeps this from being a restatement of the constants.
+    assert baseline + size * 0.8 <= strip, (
+        f"label top {baseline + size * 0.8:.0f}px exceeds the {strip}px strip"
+    )
+    assert baseline - size * 0.25 > 0, "the descender falls off the bottom edge"
+
+
 def test_multiple_downloads_are_staggered():
     """
     Chrome drops some downloads fired in a tight loop from one gesture, and
