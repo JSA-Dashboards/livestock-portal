@@ -7,7 +7,16 @@ from urllib3.util.retry import Retry
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 import html
+import sys
 import time
+from pathlib import Path
+
+# `scorecard` is a unique module name across every bundled app and both repos
+# (checked 2026-10-02), so the bare-name import is safe here in a way that
+# `snowflake_db` is not -- see CLAUDE.md on the five identical copies of that
+# one and why whichever page loads first wins.
+sys.path.insert(0, str(Path(__file__).parent))
+import scorecard  # noqa: E402
 
 # ── JPSI Brand ───────────────────────────────────────────────────────────────
 JPSI_DARK = "#32373c"
@@ -2200,6 +2209,66 @@ with tab_fcst:
                 recent[["5-Area", "National", "Gap"]].iloc[::-1]
                       .style.format("{:,.0f}"),
                 use_container_width=True)
+
+        # ── how the last ten calls landed ───────────────────────────────────
+        # Scored at the SAME checkpoint the live forecast above is standing at,
+        # not at a fixed Friday -- accuracy depends far more on how far into the
+        # week you are than on anything else, so a fixed-Friday scorecard would
+        # flatter a Wednesday reading of this page roughly tenfold. See
+        # scorecard.py, which also records why replaying past calls is honest
+        # here when it is not for the sibling FCI scorecard.
+        board = scorecard.build_scorecard(
+            fcst_vol, head5, headn, forecast_5area, forecast_national,
+            CUT_ORDER, weeks=10)
+        stats = scorecard.summarise(board)
+        if not board.empty and stats:
+            st.markdown(
+                f'<div class="sec-header" style="border-left-color:{D14_COLOR};">'
+                f'Forecast accuracy &mdash; the last {stats["n"]} calls at this '
+                f'point in the week</div>', unsafe_allow_html=True)
+
+            _f, _n = stats["five"], stats["nat"]
+            st.markdown(
+                f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 8px;">'
+                f'<b>5-Area</b> missed by a median <b>{_f["median_abs_head"]:,.0f} hd '
+                f'({_f["median_abs_pct"]:.1%})</b>, inside the stated range '
+                f'<b>{_f["in_band"] * stats["n"]:.0f} of {stats["n"]}</b> times. '
+                f'<b>National</b> missed by a median <b>{_n["median_abs_head"]:,.0f} hd '
+                f'({_n["median_abs_pct"]:.1%})</b>, inside <b>'
+                f'{_n["in_band"] * stats["n"]:.0f} of {stats["n"]}</b>.</div>',
+                unsafe_allow_html=True)
+
+            _b = board.copy()
+            _b["Week of"] = _b["week"].dt.strftime("%b %d")
+            _b["Week to date"] = _b["wtd"].map(lambda v: f"{v:,.0f}")
+            _b["Confidence"] = _b["grade"].str.title()
+            _b["5-Area est."] = _b["f5"].map(lambda v: f"{v:,.0f}")
+            _b["5-Area actual"] = _b["a5"].map(lambda v: f"{v:,.0f}")
+            _b["5-Area miss"] = [f"{m:+,.0f} ({p:+.1%})"
+                                 for m, p in zip(_b["miss5"], _b["pct5"])]
+            _b["National est."] = _b["fn"].map(lambda v: f"{v:,.0f}")
+            _b["National actual"] = _b["an"].map(lambda v: f"{v:,.0f}")
+            _b["National miss"] = [f"{m:+,.0f} ({p:+.1%})"
+                                   for m, p in zip(_b["missn"], _b["pctn"])]
+            st.dataframe(
+                _b[["Week of", "Week to date", "Confidence", "5-Area est.",
+                    "5-Area actual", "5-Area miss", "National est.",
+                    "National actual", "National miss"]],
+                use_container_width=True, hide_index=True)
+
+            st.markdown(
+                f'<div class="note" style="margin-top:6px;">Each past week is replayed '
+                f'through the same code the forecast above runs, standing at the same '
+                f'<b>{_dow} {_cut.lower()}</b> and seeing only what had been '
+                f'published by then &mdash; the analogue pool, the typical-week baseline '
+                f'and the national gap are all cut to weeks USDA had already printed. '
+                f'<b>The 5-Area column is the one to trust.</b> It is close to arithmetic, '
+                f'and the national column carries the gap to states with no daily report '
+                f'at all, which is why its miss is the larger of the two. Replaying is '
+                f'sound here because the weekly figure being scored against has never been '
+                f'revised &mdash; zero corrections in twelve months &mdash; and only 0.5% of '
+                f'the daily rows it replays from ever are.</div>',
+                unsafe_allow_html=True)
 
         st.markdown(
             '<div class="note" style="margin-top:10px;">'
