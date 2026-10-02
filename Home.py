@@ -33,22 +33,33 @@ st.set_page_config(
     layout="wide",
 )
 
-# Hide Streamlit's own chrome — but NOT the whole <header>.
+# Hide Streamlit's own chrome WITHOUT hiding the portal's top navigation.
 #
-# `header {visibility: hidden;}` was here from 2026-10-02 and took the
-# portal's top navigation with it. st.navigation(position="top") renders the
-# page tabs INSIDE header[data-testid="stHeader"], alongside the toolbar, so
-# hiding the element hides both. Reported the same day: "my dashboard tabs
-# across the top are missing".
+# THE NAV LIVES INSIDE THE TOOLBAR, which is not obvious and has now cost two
+# wrong fixes in one day. The real tree on Streamlit 1.64, read out of the
+# running app:
 #
-# The toolbar is the only thing in there that should go — the Deploy button
-# and the hamburger. Targeting it by test id leaves the header, and therefore
-# the nav, in place. Confirmed against the live DOM: header's only child is
-# div[data-testid="stToolbar"].
+#   header[data-testid="stHeader"]
+#     └── div[data-testid="stToolbar"]
+#           ├── div …  → a[data-testid="stTopNavLink"]  ← OUR PAGE TABS
+#           │            button[data-testid="stTopNavSection"] ("3 more")
+#           ├── div[data-testid="stToolbarActions"]     ← Share + Cloud icons
+#           └── span[data-testid="stMainMenu"]          ← hamburger
+#
+# So `header {visibility:hidden}` (added 2026-10-02) hid the tabs, and so did
+# `[data-testid="stToolbar"] {visibility:hidden}`, which was the first attempt
+# at fixing it. Both are one level too high. Only the last two children may be
+# hidden; the toolbar and the header must stay visible or the nav goes with
+# them.
+#
+# Checked by walking the DOM in the deployed app rather than locally: local
+# Streamlit is 1.63 and renders st.navigation in the SIDEBAR, so none of this
+# structure exists there and a local check would show nothing wrong.
 st.markdown("""<style>
 #MainMenu {visibility: hidden;}
 footer {visibility: hidden;}
-[data-testid="stToolbar"] {visibility: hidden;}
+[data-testid="stToolbarActions"] {display: none;}
+[data-testid="stMainMenu"] {display: none;}
 [data-testid="stDecoration"] {display: none;}
 </style>""", unsafe_allow_html=True)
 
