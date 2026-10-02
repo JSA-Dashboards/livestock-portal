@@ -858,20 +858,37 @@ def dayfact_block(text: str) -> str:
             f'{body}</div>')
 
 
-def _signature_html(issue, own_page: bool = True) -> str:
-    """The signature and disclaimer. Identical in every session and format."""
+def _signature_html(issue, own_page: bool = True, disclaimer: bool = True) -> str:
+    """
+    The signature, and the risk disclaimer unless it is being left off.
+
+    WHY THE DISCLAIMER IS EVER OMITTED, and why the default is never to.
+    Ross sends the letter in an email that already carries the firm's risk
+    disclaimer, and the attached copy then prints it twice. So one variant
+    drops it -- for the PDF and the image that go INSIDE that email, and for
+    nothing else.
+
+    DEFAULT TRUE EVERYWHERE, and no caller gets it by accident:
+    `letter.build` never passes it, so the CLI, `--no-fetch` re-renders and
+    `--archive` all keep the full letter. Only the authoring page can turn it
+    off, per render, with the state shown on screen and reset every run. A
+    disclaimer that goes missing quietly is the failure that matters here,
+    so the switch is deliberate, visible, and does not persist.
+    """
     s = config.SIGNATURE
-    return (
-        f'<div class="sig{" own-page" if own_page else ""}">'
+    body = (
         f'<div>{_esc(s["name"])}</div>'
         f'<div>{_esc(s["company"])}</div>'
         f'<div>{_esc(s["city"])}</div>'
         f'<div>{_esc(s["web"])}</div>'
         f'<div>Office: {_esc(s["office"])}</div>'
         f'<div>Cell: {_esc(s["cell"])}</div>'
-        f'<div class="disclaimer">{_esc(config.DISCLAIMER.format(year=issue.year))}</div>'
-        '</div>'
     )
+    if disclaimer:
+        body += (f'<div class="disclaimer">'
+                 f'{_esc(config.DISCLAIMER.format(year=issue.year))}</div>')
+    return f'<div class="sig{" own-page" if own_page else ""}">{body}</div>'
+
 
 
 def _page(title: str, stamp: str, body: list, body_class: str = "") -> str:
@@ -883,8 +900,15 @@ def _page(title: str, stamp: str, body: list, body_class: str = "") -> str:
     )
 
 
-def build_html(ctx: dict) -> str:
-    """ctx carries the fetched data plus the commentary sections."""
+def build_html(ctx: dict, *, disclaimer: bool = True) -> str:
+    """
+    ctx carries the fetched data plus the commentary sections.
+
+    `disclaimer` is KEYWORD-ONLY and defaults to True so that every existing
+    caller -- the CLI, the archive, thirty-odd tests -- keeps producing the
+    full letter without being touched. See _signature_html for why the only
+    place that may set it False is the authoring page.
+    """
     issue: date = ctx["issue_date"]
     c = ctx["commentary"]
     # Built by hand rather than with strftime: the letter uses unpadded 9/18/26,
@@ -959,7 +983,8 @@ def build_html(ctx: dict) -> str:
         body.append(dayfact_block(ctx.get("dayfact"))
                     or chart_mod.chart_block(ctx.get("chart")))
         body.append(f'<p class="signoff">{_esc(sign_off)}</p>')
-        body.append(_signature_html(issue, own_page=False))
+        body.append(_signature_html(issue, own_page=False,
+                                    disclaimer=disclaimer))
         return _page(title, stamp, body, body_class="am")
 
     # HEADLINES LEAD, then the session recap. Friday has led with Key Headlines
@@ -1047,5 +1072,6 @@ def build_html(ctx: dict) -> str:
     # The recap never takes a page for this; the others follow the setting.
     # See config.SIGNATURE_OWN_PAGE -- it is False, so nothing does today.
     body.append(_signature_html(
-        issue, own_page=(kind != "recap") and config.SIGNATURE_OWN_PAGE))
+        issue, own_page=(kind != "recap") and config.SIGNATURE_OWN_PAGE,
+        disclaimer=disclaimer))
     return _page(title, stamp, body)

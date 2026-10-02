@@ -809,7 +809,32 @@ if kind == "am":
                        "eight the float outgrows the band beside the signature "
                        "and the brief runs to a second page — check the preview.")
 
-html = render.build_html(ctx_for_render)
+# ── Which copy: with the disclaimer, or without ──────────────────────────────
+# TWO COPIES GO OUT AND ONLY ONE NEEDS THE DISCLAIMER. Ross emails the letter
+# in a message that already carries the firm's risk disclaimer, so the PDF and
+# the image attached to that message print it a second time. This drops it
+# from the attachment and nothing else.
+#
+# IT RESETS TO ON EVERY RUN and is never remembered. A disclaimer that goes
+# missing quietly is the only failure mode here that matters, so the switch
+# has to be deliberate each time rather than a setting that can be left off
+# and forgotten. `letter.build` does not pass the flag at all, so the CLI,
+# a --no-fetch re-render and --archive always keep the full letter.
+_no_disc = st.checkbox(
+    "Leave the risk disclaimer off this copy",
+    value=False, key="wcr_no_disclaimer",
+    help="For the PDF or image you attach to an email that already carries "
+         "the disclaimer. Resets to off on every run; the archived copy and "
+         "the command line always keep it.")
+
+html = render.build_html(ctx_for_render, disclaimer=not _no_disc)
+
+if _no_disc:
+    st.warning(
+        "**This copy has no risk disclaimer.** The preview, Print / Save as "
+        "PDF, Save as image and Download HTML below all now omit it — send it "
+        "only inside an email that carries the disclaimer itself. Untick to "
+        "get the full letter back.")
 
 missing = html.count(render.MISSING)
 if missing:
@@ -996,18 +1021,30 @@ st.caption("**Print / Save as PDF** prints the preview above from your own brows
            "tall image rounded up to whole sheets, with no page break drawn "
            "across it; use the PDF when the pagination itself matters.")
 
+# THE FILENAME SAYS WHICH COPY IT IS. Two near-identical PDFs of the same
+# letter land in the same folder every day, and the only difference is six
+# lines of small print at the foot. Naming them apart is the cheap half of
+# not attaching the wrong one.
+#
+# The IMAGE filename is not marked, deliberately: it comes from the document's
+# <title>, and appending to that would put "(no disclaimer)" in the browser's
+# print header on a client letter. The on-screen warning covers that case.
+_stem = f"{config.title_for(session)} {day.title()} {issue}"
+if _no_disc:
+    _stem += " (no disclaimer)"
+
 d1, d2 = st.columns(2)
 with d1:
     st.download_button("Download HTML", data=html.encode("utf-8"),
-                       file_name=f"{config.title_for(session)} {day.title()} {issue}.html",
+                       file_name=f"{_stem}.html",
                        mime="text/html", use_container_width=True)
 with d2:
     browser = topdf.find_browser()
     if browser:
         if st.button("Build PDF", type="primary", use_container_width=True):
             OUT.mkdir(parents=True, exist_ok=True)
-            html_path = OUT / f"{config.title_for(session)} {day.title()} {issue}.html"
-            pdf_path = OUT / f"{config.title_for(session)} {day.title()} {issue}.pdf"
+            html_path = OUT / f"{_stem}.html"
+            pdf_path = OUT / f"{_stem}.pdf"
             html_path.write_text(html, encoding="utf-8")
             ok, msg = topdf.html_to_pdf(html_path, pdf_path)
             if ok:
@@ -1029,7 +1066,7 @@ with d2:
 
 if st.session_state.get("wcr_pdf"):
     st.download_button("Download PDF", data=st.session_state["wcr_pdf"],
-                       file_name=f"{config.title_for(session)} {day.title()} {issue}.pdf",
+                       file_name=f"{_stem}.pdf",
                        mime="application/pdf", use_container_width=True)
 
 # -- Archive ------------------------------------------------------------------
