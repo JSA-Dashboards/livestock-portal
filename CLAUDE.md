@@ -542,6 +542,88 @@ plain `pct_change` bridges those gaps and prints a 13-month move as a "MoM".
 `tests/test_cold_storage.py` pins that, the run-splitting, and the red-meat
 identity.
 
+## The Monday Print Forecast tab
+
+Added 2026-10-02: a third tab on the Cash Cattle Trade page, beside the weekly
+and daily views. It turns a part-finished trading week into the two figures
+USDA publishes the following Monday — the 5-Area weekly negotiated head
+(LM_CT150) and the national confirmed count (LM_CT154). The two steps are kept
+visibly separate on the page on purpose: they fail differently, and a reader
+needs to know which half is shaky.
+
+**Step 1 is close to arithmetic, and that is not a figure of speech.** The four
+daily regions' Friday-FINAL week-to-date, summed with nulls as zero, **IS** the
+5-Area weekly negotiated head USDA prints — verified on all 55 weeks the daily
+history covers, zero mismatches, including the weeks where two of the four
+regions published nothing at all. So the only unknown in Monday's 5-Area print
+is trade reported after USDA's last published cut. If that identity ever
+drifts, the tab is estimating a different number from the one USDA prints and
+everything downstream of it is wrong. `tests/test_cash_forecast.py` pins it
+against real published figures rather than a fixture anyone could edit to
+agree.
+
+**Step 2 is the weak half** and the page says so. The gap between the 5-Area
+and national counts is negotiated trade in states with no daily report at all,
+and it is the part with no observable running total.
+
+### Four things in it that look wrong and are not
+
+- **It asks for a FULL YEAR of daily history outright, with no window
+  control.** That looks like it ignores the hidden-tab rule, and it does not:
+  the cost of a `/Summary` request is flat in the window length — 4.8 s for 30
+  days against 5.6 s for 365, measured 2026-10-02. It is `fetch_daily_cash`'s
+  `/Detail` section that is expensive (11 MB for one region-year), and that is
+  what `DAILY_WINDOW_DEFAULT`'s 1M is protecting against. **Do not shrink this
+  to match the Daily tab**: a year buys ~50 calibration weeks for under a
+  second, a month buys four.
+- **The 5-Area-to-national gap is added, not scaled, over only FOUR weeks.**
+  Backtested on 175 weekly pairs since 2023, every window from 4 to 26 weeks
+  and all three methods (additive, ratio, OLS) land inside 2.4–3.4% median
+  absolute error — so the choice looks arbitrary until the relationship steps,
+  when it is the only thing that matters. Since Kansas and TX/OK/NM stopped
+  publishing daily volumes the gap roughly doubled, and the bias is −3.5% at
+  four weeks against −16.0% at thirteen. The short window is the one that
+  notices.
+- **Analogues are picked on FRONT-LOADING, not week maturity.** Narrowing on
+  maturity — week-to-date against a typical recent week — is the obvious
+  alternative and is worse: 12.2% median absolute error against 7.8% over the
+  same 52 weeks, band coverage 65% → 50%. Tried and rejected 2026-10-02; the
+  comment in `forecast_5area` says so. A low maturity says the week is quiet
+  but not whether it has *finished* being quiet, and those are different
+  questions.
+- **The tab grades its own reliability** instead of printing one number with
+  one error bar. Split into quartiles by how much had already traded, the
+  busiest quarter of weeks land within a median 3% with 92% band coverage and
+  the quietest are a median 36% out with 38% — same method, same band. Maturity
+  earns its keep here, where it beats front-loading outright, which is why it
+  is computed but never used to select.
+
+### The suppression interaction is what moves it most
+
+When USDA withholds a region's daily volume for confidentiality it publishes
+the report skeleton with every volume null, grid rows included. That region
+then drops out of the 5-Area figure — USDA's own published total included,
+which is why the identity above still holds — but **stays in the national
+count**, so the gap widens and Step 2 is the half that suffers.
+
+TX/OK/NM has been withheld since the week of 2026-06-22 and Kansas since
+2026-08-10. Measured over that break, the gap went from a median 11,567 head/wk
+to 23,172 — about 11,600 head/wk of real trade that is in the national number
+and absent from the 5-Area. A region sitting at zero across a whole week on the
+Daily tab's week-to-date tiles is the signal.
+
+### The prediction on the record
+
+The tab's first live run, for the week of 9/28–10/2 and standing at Friday's
+1:30 pm cut, called **5-Area 61,167** (range 59,428–68,363) and **national
+81,723** (range 74,476–94,063). USDA settles both on Monday 2026-10-05.
+
+Worth recording the outcome here when it lands, because the two halves fail
+independently: a 5-Area miss means the identity or the late-trade estimate is
+wrong and deserves real investigation, while a national-only miss is the gap
+model — which rests on six post-blackout weeks and is the half expected to need
+work first.
+
 ## The daily letter generator (`letter/`)
 
 `python -m letter.build [--session am|pm] [--day monday..friday] [--kind ...]
