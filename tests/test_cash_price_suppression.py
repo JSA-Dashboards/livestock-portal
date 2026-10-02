@@ -19,9 +19,10 @@ both cuts, NEGOTIATED CASH Steer/Heifer "Total all grades" (22,540 rows):
     the whole window, matching the volume finding. So a blank cannot be read
     as a zero here either.
   * A BLANK VOLUME NEVER COINCIDES WITH A PUBLISHED PRICE -- 0 counterexamples
-    in 2,833 region-trading-days. That is what licenses reusing the volume
-    `suppressed` flag instead of building a second run detector on prices: the
-    flag can only fire on a day whose price is blank anyway.
+    in 2,833 region-trading-days. That is what licenses PREFERRING the volume
+    `suppressed` flag over the price frame's own run: the flag can only fire
+    on a day whose price is blank anyway, and one flag read by both panels is
+    what keeps them agreeing by construction rather than by coincidence.
   * The converse is common and must NOT be called withheld: 316 days carry a
     week-to-date volume with no price that day, the region having traded
     earlier in the week and been quiet on it.
@@ -54,6 +55,19 @@ The page warns as well, since nothing else can see this failure.
 It does not cry wolf: over the 263 trading days to 2026-10-02, weekly_to_date()
 returned {} on none of the days that carried a price, so the two sections move
 together and an empty one is a real failure rather than a few hours of skew.
+
+AND THEN THE PRICE FRAME LEARNED TO ANSWER FOR ITSELF. Saying "no volume data"
+is honest but blind: a /Summary outage cost the page the withheld/quiet
+distinction entirely, on a panel that already holds every row it needs to draw
+it. _price_blank_run_days() counts the same kind of run on the price frame and
+is consulted ONLY when the volume flag is absent, so the flag still decides
+wherever it exists and the two panels still agree by construction.
+
+The fallback is conservative in the same direction as the rest of this file: a
+price run short of SUPPRESSION_RUN_DAYS is no more evidence of no withholding
+than a missing flag was, so it yields "unknown" rather than "undefined" or a
+claim. Nothing reaches "withheld" without a run long enough to have earned it
+on one series or the other, and a published price beats both.
 """
 import ast
 import sys
@@ -74,6 +88,7 @@ APP = ROOT / "apps" / "cash_trade" / "app.py"
 def ns():
     return load_from_app(
         APP, "daily_price_state", "weekly_to_date", "_null_run_days",
+        "_price_blank_run_days", "_trailing_blank_run",
         consts=("DAILY_REGIONS", "SUPPRESSION_RUN_DAYS"),
         globals_={"pd": pd},
     )
@@ -452,3 +467,145 @@ def test_the_tiles_and_the_table_resolve_the_state_once(ns):
     assert (body.index("_states[region] = daily_price_state(")
             < body.index("state, row = _states[region]")
             < body.index("_state = _states[region][0]"))
+
+
+# -- the price frame answering for itself ------------------------------------
+
+def _prices(series, days=25):
+    """
+    fetch_daily_cash()-shaped rows, newest LAST: (head, price) or None for a
+    day USDA published blank. A day omitted is a day USDA did not publish.
+    """
+    dates = list(pd.bdate_range(end="2026-10-02", periods=days))
+    vals = [None] * (len(dates) - len(series)) + list(series)
+    return pd.DataFrame([
+        {"region": "R", "cut": "morning", "basis": "Live FOB",
+         "trade_date": d, "head": (v or (None, None))[0],
+         "price": (v or (None, None))[1]}
+        for d, v in zip(dates, vals)
+    ]), dates[-1]
+
+
+def test_the_price_run_rescues_a_withheld_region_when_the_flag_is_gone(ns):
+    """
+    The point of the fallback: a /Summary outage no longer blinds the panel.
+    TX/OK/NM has published nothing but blanks since 2026-06-26, and the price
+    frame alone is enough to say so.
+    """
+    f = ns["daily_price_state"]
+    long_run = ns["SUPPRESSION_RUN_DAYS"]
+    assert f(_priced([]), _published(), suppressed=None,
+             blank_run=long_run)[0] == "withheld"
+
+
+def test_a_short_price_run_still_yields_unknown(ns):
+    """
+    Conservative in the same direction as everything else here. Six sessions
+    is TX/OK/NM reporting normally in a thin week, not a withholding, and with
+    no flag to corroborate it the honest answer is still "I cannot tell".
+    """
+    f = ns["daily_price_state"]
+    assert f(_priced([]), _published(), suppressed=None, blank_run=6)[0] == "unknown"
+    assert f(_priced([]), _published(), suppressed=None, blank_run=0)[0] == "unknown"
+
+
+def test_the_flag_wins_wherever_it_exists(ns):
+    """
+    A fallback, not a second opinion. Two detectors free to disagree are two
+    panels free to disagree -- the defect this file exists for, one row lower.
+    A long price run must not override a flag that says otherwise.
+    """
+    f = ns["daily_price_state"]
+    long_run = ns["SUPPRESSION_RUN_DAYS"] + 20
+    assert f(_priced([]), _published(), suppressed=False,
+             blank_run=long_run)[0] == "undefined"
+    assert f(_priced([]), _published(), suppressed=True, blank_run=0)[0] == "withheld"
+
+
+def test_a_price_beats_a_long_blank_run(ns):
+    """An observation outranks an inference about one, the same as the flag."""
+    rows = _priced([("Live FOB", "morning", 219.75, 800.0)])
+    state, row = ns["daily_price_state"](rows, _published(), suppressed=None,
+                                         blank_run=99)
+    assert state == "priced"
+    assert row["price"] == 219.75
+
+
+def test_an_absent_file_beats_a_long_blank_run(ns):
+    assert ns["daily_price_state"](_priced([]), NONE_PUBLISHED, suppressed=None,
+                                   blank_run=99)[0] == "unpublished"
+
+
+def test_the_price_run_counts_only_unusable_days(ns):
+    """
+    "Usable" is head AND price, which is what daily_combined keeps -- a row
+    with one of the two is still a blank day to the tile, so the run has to
+    agree with what the tile rendered.
+    """
+    f = ns["_price_blank_run_days"]
+    df, today = _prices([None] * 25)
+    assert f(df, "R", today) == 25
+    df, today = _prices([None] * 24 + [(500.0, None)])
+    assert f(df, "R", today) == 25
+    df, today = _prices([None] * 24 + [(None, 220.0)])
+    assert f(df, "R", today) == 25
+    df, today = _prices([None] * 24 + [(500.0, 220.0)])
+    assert f(df, "R", today) == 0
+
+
+def test_the_price_run_resets_on_a_print(ns):
+    df, today = _prices([None] * 20 + [(500.0, 220.0)] + [None] * 4)
+    assert ns["_price_blank_run_days"](df, "R", today) == 4
+
+
+def test_the_price_run_is_zero_for_a_region_not_in_the_frame(ns):
+    df, today = _prices([(500.0, 220.0)] * 25)
+    assert ns["_price_blank_run_days"](df, "Elsewhere", today) == 0
+
+
+def test_the_price_run_ignores_days_after_the_one_asked_about(ns):
+    """The tiles headline last_trade; the run must describe that day."""
+    df, _ = _prices([(500.0, 220.0)] * 20 + [None] * 5)
+    earlier = list(pd.bdate_range(end="2026-10-02", periods=25))[19]
+    assert ns["_price_blank_run_days"](df, "R", earlier) == 0
+
+
+def test_trailing_blank_run_skips_days_usda_never_published(ns):
+    """
+    An unpublished day is not in the map: it neither counts toward the run nor
+    breaks it, because the run is about what USDA said when it spoke.
+    """
+    days = list(pd.bdate_range(end="2026-10-02", periods=5))
+    flags = {days[0]: True, days[1]: True, days[3]: True, days[4]: True}
+    assert ns["_trailing_blank_run"](flags, days[4]) == 4
+    flags[days[1]] = False
+    assert ns["_trailing_blank_run"](flags, days[4]) == 2
+
+
+def test_both_series_share_one_definition_of_a_run(ns):
+    """
+    Two near-identical loops is how a module ends up existing five times in
+    this repo. Both detectors must delegate rather than re-implement.
+    """
+    src = APP.read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    for name in ("_null_run_days", "_price_blank_run_days"):
+        fn = next(n for n in tree.body
+                  if isinstance(n, ast.FunctionDef) and n.name == name)
+        calls = {c.func.id for c in ast.walk(fn)
+                 if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
+        assert "_trailing_blank_run" in calls, name
+
+
+def test_the_page_feeds_the_run_into_the_single_call(ns):
+    """
+    Invariant 1 says daily_price_state resolves once. The fallback therefore
+    takes the run as an argument rather than adding a second call site, and
+    the run is computed from the PRICE frame the panel already holds.
+    """
+    src = APP.read_text(encoding="utf-8")
+    assert "blank_run=_price_blank_run_days(daily_df, region, last_trade)" in src
+    calls = [n for n in ast.walk(ast.parse(src))
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+             and n.func.id == "daily_price_state"]
+    assert len(calls) == 1, [n.lineno for n in calls]

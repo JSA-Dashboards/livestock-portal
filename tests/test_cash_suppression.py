@@ -55,7 +55,8 @@ WITHHELD_MIN_RUN = 35     # shortest run that turned out to be suppression
 @pytest.fixture(scope="module")
 def ns():
     return load_from_app(
-        APP, "weekly_to_date", "_null_run_days", "and_list",
+        APP, "weekly_to_date", "_null_run_days", "_trailing_blank_run",
+        "and_list",
         consts=("DAILY_REGIONS", "SUPPRESSION_RUN_DAYS", "DAILY_VOLUME_PERIODS"),
         globals_={"pd": pd},
     )
