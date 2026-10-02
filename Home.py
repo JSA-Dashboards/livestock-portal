@@ -33,10 +33,23 @@ st.set_page_config(
     layout="wide",
 )
 
+# Hide Streamlit's own chrome — but NOT the whole <header>.
+#
+# `header {visibility: hidden;}` was here from 2026-10-02 and took the
+# portal's top navigation with it. st.navigation(position="top") renders the
+# page tabs INSIDE header[data-testid="stHeader"], alongside the toolbar, so
+# hiding the element hides both. Reported the same day: "my dashboard tabs
+# across the top are missing".
+#
+# The toolbar is the only thing in there that should go — the Deploy button
+# and the hamburger. Targeting it by test id leaves the header, and therefore
+# the nav, in place. Confirmed against the live DOM: header's only child is
+# div[data-testid="stToolbar"].
 st.markdown("""<style>
 #MainMenu {visibility: hidden;}
 footer {visibility: hidden;}
-header {visibility: hidden;}
+[data-testid="stToolbar"] {visibility: hidden;}
+[data-testid="stDecoration"] {display: none;}
 </style>""", unsafe_allow_html=True)
 
 # Hide the Streamlit Community Cloud viewer badge (the profile avatar that links
