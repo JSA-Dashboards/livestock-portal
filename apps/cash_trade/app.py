@@ -98,6 +98,41 @@ DAILY_REGION_COLORS = {
     "Nebraska": DEL_COLOR, "Iowa/Minnesota": "#7e57c2",
 }
 
+# ── Monday-print forecast ────────────────────────────────────────────────────
+# How much daily history the forecast calibrates on. A FULL YEAR, ASKED FOR
+# OUTRIGHT, and that is safe for a reason that is easy to get wrong: the cost
+# of a /Summary request is FLAT in the window length. Measured 2026-10-02, the
+# eight Summary reports take 4.8 s for 30 days and 5.6 s for 365 -- 675 KB
+# against 8.0 MB, server-bound either way. It is fetch_daily_cash's /Detail
+# section that is expensive (11 MB for one region-year), and DAILY_WINDOW_DEFAULT
+# exists to hold THAT down under the hidden-tab rule. Do not "fix" this by
+# shrinking it to match the Daily tab: a year buys ~50 calibration weeks for
+# under a second, and a month buys four.
+FORECAST_CAL_DAYS = 365
+
+# Trailing weeks used to carry the 5-Area number across to the national one.
+# FOUR, AND THE SHORTNESS IS THE POINT. Backtested on 175 weekly pairs since
+# 2023: in normal times every window from 4 to 26 weeks and all three methods
+# (additive gap, ratio, OLS) land inside 2.4-3.4% median absolute error, so the
+# choice barely matters -- until the relationship steps, when it is the only
+# thing that matters. Since Kansas and TX/OK/NM stopped publishing daily
+# volumes the gap roughly doubled and every method under-predicts; measured
+# over those weeks the bias is -3.5% at 4 weeks, -12.4% at 8, -16.0% at 13 and
+# -15.1% at 26. The short window is the one that notices a regime change.
+FORECAST_GAP_WEEKS = 4
+# Band is drawn from a slightly longer window so it spans a real range of
+# outcomes rather than the four points the centre is built from.
+FORECAST_BAND_WEEKS = 6
+
+# Checkpoint ordering within a trading week. The afternoon file for day D is
+# published about 15:08 CT on D; the morning file that FINALISES D lands about
+# 11:17 CT on D+1. So for one trade_date the 1:30 pm cut comes first and the
+# final second, and Monday's final precedes Tuesday's cut. Sorting on
+# (weekday, CUT_ORDER[cut]) therefore puts a week's publications in the order
+# they actually appeared, which is what "the latest thing USDA has told us"
+# has to mean.
+CUT_ORDER = {"afternoon": 0, "morning": 1}
+
 PRICE_PERIODS = ["WEEKLY WEIGHTED AVERAGES", "SAME PERIOD LAST WEEK", "SAME PERIOD LAST YEAR"]
 PERIOD_LABEL = {
     "WEEKLY WEIGHTED AVERAGES": "This Week",
@@ -270,12 +305,19 @@ def fetch_price_history(stamps: str) -> pd.DataFrame:
         return df
 
     df["report_date"] = pd.to_datetime(df["report_date"], format="%m/%d/%Y", errors="coerce")
-    for c in ["head_count", "weight_range_avg", "weighted_avg_price"]:
+    # previous_week_head_count rides along for the forecast tab. It is a
+    # HEADER-LEVEL field repeated on every row of the report, not a per-class
+    # one -- de-duplicate by report_date before using it, which
+    # weekly_5area_head() does. Carrying it here costs nothing: this request
+    # already pulls the whole History section for the price panel.
+    for c in ["head_count", "weight_range_avg", "weighted_avg_price",
+              "previous_week_head_count"]:
         df[c] = pd.to_numeric(df[c].astype(str).str.replace(",", "", regex=False), errors="coerce")
 
     df = df.dropna(subset=["report_date"])
     keep = ["report_date", "current_period", "selling_basis_desc", "class_description",
-            "head_count", "weight_range_avg", "weighted_avg_price"]
+            "head_count", "weight_range_avg", "weighted_avg_price",
+            "previous_week_head_count"]
     return df[keep].sort_values("report_date").reset_index(drop=True)
 
 
@@ -703,6 +745,237 @@ def weekly_to_date(vol: pd.DataFrame, trade_date) -> dict:
     return out
 
 
+def _week_start(dates: pd.Series) -> pd.Series:
+    """
+    The Monday of the week a weekly report DESCRIBES, from its report_date.
+
+    Both weekly reports print on the Monday after the week they cover, so the
+    week is report_date minus seven days -- but only normalising to Monday
+    afterwards is safe. A holiday pushes the release to Tuesday, and Tuesday
+    minus seven is the PREVIOUS Tuesday, which would key that week one day off
+    and silently fail to join against everything else.
+    """
+    shifted = dates - pd.to_timedelta(7, unit="D")
+    return shifted - pd.to_timedelta(shifted.dt.weekday, unit="D")
+
+
+def weekly_5area_head(price_df: pd.DataFrame) -> pd.Series:
+    """
+    USDA's own published 5-Area weekly negotiated head, keyed to the week it
+    describes. Indexed by the Monday of that week.
+
+    THIS IS THE NUMBER THE FORECAST IS AIMING AT, and it is also what makes the
+    forecast arithmetic rather than a guess. Verified 2026-10-02 on every one
+    of the 23 weeks back to April 2026: this equals the four daily regions'
+    Friday-FINAL week-to-date, summed with nulls as zero -- exactly, not
+    approximately, including the weeks where two of the four regions published
+    nothing at all. So the only unknown left in Monday's 5-Area print is the
+    trade that lands after USDA's last published cut.
+    """
+    if price_df.empty or "previous_week_head_count" not in price_df:
+        return pd.Series(dtype=float)
+    d = price_df.dropna(subset=["report_date"]).drop_duplicates("report_date")
+    d = d.dropna(subset=["previous_week_head_count"])
+    if d.empty:
+        return pd.Series(dtype=float)
+    out = pd.Series(d["previous_week_head_count"].values,
+                    index=_week_start(d["report_date"]))
+    return out[~out.index.duplicated(keep="last")].sort_index()
+
+
+def weekly_national_head(vol_df: pd.DataFrame) -> pd.Series:
+    """National weekly confirmed negotiated head (LM_CT154), keyed the same way."""
+    if vol_df.empty or "total_head_count" not in vol_df:
+        return pd.Series(dtype=float)
+    d = vol_df.dropna(subset=["report_date", "total_head_count"]).drop_duplicates("report_date")
+    if d.empty:
+        return pd.Series(dtype=float)
+    out = pd.Series(d["total_head_count"].values, index=_week_start(d["report_date"]))
+    return out[~out.index.duplicated(keep="last")].sort_index()
+
+
+def wtd_checkpoints(vol: pd.DataFrame) -> pd.DataFrame:
+    """
+    The 5-Area week-to-date head at every publication USDA has made, one row
+    per (week, weekday, cut).
+
+    Regions are summed with nulls as zero, the same rule weekly_to_date() and
+    USDA's own aggregate follow -- see fetch_daily_volume. A region missing from
+    the frame entirely contributes nothing, which is what makes a suppressed
+    Kansas drop out here exactly as it drops out of USDA's published figure.
+    """
+    cols = ["week", "weekday", "cut", "order", "wtd"]
+    if vol.empty:
+        return pd.DataFrame(columns=cols)
+    d = vol[vol["period"] == "wtd"].copy()
+    if d.empty:
+        return pd.DataFrame(columns=cols)
+    d["week"] = d["trade_date"] - pd.to_timedelta(d["trade_date"].dt.weekday, unit="D")
+    d["weekday"] = d["trade_date"].dt.weekday
+    # One row per region per checkpoint first, so a region USDA happens to
+    # repeat cannot be counted twice into the sum.
+    g = d.groupby(["week", "weekday", "cut", "region"], as_index=False)["head"].first()
+    # to_numeric first: a checkpoint where every region is withheld arrives as
+    # an all-None object column, and .fillna on one of those downcasts with a
+    # FutureWarning today and changes behaviour later.
+    cp = (g.assign(head=pd.to_numeric(g["head"], errors="coerce").fillna(0.0))
+            .groupby(["week", "weekday", "cut"], as_index=False)["head"].sum()
+            .rename(columns={"head": "wtd"}))
+    cp["order"] = cp["cut"].map(CUT_ORDER)
+    return cp.sort_values(["week", "weekday", "order"]).reset_index(drop=True)
+
+
+def _front_of(cps: pd.DataFrame, week, weekday, order, wtd_now) -> float:
+    """The previous checkpoint's share of this one, within one past week."""
+    if not wtd_now:
+        return float("nan")
+    w = cps[cps["week"] == week].sort_values(["weekday", "order"])
+    before = w[(w["weekday"] < weekday) |
+               ((w["weekday"] == weekday) & (w["order"] < order))]
+    if before.empty:
+        return float("nan")
+    return float(before.iloc[-1]["wtd"]) / float(wtd_now)
+
+
+def forecast_5area(vol: pd.DataFrame, published5: pd.Series) -> dict:
+    """
+    Where Monday's 5-Area negotiated head is likely to land, given the
+    week-to-date USDA has published so far.
+
+    The week's final is known exactly once Friday's morning file lands; until
+    then the gap is whatever trades after the last cut. That is estimated from
+    the SAME CHECKPOINT in past weeks -- a Friday 1:30 pm cut is compared only
+    against other Friday 1:30 pm cuts, because how much of a week is still to
+    come depends entirely on how far into it you are standing.
+
+    Past weeks' finals come from published5, not from the daily frame. The two
+    are identical (see weekly_5area_head), but the published series exists for
+    every week whether or not the daily window reaches back that far.
+
+    THE ANALOGUES ARE NARROWED BY HOW FRONT-LOADED THE WEEK IS, which is the
+    difference between a usable estimate and a useless one. Late-Friday trade
+    ran a median 2,860 head across weeks already ~90% done by Thursday, against
+    a median 7,330 over all weeks and 50,330 in the worst back-loaded one. The
+    observable proxy is the previous checkpoint's share of the current one:
+    high means the market has gone quiet, low means it is trading right now.
+
+    Narrowing on WEEK MATURITY instead -- week-to-date against a typical recent
+    week -- is the obvious alternative and is WORSE, 12.2% median absolute
+    error against front-loading's 7.8% over the same 52 weeks, with band
+    coverage falling from 65% to 50%. Tried 2026-10-02; do not swap them. A
+    low maturity says the week is quiet but not whether it has finished being
+    quiet, and those are different questions. It earns its keep as the
+    reliability label below, where it beats front-loading outright.
+    """
+    cps = wtd_checkpoints(vol)
+    if cps.empty or published5.empty:
+        return {}
+    cur_week = cps["week"].max()
+    this = cps[cps["week"] == cur_week].sort_values(["weekday", "order"])
+    if this.empty:
+        return {}
+    cp = this.iloc[-1]
+    wtd_now = float(cp["wtd"])
+
+    # Friday's final IS the week -- there is nothing left to estimate, and the
+    # tab says so rather than printing a forecast of a number already known.
+    done = bool(cp["weekday"] == 4 and cp["cut"] == "morning")
+
+    prior = this.iloc[-2] if len(this) > 1 else None
+    front = (float(prior["wtd"]) / wtd_now) if (prior is not None and wtd_now > 0) else None
+
+    hist = cps[(cps["week"] < cur_week) & (cps["weekday"] == cp["weekday"]) &
+               (cps["cut"] == cp["cut"])].copy()
+    hist["final"] = hist["week"].map(published5)
+    hist = hist.dropna(subset=["final"])
+    hist = hist[hist["wtd"] > 0].copy()
+    hist["late"] = hist["final"] - hist["wtd"]
+    # A negative "late" is USDA revising the week down, which happens rarely and
+    # is not a shape to project forward onto a cumulative count.
+    hist = hist[hist["late"] >= 0]
+
+    pool, narrowed = hist, False
+    if front is not None and not hist.empty:
+        hist["front"] = [
+            _front_of(cps, r.week, r.weekday, r.order, r.wtd)
+            for r in hist.itertuples()
+        ]
+        near = hist[hist["front"].notna() & ((hist["front"] - front).abs() <= 0.10)]
+        if len(near) >= 5:
+            pool, narrowed = near, True
+
+    # HOW FAR INTO THE WEEK WE ARE STANDING IS THE ACCURACY, and it is worth
+    # saying out loud rather than printing one number with one error bar.
+    # Backtested over 52 Friday-1:30 checkpoints, split into quartiles by how
+    # much had already traded: the busiest quartile lands within a median 3%
+    # and its p10-p90 band holds the answer 92% of the time; the quietest
+    # quartile is a median 36% out and its band holds 38%. Same method, same
+    # band, utterly different thing to hand someone.
+    #
+    # Maturity, not raw head, because a 45,000-head week in March is a full
+    # week and in August is half of one. MATURITY IS A LABEL HERE AND NOT A
+    # SELECTOR -- picking analogues on it was tried and is worse than picking
+    # on front-loading (median absolute error 12.2% against 7.8% over the same
+    # 52 weeks), which is why the pool above is still chosen on `front`.
+    prior_weeks = published5[published5.index < cur_week]
+    typical = float(prior_weeks.tail(13).median()) if len(prior_weeks) else float("nan")
+    maturity = (wtd_now / typical) if typical and typical == typical else float("nan")
+    if done:
+        grade = "final"
+    elif maturity != maturity:
+        grade = "unknown"
+    elif maturity >= 0.85:
+        grade = "firm"
+    elif maturity >= 0.50:
+        grade = "provisional"
+    else:
+        grade = "weak"
+
+    base = {"wtd": wtd_now, "checkpoint": cp, "done": done, "front": front,
+            "narrowed": narrowed, "week": cur_week, "maturity": maturity,
+            "typical": typical, "grade": grade}
+    if pool.empty or done:
+        return {**base, "n": int(len(pool)), "central": wtd_now,
+                "low": wtd_now, "high": wtd_now, "late_median": 0.0}
+
+    late = pool["late"]
+    return {**base, "n": int(len(pool)),
+            "central": wtd_now + float(late.median()),
+            "low": wtd_now + float(late.quantile(0.10)),
+            "high": wtd_now + float(late.quantile(0.90)),
+            "late_median": float(late.median())}
+
+
+def forecast_national(f5: dict, published5: pd.Series, national: pd.Series) -> dict:
+    """
+    Carry a 5-Area figure across to the national print USDA publishes the same
+    morning, using the recent gap between the two.
+
+    THE GAP IS TAKEN ADDITIVELY, NOT AS A RATIO, and over a short trailing
+    window -- see FORECAST_GAP_WEEKS for the backtest behind both choices. The
+    gap is negotiated trade in states outside the five areas, plus (right now)
+    the Kansas and TX/OK/NM trade USDA is withholding regionally while still
+    counting it nationally. Neither part scales with the 5-Area number, which
+    is why a ratio drifts whenever the 5-Area total is unusually high or low.
+    """
+    if not f5 or published5.empty or national.empty:
+        return {}
+    pair = pd.DataFrame({"h5": published5, "nat": national}).dropna().sort_index()
+    if pair.empty:
+        return {}
+    pair["gap"] = pair["nat"] - pair["h5"]
+    recent = pair.tail(FORECAST_GAP_WEEKS)["gap"]
+    band = pair.tail(FORECAST_BAND_WEEKS)["gap"]
+    if recent.empty:
+        return {}
+    gap = float(recent.median())
+    return {"central": f5["central"] + gap,
+            "low": f5["low"] + float(band.min()),
+            "high": f5["high"] + float(band.max()),
+            "gap": gap, "gap_lo": float(band.min()), "gap_hi": float(band.max()),
+            "n": int(len(recent)), "pair": pair}
+
+
 def daily_combined(df: pd.DataFrame) -> pd.DataFrame:
     """
     Head-count-weighted Steer+Heifer combine per trading day / region / cut /
@@ -797,7 +1070,8 @@ with c2:
 # And the hidden-tab rule: a hidden tab is hidden, NOT skipped. The Daily block
 # runs on every rerun whether or not anyone opens it, which is why its fetch is
 # one cached range request per region rather than one per day.
-tab_weekly, tab_daily = st.tabs(["Weekly Cash Trade Averages", "Daily Cash Trade"])
+tab_weekly, tab_daily, tab_fcst = st.tabs(
+    ["Weekly Cash Trade Averages", "Daily Cash Trade", "Monday Print Forecast"])
 
 with tab_weekly:
     if not load_ok:
@@ -1390,6 +1664,230 @@ with tab_daily:
         '<b>LM_CT123/124</b> (Nebraska), <b>LM_CT136/137</b> (Iowa/Minnesota) — prices from each report&rsquo;s Detail section, week-to-date head from its Summary. Cached until USDA republishes, checked every 5 minutes.'
         '</div>',
         unsafe_allow_html=True)
+
+
+# ── Monday Print Forecast ────────────────────────────────────────────────────
+# The third tab answers one question: what will USDA print on Monday for last
+# week's negotiated volume? It gets there in two steps, and keeping them
+# visibly separate is the point -- they fail differently and a reader needs to
+# know which half is shaky.
+#
+#   week-to-date now  ->  5-Area weekly (LM_CT150)  ->  national (LM_CT154)
+#
+# THIS TAB ADDS NO WEEKLY REQUESTS. Both weekly series ride on fetches the page
+# already makes: the 5-Area head count is a header field on the LM_CT150
+# History call behind the price panel, and the national count is vol_df. Its
+# one request set is the daily /Summary year below, which is cheap for the
+# reason FORECAST_CAL_DAYS documents.
+with tab_fcst:
+    st.markdown(
+        '<div class="sec-header">Monday Print Forecast &mdash; negotiated cash volume</div>',
+        unsafe_allow_html=True)
+
+    with st.spinner("Loading USDA daily history for the forecast…"):
+        try:
+            _f_slugs = [sl for cuts in DAILY_REGIONS.values() for sl in cuts.values()]
+            _f_stamps = stamps_for(_probe, _f_slugs)
+            _f_end = datetime.now().date()
+            _f_start = _f_end - timedelta(days=FORECAST_CAL_DAYS)
+            fcst_vol = fetch_daily_volume(_f_start.strftime("%m/%d/%Y"),
+                                          _f_end.strftime("%m/%d/%Y"), _f_stamps)
+            fcst_err = ""
+        except Exception as e:
+            fcst_vol, fcst_err = pd.DataFrame(), str(e)
+
+    head5 = weekly_5area_head(price_df)
+    headn = weekly_national_head(vol_df)
+    f5 = forecast_5area(fcst_vol, head5) if not fcst_vol.empty else {}
+    fn = forecast_national(f5, head5, headn) if f5 else {}
+
+    if fcst_err:
+        st.warning("⏳ **USDA daily data unavailable** — the forecast needs the daily "
+                   "regional reports. Use **Refresh now** in the sidebar to retry.")
+        with st.expander("Technical details"):
+            st.code(fcst_err)
+    elif not f5 or not fn:
+        st.info("Not enough published history yet to build a forecast.")
+    else:
+        _cp = f5["checkpoint"]
+        _dow = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"][int(_cp["weekday"])]
+        _cut = DAILY_CUT_LABEL[_cp["cut"]]
+        _wk = pd.Timestamp(f5["week"])
+        _print_day = (_wk + pd.Timedelta(days=7)).strftime("%A, %b %d")
+
+        st.markdown(
+            f'<div class="note" style="margin:-4px 0 12px;">Trading week of '
+            f'<b>{_wk.strftime("%b %d")}&ndash;{(_wk + pd.Timedelta(days=4)).strftime("%b %d, %Y")}</b>. '
+            f'USDA last published the <b>{_dow} {_cut}</b> figure; the weekly reports '
+            f'print <b>{_print_day}</b>.</div>', unsafe_allow_html=True)
+
+        # ── the two headline numbers, with where they came from ─────────────
+        c1, c2, c3, c4 = st.columns(4)
+        _last_wk = _wk - pd.Timedelta(days=7)
+        _prev5 = head5.get(_last_wk)
+        _prevn = headn.get(_last_wk)
+        with c1:
+            st.markdown(tile("5-Area &mdash; week to date",
+                             fmt_hd(f5["wtd"]),
+                             f'<div class="tile-delta-neu">{_dow} {_cut}, published</div>',
+                             "tile-conf"), unsafe_allow_html=True)
+        with c2:
+            st.markdown(tile("5-Area &mdash; forecast print",
+                             fmt_hd(f5["central"]),
+                             hd_delta_html(f5["central"], _prev5),
+                             "tile-d14"), unsafe_allow_html=True)
+        with c3:
+            st.markdown(tile("National &mdash; forecast print",
+                             fmt_hd(fn["central"]),
+                             hd_delta_html(fn["central"], _prevn),
+                             "tile-del"), unsafe_allow_html=True)
+        with c4:
+            st.markdown(tile("National &mdash; last week printed",
+                             fmt_hd(_prevn),
+                             f'<div class="tile-delta-neu">'
+                             f'{_last_wk.strftime("%b %d")} week, actual</div>',
+                             "tile-neu"), unsafe_allow_html=True)
+
+        _GRADE = {
+            "final": (POS, "The week is closed", "Friday&rsquo;s final file has landed, so the "
+                      "5-Area figure below is not an estimate &mdash; it is the number."),
+            "firm": (POS, "Firm", "The week has traded about as much as a normal week already, "
+                     "which is the state this method is most reliable in: backtested over 52 "
+                     "weeks, the busiest quarter of them land within a median 3% and the band "
+                     "holds the answer 92% of the time."),
+            "provisional": (D30_COLOR, "Provisional", "Roughly half to four-fifths of a normal "
+                            "week is in. Comparable weeks land within a median 7&ndash;11%."),
+            "weak": (NEG, "Weak &mdash; the week has not traded yet", "Only a small fraction of a "
+                     "normal week is on the board, and most of the trade is still to come. "
+                     "Comparable weeks were a median 36% out and the band held only 38% of the "
+                     "time. Treat the number as a floor, not a forecast."),
+            "unknown": (MUTED, "Unrated", "Not enough published weekly history to judge how far "
+                        "through the week this is."),
+        }
+        _gc, _gl, _gt = _GRADE[f5["grade"]]
+        _mat = f5.get("maturity")
+        _mat_s = (f"{_mat:.0%} of a typical recent week ({fmt_hd(f5['typical'])})"
+                  if _mat == _mat else "&mdash;")
+        st.markdown(
+            f'<div style="border-left:3px solid {_gc};background:#fafbfc;padding:8px 12px;'
+            f'margin:4px 0 14px;font-size:0.8rem;line-height:1.55;color:{JPSI_DARK};">'
+            f'<b style="color:{_gc};">Confidence: {_gl}.</b> {_gt}<br>'
+            f'<span style="color:{MUTED};">Week to date is {_mat_s}.</span></div>',
+            unsafe_allow_html=True)
+
+        # ── step 1 ──────────────────────────────────────────────────────────
+        st.markdown(
+            f'<div class="sec-header" style="border-left-color:{CONF_COLOR};">'
+            f'Step 1 &mdash; finishing the 5-Area week (LM_CT150)</div>',
+            unsafe_allow_html=True)
+        _front_s = f"{f5['front']:.0%}" if f5.get("front") is not None else "&mdash;"
+        st.markdown(
+            f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
+            f'<b>{f5["wtd"]:,.0f} hd</b> confirmed through the {_dow} {_cut.lower()}, '
+            f'plus an estimated <b>{f5["late_median"]:,.0f} hd</b> still to be reported '
+            f'&rarr; <b>{f5["central"]:,.0f} hd</b>, with a likely range of '
+            f'<b>{f5["low"]:,.0f}&ndash;{f5["high"]:,.0f} hd</b>.</div>',
+            unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="note" style="margin-bottom:14px;">The week-to-date is USDA&rsquo;s '
+            f'own cumulative count, and the four daily regions summed at Friday&rsquo;s final '
+            f'reproduce USDA&rsquo;s published 5-Area weekly figure <b>exactly</b> &mdash; checked '
+            f'on every week the daily window covers. So the only unknown is trade reported '
+            f'after the last cut, estimated from the <b>{f5["n"]}</b> past weeks standing at '
+            f'the same point'
+            + (f' with similar front-loading (the previous cut held {_front_s} of the current one)'
+               if f5.get("narrowed") else ' in the week')
+            + '.</div>', unsafe_allow_html=True)
+
+        # ── step 2 ──────────────────────────────────────────────────────────
+        st.markdown(
+            f'<div class="sec-header" style="border-left-color:{DEL_COLOR};">'
+            f'Step 2 &mdash; 5-Area across to national (LM_CT154)</div>',
+            unsafe_allow_html=True)
+        st.markdown(
+            f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
+            f'<b>{f5["central"]:,.0f} hd</b> plus the recent 5-Area-to-national gap of '
+            f'<b>{fn["gap"]:,.0f} hd</b> &rarr; <b>{fn["central"]:,.0f} hd</b>, '
+            f'range <b>{fn["low"]:,.0f}&ndash;{fn["high"]:,.0f} hd</b>.</div>',
+            unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="note" style="margin-bottom:14px;">The gap is negotiated trade outside '
+            f'the five areas, plus any region USDA is currently withholding. It is taken as a '
+            f'median over the last <b>{fn["n"]}</b> weeks and added, not scaled &mdash; neither '
+            f'part of it grows with the 5-Area total, so a ratio drifts whenever the 5-Area '
+            f'number is unusually high or low. Over the last {FORECAST_BAND_WEEKS} weeks the gap '
+            f'ran {fn["gap_lo"]:,.0f}&ndash;{fn["gap_hi"]:,.0f} hd, which is what sets the range '
+            f'above.</div>', unsafe_allow_html=True)
+
+        # ── the two series, with the forecast on the end ────────────────────
+        pair = fn["pair"].tail(52)
+        if not pair.empty:
+            st.markdown('<div class="sec-header">5-Area and national weekly negotiated volume</div>',
+                        unsafe_allow_html=True)
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=pair.index, y=pair["nat"], name="National (LM_CT154)",
+                mode="lines", line=dict(color=DEL_COLOR, width=2),
+                hovertemplate="%{x|%b %d, %Y}<br>National %{y:,.0f} hd<extra></extra>"))
+            fig.add_trace(go.Scatter(
+                x=pair.index, y=pair["h5"], name="5-Area (LM_CT150)",
+                mode="lines", line=dict(color=CONF_COLOR, width=2),
+                hovertemplate="%{x|%b %d, %Y}<br>5-Area %{y:,.0f} hd<extra></extra>"))
+            # The forecast as its own marked points, never joined to the line --
+            # a dotted continuation reads as data at a glance.
+            fig.add_trace(go.Scatter(
+                x=[_wk], y=[fn["central"]], name="National forecast",
+                mode="markers", marker=dict(color=DEL_COLOR, size=11, symbol="diamond",
+                                            line=dict(color="#ffffff", width=1.5)),
+                error_y=dict(type="data", symmetric=False,
+                             array=[fn["high"] - fn["central"]],
+                             arrayminus=[fn["central"] - fn["low"]],
+                             color=DEL_COLOR, thickness=1.5, width=6),
+                hovertemplate="%{x|%b %d, %Y}<br>National forecast %{y:,.0f} hd<extra></extra>"))
+            fig.add_trace(go.Scatter(
+                x=[_wk], y=[f5["central"]], name="5-Area forecast",
+                mode="markers", marker=dict(color=CONF_COLOR, size=11, symbol="diamond",
+                                            line=dict(color="#ffffff", width=1.5)),
+                error_y=dict(type="data", symmetric=False,
+                             array=[f5["high"] - f5["central"]],
+                             arrayminus=[f5["central"] - f5["low"]],
+                             color=CONF_COLOR, thickness=1.5, width=6),
+                hovertemplate="%{x|%b %d, %Y}<br>5-Area forecast %{y:,.0f} hd<extra></extra>"))
+            fig.update_layout(
+                height=330, margin=dict(l=10, r=10, t=10, b=10),
+                plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
+                font=dict(family="Source Sans Pro, sans-serif", color=JPSI_DARK, size=12),
+                hovermode="x unified",
+                legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
+                xaxis=dict(showgrid=False, linecolor=BORDER),
+                yaxis=dict(title="head", gridcolor="#f0f2f4", linecolor=BORDER,
+                           zeroline=False, tickformat=","))
+            st.plotly_chart(fig, use_container_width=True,
+                            config={"displayModeBar": False})
+
+            recent = pair.tail(10).copy()
+            recent.index = [d.strftime("%b %d") for d in recent.index]
+            recent = recent.rename(columns={"h5": "5-Area", "nat": "National", "gap": "Gap"})
+            st.dataframe(
+                recent[["5-Area", "National", "Gap"]].iloc[::-1]
+                      .style.format("{:,.0f}"),
+                use_container_width=True)
+
+        st.markdown(
+            '<div class="note" style="margin-top:10px;">'
+            '<b>What this is.</b> Both weekly reports print the Monday after the week they '
+            'cover. The 5-Area step is close to arithmetic &mdash; USDA&rsquo;s own daily '
+            'week-to-date already carries most of the answer, and only late-reported trade is '
+            'estimated. The national step is the looser of the two, because the gap between '
+            'the two reports moves with trade in states that have no daily report at all.<br><br>'
+            '<b>The one thing that can move it a long way.</b> When USDA withholds a region&rsquo;s '
+            'daily volume for confidentiality, that region drops out of the 5-Area figure but '
+            '<b>stays in the national count</b>, so the gap widens and the national forecast is '
+            'the half that suffers. Check the week-to-date tiles on the Daily tab: a region '
+            'sitting at zero across a whole week is the signal.<br><br>'
+            '<b>Neither number is USDA&rsquo;s.</b> They are estimates built from USDA&rsquo;s '
+            'published daily reports, and they carry no official standing until the Monday '
+            'release.</div>', unsafe_allow_html=True)
 
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────
