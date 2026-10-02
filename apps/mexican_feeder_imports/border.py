@@ -43,6 +43,7 @@ feed, so an import cut moves the index with a lag, through supply, and never by
 appearing in the index's own composition.
 """
 import re
+from datetime import date, timedelta
 
 import snowflake_db as db
 
@@ -476,6 +477,56 @@ def receipts_by_crossing(conn, since=None):
     return sorted([(p, s, v or 0) for p, s, v in rows], key=lambda t: -t[2])
 
 
+def crossing_debuts(conn, since=None):
+    """
+    [(crossing, state, first_date, last_date, head, days)] -- when each
+    crossing started taking cattle, busiest first. `days` counts only the
+    reporting days it actually carried cattle, so head/days is its rate while
+    running rather than its rate across the calendar.
+
+    EXISTS BECAUSE THE PROJECTION'S BIGGEST CAVEAT IS A MOVING FACT. The
+    year-end projection assumes the pace holds, and the thing most likely to
+    break that is a crossing opening or shutting. Written into the page as
+    prose it goes stale silently: the caption said "only Douglas, AZ is open"
+    on 2026-10-02, nine days after Santa Teresa, NM reopened on 09-24 and
+    started adding several hundred head a day. The page's own header said two
+    were active, directly above it.
+
+    Per-crossing rows are a BREAKDOWN, not an exact decomposition -- see
+    receipts_by_crossing -- so these dates and head counts answer "which
+    crossings are running, and since when", never "what crossed in total".
+    """
+    sql = ("SELECT crossing_point, crossing_state, MIN(report_date), "
+           "       MAX(report_date), SUM(receipts_est), COUNT(*) "
+           "FROM border_receipts WHERE is_total = 0 "
+           "AND crossing_point <> 'All Crossing Points' "
+           "AND receipts_est > 0")
+    if since:
+        sql += f" AND report_date >= '{since}'"
+    sql += " GROUP BY crossing_point, crossing_state"
+    rows = conn.cursor().execute(sql).fetchall()
+    return sorted([(p, s, str(db.iso(a)), str(db.iso(b)), v or 0, n or 0)
+                   for p, s, a, b, v, n in rows], key=lambda t: -t[4])
+
+
+def newest_crossing(conn, since=None):
+    """
+    The most recent crossing to open, as
+    (crossing, state, first_date, head, days).
+
+    None when nothing has crossed, or when every active crossing started on the
+    same day -- on the latter there is no "newest" and the pace window spans
+    one regime, which is the case the caller wants to distinguish.
+    """
+    debuts = crossing_debuts(conn, since=since)
+    if len(debuts) < 2:
+        return None
+    latest = max(debuts, key=lambda t: t[2])
+    if all(d[2] == debuts[0][2] for d in debuts):
+        return None
+    return (latest[0], latest[1], latest[2], latest[4], latest[5])
+
+
 def normal_baseline(series, min_run=1):
     """
     Median of normal trade: everything before the first SUSTAINED closure.
@@ -623,6 +674,267 @@ def since_reopening(conn):
         "days_with_cattle": len(crossed),
         "best_day": max(crossed, key=lambda t: t[1]) if crossed else None,
         "latest": rows[-1][0],
+    }
+
+
+# The years the border ran without restriction, and so the only ones a
+# crossing's normal rate can be read from. 2025 is excluded deliberately: it
+# was three-quarters closed, and the ports that did run were running under
+# restrictions at roughly half their usual rate.
+NORMAL_YEARS = ("2023", "2024")
+
+# The crossing most likely to move the year-end projection next, and the one
+# the page writes a sensitivity for while it is shut.
+#
+# NOT DERIVABLE FROM THE FEED, which is the whole reason it is a constant.
+# AMS does announce reopening schedules in the narrative -- on 2025-07-08 it
+# published "COLUMBUS AND SANTA TERESA, NM WILL RE-OPEN JULY 14TH AND 21ST
+# RESPECTIVELY" -- but the current narrative (2026-10-01) names only Santa
+# Teresa. The Columbus expectation comes from Ross on 2026-10-02 and has no
+# counterpart in the data, so it cannot be read off and must be maintained by
+# hand. Clear it to None once Columbus reopens, or point it at whichever
+# crossing is next.
+#
+# AND AN ANNOUNCED DATE IS NOT A REOPENING. That same 2025-07-08 notice named
+# two ports and two dates and NEITHER happened: Columbus has not appeared in
+# the series since 2024-11-25, Santa Teresa recorded nothing at all between
+# 2025-05-12 and 2026-09-24, and the July 2025 reopening lasted four reporting
+# days of Douglas alone before the border shut again. So this date may inform
+# a reader; it must never feed a number.
+WATCH_PORT = "Columbus"
+WATCH_PORT_EXPECTED = "end of October 2026"
+
+
+def port_profile(conn, port, years=NORMAL_YEARS, this_year=None):
+    """
+    What one crossing did when the border was running normally, and whether it
+    is running now.
+
+        head, days, per_day   over `years`, counting only days it carried
+                              cattle, so per_day is its rate while open
+        share                 its share of all named-port head in those years
+        last_seen             the last date it carried cattle, ever
+        running               whether it has carried cattle in `this_year`
+
+    Returns None for a crossing that never appears, which is the honest answer
+    for a port that has no history to project from.
+
+    `share` is taken against the NAMED-PORT total rather than AMS's own
+    all-points figure. The two disagree on 19 days in 463 (see
+    receipts_by_crossing) and only the named rows can be attributed to a port,
+    so a share mixing the two bases would be the wrong fraction of the wrong
+    denominator.
+    """
+    yrs = ", ".join(f"'{y}'" for y in years)
+    cur = conn.cursor()
+    row = cur.execute(
+        "SELECT SUM(receipts_est), COUNT(*) FROM border_receipts "
+        "WHERE is_total = 0 AND receipts_est > 0 "
+        f"AND crossing_point = '{port}' "
+        f"AND TO_CHAR(report_date, 'YYYY') IN ({yrs})").fetchone()
+    head, days = (row or (None, 0))
+    if not head or not days:
+        return None
+    total = cur.execute(
+        "SELECT SUM(receipts_est) FROM border_receipts "
+        "WHERE is_total = 0 AND receipts_est > 0 "
+        "AND crossing_point <> 'All Crossing Points' "
+        f"AND TO_CHAR(report_date, 'YYYY') IN ({yrs})").fetchone()[0]
+    last = cur.execute(
+        "SELECT MAX(report_date) FROM border_receipts "
+        f"WHERE is_total = 0 AND receipts_est > 0 "
+        f"AND crossing_point = '{port}'").fetchone()[0]
+    yr = str(this_year or date.today().year)
+    now = cur.execute(
+        "SELECT COUNT(*) FROM border_receipts "
+        "WHERE is_total = 0 AND receipts_est > 0 "
+        f"AND crossing_point = '{port}' "
+        f"AND TO_CHAR(report_date, 'YYYY') = '{yr}'").fetchone()[0]
+    return {
+        "port": port,
+        "head": head,
+        "days": days,
+        "per_day": head / days,
+        "share": (head / total) if total else None,
+        "last_seen": str(db.iso(last)) if last else None,
+        "running": bool(now),
+        "years": years,
+    }
+
+
+# ── Pace, and the year-end projection ───────────────────────────────────────
+#
+# Same question the Beef Trimmings page asks of the tariff-free quota: at the
+# rate things are arriving, where does this land by the deadline? The shape of
+# the answer is deliberately different in two ways, and both matter.
+#
+# IT USES A TRAILING WINDOW, NOT THE WHOLE SPAN. quota_tracker.pace() measures
+# first observation to last, because CBP reports weekly and one holiday-shortened
+# gap would read as a collapse. That reasoning does not transfer. This series is
+# daily and dense, and it is RAMPING off a reopening rather than running at a
+# steady rate: the first full week after the border reopened carried 2,500 head
+# and the second carried 100, while the fifth carried 6,400. Averaging from the
+# reopening gives 761 head/day against 1,155 over the trailing fortnight -- a
+# third lower, describing a start-up that is over rather than the rate now.
+#
+# IT COUNTS REPORTING DAYS, NOT CALENDAR DAYS. Cattle cross on weekdays. A
+# per-calendar-day rate carried across a quarter silently prices in Saturdays
+# and Sundays and lands about 30% low.
+
+# AMS publishes every weekday except holidays. Read off the series rather than
+# assumed: across 2023-2026 the only weekday gaps inside a reporting span are
+# holidays, and 2024 -- the one complete year -- has exactly ten, being MLK,
+# Presidents, Good Friday, Memorial, Juneteenth, July 4th and the 5th, Labor,
+# Columbus and Veterans. 2026 has one so far, Labor Day.
+#
+# Only dates that can fall inside a projection window are listed. Missing one
+# costs a single reporting day out of sixty-odd, under 2% of the projection,
+# against a pace that moved 25% between two adjacent fortnights. It does not
+# earn a holiday library.
+NON_REPORTING = frozenset({
+    date(2026, 10, 12),   # Columbus Day
+    date(2026, 11, 11),   # Veterans Day
+    date(2026, 11, 26),   # Thanksgiving
+    date(2026, 12, 25),   # Christmas
+    date(2027, 1, 1),     # New Year
+    date(2027, 1, 18),    # MLK Day
+    date(2027, 2, 15),    # Presidents Day
+    date(2027, 3, 26),    # Good Friday
+    date(2027, 5, 31),    # Memorial Day
+    date(2027, 6, 18),    # Juneteenth, observed (the 19th is a Saturday)
+    date(2027, 7, 5),     # Independence Day, observed (the 4th is a Sunday)
+    date(2027, 9, 6),     # Labor Day
+    date(2027, 10, 11),   # Columbus Day
+    date(2027, 11, 11),   # Veterans Day
+    date(2027, 11, 25),   # Thanksgiving
+    date(2027, 12, 24),   # Christmas, observed (the 25th is a Saturday)
+})
+
+# Two full reporting weeks. A week is the natural unit because AMS's own report
+# is built on one -- the week-to-date column resets every Monday -- and two of
+# them is the shortest window that cannot be swung by a single day.
+#
+# That last part is not theoretical. The week of 2026-09-28 ran 1,350 / 600 /
+# 1,600 / 550 head on consecutive days, so a trailing FIVE days is 1,200 and a
+# trailing ten is 1,155, but the five-day figure would have read 935 had it been
+# taken one day earlier. Ten reporting days also holds the day-of-week mix
+# constant, which a window that is not a multiple of five does not.
+PACE_WINDOW = 10
+
+
+def _as_date(v):
+    """A 'YYYY-MM-DD' label as a date. The series carries strings throughout."""
+    if isinstance(v, date):
+        return v
+    y, m, d = (int(p) for p in str(v)[:10].split("-"))
+    return date(y, m, d)
+
+
+def reporting_days(start, end):
+    """
+    Weekdays in [start, end] inclusive that AMS would publish on.
+
+    Inclusive of BOTH ends, which is why the caller passes the day after the
+    last report rather than the report date -- counting from the report itself
+    would project a day that is already in the actual.
+    """
+    start, end = _as_date(start), _as_date(end)
+    n = 0
+    day = start
+    while day <= end:
+        if day.weekday() < 5 and day not in NON_REPORTING:
+            n += 1
+        day += timedelta(days=1)
+    return n
+
+
+def daily_pace(series, window=PACE_WINDOW):
+    """
+    Head per reporting day over the trailing `window` reporting days.
+
+    `series` is [(date_label, head)], the same shape normal_baseline takes and
+    what daily_receipts gives once the week-to-date column is dropped.
+
+    DAYS AMS PUBLISHED WITH ZERO CROSSINGS COUNT IN THE DENOMINATOR. They are
+    reporting days on which nothing crossed, which is a fact about the pace and
+    not a hole in the data -- the week of 2026-08-31 is four such days either
+    side of a single 100-head Monday. Dropping them would have that week read
+    as 100 head/day, i.e. faster than the fortnight that followed it.
+
+    Returns None under a full window rather than averaging two days and calling
+    the result a rate.
+    """
+    pts = [(_as_date(r[0]), r[1] or 0) for r in series]
+    if len(pts) < window:
+        return None
+    tail = sorted(pts)[-window:]
+    return sum(h for _d, h in tail) / float(window)
+
+
+def project_year_end(series, today=None, window=PACE_WINDOW):
+    """
+    Where the calendar year lands if the trailing pace holds to 31 December.
+
+    Returns None without a full window of reporting days, and otherwise:
+
+        crossed    head so far this year, from the daily estimates
+        pace       head per reporting day over the trailing window
+        days_left  reporting days from the day after the last report to 31 Dec
+        projected  crossed + pace * days_left
+        through    date of the last report in the series
+        window     the window actually used
+
+    NO CAP, and that is the real departure from the quota tracker.
+    project_final() clamps at the tranche limit because CBP stops accepting
+    entries once a quota fills. Nothing caps a border: it runs at whatever rate
+    the open crossings support, and in 2024 that was 5,678 head per reporting
+    day against the 1,155 behind this projection.
+
+    WHAT IT CANNOT SEE IS WHAT DECIDES IT. The two things that move this number
+    most are both step changes, and a straight line is blind to both:
+
+      * a crossing reopening, which is not hypothetical and has already
+        happened inside a pace window. Douglas, AZ carried the whole border
+        from 24 August until Santa Teresa, NM joined it on 24 September and
+        began adding several hundred head a day. Two of the six crossings that
+        ran in 2023 are open. After the February 2025 reopening the weekly
+        run-rate climbed to about 20,000 head and plateaued by week six; the
+        2026 ramp was at 6,400 in week five, on a fraction of the ports.
+        Use newest_crossing() to tell whether the window spans one regime or
+        two -- a window that straddles an opening reads LOW, because part of
+        it predates the port.
+      * a new screwworm detection. That is what shut the border in the first
+        place, and it takes the rate to zero in a day rather than bending it.
+
+    So read it as "if nothing changes", exactly as the quota page's projection
+    is to be read, and expect the error to arrive as a jump rather than as
+    drift. The page says so in as many words.
+    """
+    pts = sorted((_as_date(r[0]), r[1] or 0) for r in series)
+    if not pts:
+        return None
+    today = _as_date(today) if today else date.today()
+    yr = today.year
+    this_year = [(d, h) for d, h in pts if d.year == yr]
+    if not this_year:
+        return None
+    rate = daily_pace(this_year, window=window)
+    if rate is None:
+        return None
+    through = this_year[-1][0]
+    # From the day after the LAST REPORT, not the day after today. The two
+    # differ whenever the report lags, and counting from today would drop the
+    # days in between out of the projection altogether -- cattle crossed on
+    # them, and the daily series has merely not caught up yet.
+    left = reporting_days(through + timedelta(days=1), date(yr, 12, 31))
+    crossed = sum(h for _d, h in this_year)
+    return {
+        "crossed": crossed,
+        "pace": rate,
+        "days_left": left,
+        "projected": crossed + rate * left,
+        "through": str(through),
+        "window": window,
     }
 
 

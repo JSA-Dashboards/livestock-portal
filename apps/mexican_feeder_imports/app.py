@@ -203,6 +203,10 @@ def load_all():
             "by_year": bd.receipts_by_year(conn),
             "by_crossing": bd.receipts_by_crossing(conn,
                                                    since=f"{date.today().year}-01-01"),
+            "newest_port": bd.newest_crossing(conn,
+                                              since=f"{date.today().year}-01-01"),
+            "watch_port": (bd.port_profile(conn, bd.WATCH_PORT)
+                           if bd.WATCH_PORT else None),
             "ytd_ams": bd.ytd_actuals(conn),
             "since_open": bd.since_reopening(conn),
             "weekly": bd.weekly_volumes(conn),
@@ -337,7 +341,22 @@ st.markdown(f'<div class="sec-header">{this_yr} Year to Date</div>',
 daily = D.get("daily") or []
 last_day = daily[-1] if daily else None
 
-c = st.columns(4)
+# Deliberately NOT inside load_all(). That function is @st.cache_data with a
+# 30-minute ttl, and this is the one figure on the page whose value depends on
+# today's date as well as on the data -- the reporting days left in the year
+# tick down whether or not Snowflake has anything new. Cached, it would go on
+# quoting yesterday's remaining-day count with nothing to show it had.
+#
+# Guarded for the same reason the normal-trade baseline below is: this is one
+# tile on a page with a dozen other things on it, and a projection that cannot
+# be computed should cost the tile, not the page.
+try:
+    PROJ = bd.project_year_end([(d, v) for d, v, _w in daily]) if daily else None
+except Exception as exc:
+    PROJ = None
+    st.caption(f":orange[Year-end projection unavailable ({type(exc).__name__}).]")
+
+c = st.columns(5)
 with c[0]:
     st.markdown(tile("Daily Head Crossings",
                      f"{last_day[1]:,}" if last_day else "—",
@@ -367,6 +386,16 @@ with c[3]:
     st.markdown(tile(f"{Y['prior_year']} YTD Head" if Y else "Prior YTD",
                      f"{Y['prior_ytd']:,}" if Y and Y.get("prior_ytd") else "—",
                      sub("same point last year")), unsafe_allow_html=True)
+with c[4]:
+    # Last, and next to the prior-year box on purpose: the comparison a reader
+    # wants from a projection is against the year it is being measured down
+    # from, and here those two tiles sit side by side.
+    st.markdown(tile(f"{this_yr} Projected Total",
+                     f"~{PROJ['projected']:,.0f}" if PROJ else "—",
+                     sub(f"{PROJ['pace']:,.0f} head/day · {PROJ['days_left']} "
+                         f"reporting days left" if PROJ
+                         else "not enough reporting days yet")),
+                unsafe_allow_html=True)
 
 if Y:
     # Derived, not hardcoded: the estimate-vs-actual gap moves every week, and a
@@ -374,7 +403,8 @@ if Y:
     est_to_date = sum(v for d, v, _w in daily if str(d) <= str(Y["week_end"]))
     gap = ((est_to_date / Y["ytd"] - 1) * 100) if Y.get("ytd") else None
     st.caption(
-        f"**The first two boxes are estimates; the last two are actuals.** The "
+        f"**The first two boxes are estimates, the next two are actuals, and "
+        f"the last is a projection.** The "
         f"daily figures AMS publishes are rounded to the nearest hundred head, "
         f"so the {this_yr} total is approximate and current to "
         f"{fmt_date(SO['latest']) if SO else 'the latest report'}. The YTD is "
@@ -385,6 +415,104 @@ if Y:
         + (f", a {gap:+.1f}% rounding gap" if gap is not None else "")
         + ", which is why the boxes do not tie exactly."
     )
+
+if PROJ:
+    _by = D.get("by_year") or {}
+    # The BUSIEST prior year, not the most recent one. Most recent is 2025,
+    # which was itself three-quarters closed at 222,600 head -- against it the
+    # projection reads 41% and sounds like a shortfall rather than a collapse.
+    # Against 2024 it is 7%. Scale means scale against a working border.
+    _prior = {y: r["head"] for y, r in _by.items() if y < str(this_yr)}
+    _ref = max(_prior, key=_prior.get, default=None)
+    _ref_head = _prior.get(_ref)
+    st.caption(
+        f"**The last box is a projection, not a measurement.** It carries the "
+        f"trailing **{PROJ['window']} reporting days** — two full AMS weeks, "
+        f"**{PROJ['pace']:,.0f} head a day** — across the {PROJ['days_left']} "
+        f"reporting days left in {this_yr}: {PROJ['crossed']:,} head through "
+        f"{fmt_date(PROJ['through'])}, plus {PROJ['pace']:,.0f} × "
+        f"{PROJ['days_left']}. Two full weeks rather than the whole span since "
+        f"the border reopened, because that span still contains the restart — "
+        f"over all {len(daily)} reporting days this year the rate is "
+        f"{PROJ['crossed'] / len(daily):,.0f} head a day, which describes a "
+        f"start-up that is over rather than the rate now."
+    )
+    # Every port fact here is read off the data rather than written in. The
+    # first draft of this caption said "only Douglas, AZ is open" -- true when
+    # the border reopened, nine days stale by the time it shipped, and
+    # contradicted by the page's own header two screens up.
+    _ports = (S or {}).get("active_ports") or []
+    _new = D.get("newest_port")
+    st.caption(
+        f"**Read it as “if nothing changes”.** The two things that would change "
+        f"it most are step changes, and a straight line sees neither. The first "
+        f"is a crossing opening or shutting"
+        + (f" — **{len(_ports)} of the six crossings that ran in 2023 are open "
+           f"now** ({', '.join(_ports)})." if _ports else ".")
+        + (f" **{_new[0]} only joined on {fmt_date(_new[2], '%b %d')}** "
+           f"and has carried {_new[3]:,} head since, so part of the "
+           f"{PROJ['window']}-day window above predates it and the pace is a "
+           f"blend of a one-port border and a two-port one — which makes it "
+           f"read low, not high."
+           if _new else "")
+        + f" After the February 2025 reopening the run-rate climbed to about "
+          f"20,000 head a week and plateaued by week six, against 6,400 in week "
+          f"five this time, so the next crossing to reopen moves this in a jump "
+          f"rather than a drift. The second is a fresh screwworm detection, "
+          f"which takes it to zero just as abruptly. For scale, "
+        + (f"the projection is **{PROJ['projected'] / _ref_head * 100:.0f}% of "
+           f"{_ref}’s {_ref_head:,} head**, the busiest year in this series "
+           f"and the last one the border ran for before the first closure."
+           if _ref_head else "a working border runs well over a million head "
+                             "a year.")
+    )
+
+    # The named step change, priced. Shown only while the crossing is shut --
+    # once it opens it is in the daily series, the trailing pace picks it up on
+    # its own, and the caption above names it as the newest port. Nothing here
+    # needs changing on the day; this paragraph simply stops appearing.
+    _w = D.get("watch_port")
+    if _w and not _w["running"]:
+        _nd = bd.reporting_days(date(this_yr, 11, 1), date(this_yr, 12, 31))
+        # Low: the rate the port that most recently reopened is ACTUALLY
+        # managing, which is the only in-regime evidence of what a restarting
+        # crossing does today. High: this port's own rate when the border ran
+        # normally. The gap between them is the honest width of the question.
+        _lo = (_new[3] / _new[4]) if (_new and _new[4]) else None
+        _hi = _w["per_day"]
+        _p_lo = PROJ["projected"] + _lo * _nd if _lo else None
+        _p_hi = PROJ["projected"] + _hi * _nd
+        st.caption(
+            f"**The step change with a date on it: {_w['port']}, NM.** It is "
+            f"the one shut crossing that used to carry real volume — "
+            f"**{_w['share'] * 100:.0f}% of every head** through the border in "
+            f"{_w['years'][0]}–{_w['years'][-1]}, at {_w['per_day']:,.0f} a day "
+            f"while open, against the {PROJ['pace']:,.0f} a day the whole "
+            f"border is managing now. It has not carried a head since "
+            f"{fmt_date(_w['last_seen'])}, and is expected back "
+            f"**{bd.WATCH_PORT_EXPECTED}**. Over the {_nd} reporting days in "
+            f"November and December that is worth "
+            + (f"**+{_lo * _nd:,.0f} head** if it restarts the way "
+               f"{_new[0]} has ({_lo:,.0f} a day across its first {_new[4]}) "
+               f"and " if _lo else "")
+            + f"**+{_hi * _nd:,.0f}** at its own {_w['years'][0]}–"
+              f"{_w['years'][-1]} rate — a year-end total of "
+            + (f"roughly **{_p_lo:,.0f} to {_p_hi:,.0f}**" if _p_lo
+               else f"roughly **{_p_hi:,.0f}**")
+            + f" rather than {PROJ['projected']:,.0f}."
+        )
+        st.caption(
+            f":orange[**None of that is in the box**, which counts only cattle "
+            f"that have crossed — and an announced reopening is not a "
+            f"reopening.] On 8 July 2025 AMS published that {_w['port']} and "
+            f"Santa Teresa would reopen on the 14th and 21st. Neither did: "
+            f"{_w['port']} has not appeared since {fmt_date(_w['last_seen'])}, "
+            f"Santa Teresa recorded nothing between May 2025 and its actual "
+            f"return on Sep 24, 2026, and that July reopening ran four "
+            f"reporting days of Douglas alone before the border shut again. "
+            f"The projection moves when cattle cross, not when a date is "
+            f"announced."
+        )
 
 st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
 
