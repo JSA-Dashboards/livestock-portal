@@ -16,6 +16,8 @@ from urllib.parse import quote
 # local nass_cache_client import below raises ModuleNotFoundError.
 sys.path.insert(0, str(Path(__file__).parent))
 
+import daily_slaughter
+
 # ── JSA Brand Colors ───────────────────────────────────────────────────────────
 # Extracted from jpsi.com logo: sage green #5e7164, charcoal #333132
 JSA_GREEN    = "#5e7164"   # exact logo monogram green
@@ -152,6 +154,49 @@ st.markdown(f"""
     letter-spacing:.1em; margin:14px 0 6px;
   }}
   div[data-testid="stDataFrame"] {{ background:{DM_SURFACE}; border-radius:8px; }}
+
+  /* The report switch, dressed as a tab bar so it reads as one with the tabs
+     below it. It stays an st.segmented_control rather than becoming a fifth
+     st.tabs entry for the two reasons the Cold Storage view on the Cattle on
+     Feed page records: a hidden Streamlit tab is hidden, not skipped, so the
+     Saturday view would pay for the NASS + AMS load on every weights visit
+     and vice versa; and this switch sits ABOVE the st.stop() that guards the
+     NASS cache, so a cache outage cannot take down a view that reads neither
+     NASS nor the cache. */
+  [data-testid="stButtonGroup"] {{
+    margin:0 0 14px 0; border-bottom:1px solid {DM_BORDER}; gap:0 !important;
+  }}
+  [data-testid="stButtonGroup"] > div {{ gap:0 !important; }}
+  [data-testid="stButtonGroup"] button[data-variant="segmented_control"] {{
+    background:transparent !important; border:none !important;
+    border-bottom:2px solid transparent !important; border-radius:0 !important;
+    box-shadow:none !important; color:{DM_MUTED} !important;
+    font-size:0.95rem !important; font-weight:500 !important;
+    padding:6px 20px 9px 20px !important; margin:0 !important;
+  }}
+  [data-testid="stButtonGroup"] button[data-variant="segmented_control"]:hover {{
+    color:{DM_TEXT} !important;
+  }}
+  [data-testid="stButtonGroup"] button[aria-checked="true"] {{
+    color:{JSA_GREEN} !important; border-bottom-color:{JSA_GREEN} !important;
+    font-weight:700 !important;
+  }}
+
+  .sat-call {{
+    background:{DM_SURFACE}; border:1px solid {DM_BORDER};
+    border-left:4px solid {JSA_GREEN}; border-radius:8px;
+    padding:16px 20px 14px; margin:2px 0 14px;
+  }}
+  .sat-call-lead {{ color:{DM_TEXT}; font-size:1.05rem; line-height:1.5; }}
+  .sat-call-sub  {{ color:{DM_MUTED}; font-size:0.82rem; margin-top:8px; line-height:1.55; }}
+  .sat-table {{ width:100%; border-collapse:collapse; font-size:0.82rem; }}
+  .sat-table th {{
+    text-align:left; color:{DM_MUTED}; font-weight:600; font-size:0.7rem;
+    text-transform:uppercase; letter-spacing:.06em;
+    padding:6px 10px; border-bottom:1px solid {DM_BORDER};
+  }}
+  .sat-table td {{ padding:6px 10px; border-bottom:1px solid {DM_BORDER}; color:{DM_TEXT}; }}
+  .sat-table td.num {{ text-align:right; font-variant-numeric:tabular-nums; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -680,6 +725,194 @@ def _to_excel(df: pd.DataFrame) -> bytes:
     return buf.getvalue()
 
 
+# ── Saturday slaughter view ────────────────────────────────────────────────────
+# Data and arithmetic live in daily_slaughter.py; the layout is here next to the
+# brand helpers it needs. Same split as cof_recap and cold_storage on the Cattle
+# on Feed page.
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _sat_load() -> dict:
+    return daily_slaughter.fetch(MARS_KEY)
+
+
+def render_saturday_slaughter() -> None:
+    with st.spinner("Loading USDA AMS daily slaughter…"):
+        raw = _sat_load()
+
+    hdr_l, hdr_r = st.columns([4, 1])
+    with hdr_l:
+        st.markdown(f"""
+        <div style="display:flex;align-items:center;gap:24px;padding:10px 0 8px">
+          <img src="{JSA_LOGO_FULL}" style="height:68px" />
+          <div>
+            <div style="font-size:2rem;font-weight:700;color:{DM_TEXT};line-height:1.1;letter-spacing:-0.01em">
+              JSA - Saturday Cattle Slaughter
+            </div>
+            <div style="color:{DM_MUTED};font-size:0.88rem;margin-top:5px;letter-spacing:.02em">
+              Daily estimates &nbsp;·&nbsp; USDA AMS report 3208 &nbsp;·&nbsp; Federally Inspected
+            </div>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    if raw.get("error"):
+        st.error(
+            f"AMS daily slaughter unavailable — {raw['error']}. This view reads "
+            f"MARS report 3208 and needs MARS_API_KEY, the same secret the "
+            f"carcass-weight tiles use. The published report is at "
+            f"{daily_slaughter.REPORT_PDF}"
+        )
+        return
+
+    df   = daily_slaughter.daily_frame(raw)
+    sats = daily_slaughter.saturday_frame(df)
+    if sats.empty:
+        st.warning("No complete Saturday weeks in report 3208.")
+        return
+
+    with hdr_r:
+        st.markdown(f"""
+        <div style="text-align:right;padding-top:6px;font-size:0.75rem">
+          <div style="color:{DM_MUTED};font-size:0.6rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px">AMS 3208 — PUBLISHED</div>
+          <div style="color:{JSA_GREEN};font-weight:700;font-size:0.9rem">
+            {raw['published'].strftime('%b %d, %Y') if raw.get('published') else 'N/A'}
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    # ── Sidebar controls ───────────────────────────────────────────────────────
+    yrs = sorted({d.year for d in sats["day"]})
+    pick = st.sidebar.multiselect("Years", yrs, default=yrs, key="sat_years")
+    if not pick:
+        pick = yrs
+    st.sidebar.divider()
+    st.sidebar.markdown(
+        f'<div style="color:{DM_MUTED};font-size:.68rem;line-height:1.6">'
+        f'MARS keeps this slug back to {daily_slaughter.FIRST_YEAR} and no '
+        f'further, so "the last time" is always read against that window. '
+        f'The newest Saturday is a projection until the next business day '
+        f'restates it, and Saturdays revise up far more often than down.</div>',
+        unsafe_allow_html=True,
+    )
+
+    shown = sats[sats["day"].map(lambda d: d.year in pick)]
+
+    # ── Headline: the newest Saturday, and the last one that matched it ───────
+    latest = sats.iloc[-1]
+    prior  = daily_slaughter.at_or_above(sats, int(latest["head"]), before=latest["day"])
+    when   = "Tomorrow" if latest["is_projection"] else "Latest Saturday"
+
+    if prior.empty:
+        answer = (f"No Saturday since {daily_slaughter.FIRST_YEAR} has matched it.")
+    else:
+        p = prior.iloc[-1]
+        gap = (latest["day"] - p["day"]).days // 7
+        answer = (f"Last matched on <b>{p['day'].strftime('%b %d, %Y')}</b> at "
+                  f"<b>{int(p['head']):,}</b> head — {gap} weeks ago, and "
+                  + ("that was a holiday week." if p["lost_day"] else "that was a full week."))
+
+    note = ("This is a full Mon–Fri week, so the Saturday is additive rather "
+            "than a holiday make-up — which is what makes it unusual."
+            if not latest["lost_day"] else
+            f"This week gave up a weekday ({int(latest['week_low']):,} head on its "
+            f"weakest), so the Saturday is buying back a lost day rather than "
+            f"adding one.")
+
+    st.markdown(
+        f'<div class="sat-call">'
+        f'<div class="sat-call-lead">{when} — <b>{latest["day"].strftime("%A, %b %d, %Y")}</b>: '
+        f'<b>{int(latest["head"]):,} head</b>'
+        + ('  <span style="color:#b07d2b">(projection)</span>' if latest["is_projection"] else '')
+        + f'. {answer}</div>'
+        f'<div class="sat-call-sub">Week to date {int(latest["week_total"]):,} head · '
+        f'Saturday is {latest["sat_share"]*100:.1f}% of the week. {note}</div>'
+        f'</div>', unsafe_allow_html=True)
+
+    # ── Chart ──────────────────────────────────────────────────────────────────
+    # Holiday weeks are coloured apart rather than filtered out: they are most
+    # of the big Saturdays, and hiding them would make the series look like it
+    # trends when it mostly just reflects the calendar.
+    fig = go.Figure()
+    for flag, name, colour in ((False, "Full week", JSA_GREEN),
+                               (True,  "Holiday / short week", "#b07d2b")):
+        sub = shown[shown["lost_day"] == flag]
+        if sub.empty:
+            continue
+        fig.add_trace(go.Bar(
+            x=sub["day"], y=sub["head"], name=name,
+            marker_color=colour,
+            customdata=sub[["week_total", "week_low"]],
+            hovertemplate=("%{x|%b %-d, %Y}<br>%{y:,.0f} head"
+                           "<br>week %{customdata[0]:,.0f}"
+                           "<br>weakest weekday %{customdata[1]:,.0f}<extra></extra>"),
+        ))
+    _apply(fig, "Saturday Cattle Slaughter — Head", 430, "Head")
+    fig.update_layout(barmode="overlay", legend=dict(orientation="h", y=1.02, x=0))
+    st.plotly_chart(fig, use_container_width=True)
+
+    # ── Biggest Saturdays, with the week each sat in ───────────────────────────
+    st.markdown('<div class="sec-hdr">Biggest Saturdays on file</div>', unsafe_allow_html=True)
+    top = shown.sort_values("head", ascending=False).head(15)
+    rows_html = "".join(
+        f'<tr><td>{r.day.strftime("%a %b %d, %Y")}</td>'
+        f'<td class="num">{int(r.head):,}</td>'
+        f'<td class="num">{int(r.week_total):,}</td>'
+        f'<td class="num">{r.sat_share*100:.1f}%</td>'
+        f'<td>{daily_slaughter.context_line(r._asdict())}</td></tr>'
+        for r in top.itertuples()
+    )
+    st.markdown(
+        f'<table class="sat-table"><thead><tr>'
+        f'<th>Saturday</th><th style="text-align:right">Head</th>'
+        f'<th style="text-align:right">Week total</th>'
+        f'<th style="text-align:right">Sat share</th><th>Context</th>'
+        f'</tr></thead><tbody>{rows_html}</tbody></table>',
+        unsafe_allow_html=True)
+
+    # ── Audit + provenance ─────────────────────────────────────────────────────
+    bad = daily_slaughter.reconcile(df, raw)
+    if bad:
+        st.warning(
+            f"{len(bad)} week(s) do not sum to the report's own week-to-date — "
+            f"first: week of {bad[0][0]}, Mon–Sat {bad[0][1]:,} vs AMS {bad[0][2]:,}. "
+            f"Treat those weeks as suspect."
+        )
+
+    st.caption(
+        f"USDA AMS report 3208, *Daily Livestock and Poultry Slaughter* "
+        f"([report]({daily_slaughter.REPORT_PDF}) · "
+        f"[viewer]({daily_slaughter.REPORT_VIEW})), read through MARS. "
+        f"Estimated federally inspected head, {daily_slaughter.FIRST_YEAR}–present — "
+        f"that is the whole history MARS retains for this slug. "
+        f"{len(sats)} complete weeks, all of which reconcile to the report's own "
+        f"week-to-date. Cached 1 hr."
+    )
+
+    st.download_button(
+        "Download Saturday series (Excel)",
+        _to_excel(shown.assign(day=shown["day"].astype(str))),
+        file_name="saturday_slaughter.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+# ── Report switch ──────────────────────────────────────────────────────────────
+# Saturday slaughter is a DAILY report (AMS 3208) and everything else on this
+# page is weekly, so it reads its own series and shares no load with the rest.
+# It sits behind a switch rather than a fifth tab, and the switch is placed
+# ABOVE the NASS load and above the st.stop() that guards it -- a NASS cache
+# outage must not take down a view that never touches the cache. Same shape,
+# and the same reasoning, as Cold Storage on the Cattle on Feed page.
+
+VIEW_WEIGHTS = "Cattle Weights"
+VIEW_SAT     = "Saturday Slaughter"
+
+view = st.segmented_control(
+    "Report", (VIEW_WEIGHTS, VIEW_SAT), default=VIEW_WEIGHTS,
+    label_visibility="collapsed", key="bw_view",
+) or VIEW_WEIGHTS       # deselecting the active segment returns None
+
+
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 
 st.sidebar.markdown(
@@ -690,14 +923,23 @@ st.sidebar.markdown(
 st.sidebar.markdown(
     f'<div style="background:{JSA_GREEN};border-radius:4px;padding:5px 10px;'
     f'font-size:.7rem;color:#fff;font-weight:600;letter-spacing:.08em;'
-    f'text-transform:uppercase;margin-bottom:10px">Cattle Weights Dashboard</div>',
+    f'text-transform:uppercase;margin-bottom:10px">'
+    + ("Saturday Slaughter" if view == VIEW_SAT else "Cattle Weights Dashboard")
+    + '</div>',
     unsafe_allow_html=True,
 )
 st.sidebar.markdown(
-    f'<span style="color:{DM_MUTED};font-size:.72rem">USDA NASS · Federally Inspected</span>',
+    f'<span style="color:{DM_MUTED};font-size:.72rem">'
+    + ("USDA AMS · Daily estimates, report 3208"
+       if view == VIEW_SAT else "USDA NASS · Federally Inspected")
+    + '</span>',
     unsafe_allow_html=True,
 )
 st.sidebar.divider()
+
+if view == VIEW_SAT:
+    render_saturday_slaughter()
+    st.stop()
 
 current_year = datetime.now().year
 # Always load enough history for the 5-yr average + trend charts
