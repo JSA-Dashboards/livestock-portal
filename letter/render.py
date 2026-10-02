@@ -379,23 +379,44 @@ def wtd_cash_rows(ctx: dict) -> list:
     Only states that actually traded are listed -- naming four every day so
     three can say "Undefined" is three wasted lines.
 
+    EXCEPT ON FRIDAY, where the absence is the news. A state that never
+    established a test all week is a fact about the market, and the weekly
+    letter said nothing at all about it. Mid-week it means "not yet" and is
+    noise; on Friday the week is closed and it means "not at all". That is
+    the whole reason this is keyed on `kind` rather than applied everywhere.
+
+    "Undefined" is USDA's own term for too little confirmed trade to publish
+    a market test -- a real answer, not a gap, so it is never marked [[?]].
+    The wording is carried over from the old two-region cash_cattle_block,
+    which printed "South: Undefined" and was deleted when this took over; it
+    was the one thing that block knew that this one did not.
+
     SHARED BY THE MORNING BRIEF AND THE RECAP. It was the morning brief's alone
     until 2026-09-24, when Ross asked for the same treatment Tue-Thu evening;
     extracted rather than copied, because two implementations of "how this
     letter writes a cash range" is exactly the kind of pair that drifts.
     """
     regions = (ctx.get("regional_cash") or {}).get("regions") or {}
-    traded = [(n, r) for n, r in regions.items() if not r.get("undefined")]
     rows = []
-    for name, r in traded:
+    for name, r in ((n, r) for n, r in regions.items() if not r.get("undefined")):
         bits = []
         if r.get("live_low") is not None:
             bits.append(f"{trim_range(r['live_low'], r['live_high'])} live")
         if r.get("dressed_low") is not None:
             bits.append(f"{trim_range(r['dressed_low'], r['dressed_high'])} dressed")
         rows.append(f"{_esc(name)}: {' &middot; '.join(bits)}")
-    if not rows and regions:
-        rows.append("No established test this week")
+
+    # NOTHING TRADED ANYWHERE is one line, not four identical ones -- and an
+    # EMPTY regions dict is a different thing entirely. fetch_regional_cash_wtd
+    # always returns every state in CASH_STATES, marking the quiet ones
+    # undefined, so empty means the fetch did not run. Saying "no test" then
+    # would be reporting a market fact we never actually looked up.
+    if not rows:
+        return ["No established test this week"] if regions else []
+
+    if ctx.get("kind") == "friday":
+        rows.extend(f"{_esc(n)}: Undefined"
+                    for n, r in regions.items() if r.get("undefined"))
     return rows
 
 
@@ -415,37 +436,6 @@ def wtd_cash_block(ctx: dict) -> str:
     """
     rows = wtd_cash_rows(ctx)
     return "<h2>Cash Trade</h2>" + _bullets(rows) if rows else ""
-
-
-def cash_cattle_block(regional: dict) -> str:
-    """
-    North and South negotiated ranges.
-
-    "Undefined" is USDA's own state when a region has too little confirmed trade
-    for a market test. It is printed as the letter prints it -- a real answer,
-    not a gap, so it is never marked [[?]].
-    """
-    regions = (regional or {}).get("regions") or {}
-    rows = []
-    for name in ("North", "South"):
-        r = regions.get(name)
-        if not r:
-            rows.append(f"{name}: {MISSING}")
-            continue
-        if r.get("undefined"):
-            rows.append(f"{name}: Undefined")
-            continue
-        bits = []
-        if r.get("live_low") is not None:
-            lo, hi = r["live_low"], r["live_high"]
-            bits.append(f"{money(lo)}-{money(hi)} FOB live" if lo != hi
-                        else f"{money(lo)} FOB live")
-        if r.get("dressed_low") is not None:
-            lo, hi = r["dressed_low"], r["dressed_high"]
-            bits.append(f"{money(lo)}-{money(hi)} Dressed" if lo != hi
-                        else f"{money(lo)} Dressed")
-        rows.append(f"{name}: {'. '.join(bits) if bits else 'Undefined'}.")
-    return "<h2>Cash Cattle Trade</h2>" + _bullets(rows)
 
 
 def cftc_block(cftc: dict) -> str:

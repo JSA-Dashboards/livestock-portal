@@ -104,20 +104,70 @@ def test_cash_regions_and_class_filter():
     assert sources.CASH_CLASSES == ("STEER", "HEIFER")
 
 
-def test_undefined_region_is_printed_not_marked_missing():
+def _wtd_ctx(kind, regions):
+    return {"kind": kind, "regional_cash": {"regions": regions}}
+
+
+_TRADED = {"live_low": 220.0, "live_high": 222.5,
+           "dressed_low": 346.0, "dressed_high": 350.0, "undefined": False}
+_QUIET = {"live_low": None, "live_high": None,
+          "dressed_low": None, "dressed_high": None, "undefined": True}
+
+
+def test_friday_names_a_state_that_never_tested():
     """
-    "South: Undefined" is USDA's own state for too little confirmed trade. It is
-    a real answer and must never render as a [[?]] gap.
+    "Undefined" is USDA's own state for too little confirmed trade to publish
+    a market test. It is a real answer and must never render as a [[?]] gap.
+
+    ON FRIDAY THE ABSENCE IS THE NEWS. A state that did not establish a test
+    all week is a fact about the market, and the weekly letter used to say
+    nothing at all about it -- the only thing the old two-region
+    cash_cattle_block knew that the week-to-date block did not. Carried over
+    when that block was deleted, 2026-10-02.
     """
-    html = render.cash_cattle_block({"regions": {
-        "North": {"live_low": 220.0, "live_high": 222.5,
-                  "dressed_low": 346.0, "dressed_high": 350.0, "undefined": False},
-        "South": {"live_low": None, "live_high": None,
-                  "dressed_low": None, "dressed_high": None, "undefined": True},
-    }})
-    assert "220.00-222.50 FOB live" in html
-    assert "South: Undefined" in html
-    assert render.MISSING not in html
+    rows = render.wtd_cash_rows(_wtd_ctx("friday", {"NE": _TRADED, "KS": _QUIET}))
+    assert any("NE: 220-222.50 live" in r for r in rows)
+    assert "KS: Undefined" in rows
+    assert not any(render.MISSING in r for r in rows)
+
+
+@pytest.mark.parametrize("kind", ["am", "recap", "tuesday"])
+def test_only_friday_names_them(kind):
+    """
+    Mid-week "undefined" means NOT YET, and naming four states so three can
+    say so is three wasted lines -- the reason the block omitted them in the
+    first place. Friday is the only letter where it means NOT AT ALL.
+    """
+    rows = render.wtd_cash_rows(_wtd_ctx(kind, {"NE": _TRADED, "KS": _QUIET}))
+    assert not any("Undefined" in r for r in rows)
+    assert len(rows) == 1
+
+
+def test_nothing_trading_anywhere_is_one_line_not_four():
+    rows = render.wtd_cash_rows(_wtd_ctx("friday", {"NE": _QUIET, "KS": _QUIET}))
+    assert rows == ["No established test this week"]
+
+
+def test_an_unfetched_week_says_nothing_at_all():
+    """
+    fetch_regional_cash_wtd always returns every state in CASH_STATES, marking
+    the quiet ones undefined. So an EMPTY regions dict means the fetch did not
+    run -- and "no established test" would then be reporting a market fact
+    nobody looked up.
+    """
+    assert render.wtd_cash_rows(_wtd_ctx("friday", {})) == []
+
+
+def test_the_dead_single_day_cash_path_is_gone():
+    """
+    cash_cattle_block and fetch_regional_cash had no caller once Friday moved
+    to the shared week-to-date block. They were kept only as the basis for the
+    "Undefined" decision above; that is now implemented, so they are deleted.
+    Pinned because a fully documented dead function reads as live code.
+    """
+    assert not hasattr(render, "cash_cattle_block")
+    assert not hasattr(sources, "fetch_regional_cash")
+    assert hasattr(sources, "fetch_regional_cash_wtd")
 
 
 # -- Cattle on Feed -----------------------------------------------------------
@@ -1008,23 +1058,25 @@ def test_friday_uses_the_same_cash_block_as_the_recap():
     assert "Cash Trade Recap" in html
 
 
-def test_a_region_with_no_test_all_week_is_omitted_on_friday():
+def test_a_region_with_no_test_all_week_is_named_on_friday():
     """
-    THE COST OF SHARING THE BLOCK, recorded rather than hidden. The old Friday
-    block printed "South: Undefined" -- USDA's own answer for too little
-    confirmed trade. The shared block omits a region that did not trade, because
-    on a daily letter naming four so three can say Undefined is wasted lines.
+    INVERTED 2026-10-02, AND THE OLD VERSION WAS RIGHT TO EXIST.
 
-    On a WEEKLY letter that is arguably news: a region that never established a
-    test all week is a fact. Flagged to Ross; if he wants it back, the block
-    takes a flag rather than a second copy.
+    It asserted the opposite -- that the shared block omits a region which
+    never traded -- and its own docstring said why that was being recorded
+    rather than hidden: "On a WEEKLY letter that is arguably news... Flagged
+    to Ross; if he wants it back, the block takes a flag rather than a second
+    copy." He wanted it back. The block now keys on `kind`, which is that
+    flag, and there is still only one copy.
+
+    Mid-week the omission stands: see test_only_friday_names_them.
     """
     ctx = _cash_ctx("friday")
     ctx["commentary"] = {"key_headlines": ["x"]}
     html = render.build_html(ctx)
     cash = html.split("<h2>Cash Trade</h2>")[1].split("<h2>")[0]
-    assert "TX/OK/NM" not in cash
-    assert "Undefined" not in cash
+    assert "TX/OK/NM: Undefined" in cash
+    assert render.MISSING not in cash
 
 
 def test_friday_fetches_the_week_not_the_day():

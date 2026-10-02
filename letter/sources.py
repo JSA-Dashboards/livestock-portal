@@ -877,44 +877,6 @@ def fetch_regional_cash_wtd(as_of: date) -> dict:
     return out
 
 
-def fetch_regional_cash(on: date) -> dict:
-    """
-    North and South negotiated ranges for one trading day.
-
-    A region with no priced rows is reported as undefined, which is USDA's own
-    state when there is not enough confirmed trade for a market test -- and is
-    what the letter prints as "South: Undefined". That is a real answer, not a
-    fetch failure, so it is represented explicitly rather than as a gap.
-    """
-    out: dict = {"date": on.isoformat(), "regions": {}}
-    for region, slugs in CASH_REGIONS.items():
-        live_lows, live_highs, dressed_lows, dressed_highs, head = [], [], [], [], 0
-        for slug in slugs:
-            for row in _cash_rows(slug, on):
-                if str(row.get("purchase_type_code", "")).strip() != "NEGOTIATED CASH":
-                    continue
-                if str(row.get("class_desc", "")).strip() not in CASH_CLASSES:
-                    continue
-                lo, hi = _num(row.get("price_range_low")), _num(row.get("price_range_high"))
-                if lo is None or hi is None:
-                    continue
-                basis = str(row.get("selling_basis_desc", "")).strip()
-                hd = _num(row.get("head_count")) or 0
-                if basis == "LIVE FOB":
-                    live_lows.append(lo); live_highs.append(hi); head += hd
-                elif basis.startswith("DRESSED"):
-                    dressed_lows.append(lo); dressed_highs.append(hi)
-        out["regions"][region] = {
-            "live_low": min(live_lows) if live_lows else None,
-            "live_high": max(live_highs) if live_highs else None,
-            "dressed_low": min(dressed_lows) if dressed_lows else None,
-            "dressed_high": max(dressed_highs) if dressed_highs else None,
-            "head": int(head) or None,
-            "undefined": not live_lows and not dressed_lows,
-        }
-    return out
-
-
 # -- Outside markets, for the morning brief ----------------------------------
 # Corn is feed cost, equities are risk appetite, crude moves both. Fetched
 # through the same Massive client the Seasonal dashboard uses.
