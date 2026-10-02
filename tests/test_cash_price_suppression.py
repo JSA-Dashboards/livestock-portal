@@ -33,6 +33,27 @@ both cuts, NEGOTIATED CASH Steer/Heifer "Total all grades" (22,540 rows):
 Three states on each side, and the third is real: TX/OK/NM is absent from the
 feed entirely on 3 days of the window (most recently 23-27 Jul 2026), which is
 neither a blank nor a price.
+
+A FOURTH STATE WAS ADDED 2026-10-02, because reusing the volume flag left a
+hole that this file originally described as safe and was not. `suppressed`
+defaulted to False, so a caller with no volume for a region asserted "not
+withheld" and the tile fell back to "Undefined / no confirmed trade" -- the
+original bug, verbatim. That is reachable without an exception: prices come
+from each report's /Detail and head counts from its /Summary, and
+_fetch_many's worker catches every exception per job and returns [], so a
+Summary outage with Detail healthy leaves daily_err == "", passes the
+`elif daily_df.empty` gate on a healthy price frame, and silently drops the
+week-to-date panel. The page looked healthy while printing the false claim.
+
+Reproduced 2026-10-02: TX/OK/NM ("--", "withheld by USDA") with both feeds up,
+("Undefined", "no confirmed trade") with the volume frame emptied. The flag is
+three-valued now -- True, False, None -- and None gets its own state and its
+own caption, because no evidence either way is not evidence of no withholding.
+The page warns as well, since nothing else can see this failure.
+
+It does not cry wolf: over the 263 trading days to 2026-10-02, weekly_to_date()
+returned {} on none of the days that carried a price, so the two sections move
+together and an empty one is a real failure rather than a few hours of skew.
 """
 import ast
 import sys
@@ -112,12 +133,73 @@ def test_suppressed_cannot_invent_a_withheld_day_out_of_nothing(ns):
         _priced([]), NONE_PUBLISHED, suppressed=True)[0] == "unpublished"
 
 
-def test_suppressed_defaults_false(ns):
+def test_no_volume_evidence_is_its_own_state(ns):
     """
-    A caller with no volume for the region must fall back to USDA's own word,
-    not to a claim about USDA that nothing has established.
+    THIS TEST ASSERTED THE OPPOSITE AND THE OPPOSITE WAS WRONG.
+
+    It read: a caller with no volume for the region must fall back to USDA's
+    own word, not to a claim about USDA that nothing has established. Half of
+    that holds -- defaulting to False does avoid a false WITHHELD. But
+    "Undefined / no confirmed trade" is itself a claim, and a false one about
+    a market that traded. Falling back to the bug is not a safe fallback.
+
+    No volume evidence either way is not evidence of no withholding, so it
+    gets a state of its own and the tile says it does not know.
     """
-    assert ns["daily_price_state"](_priced([]), _published())[0] == "undefined"
+    assert ns["daily_price_state"](_priced([]), _published())[0] == "unknown"
+
+
+def test_the_flag_is_three_valued(ns):
+    """True, False and None are three different answers, not two and a null."""
+    f, pr, pub = ns["daily_price_state"], _priced([]), _published()
+    assert f(pr, pub, suppressed=True)[0] == "withheld"
+    assert f(pr, pub, suppressed=False)[0] == "undefined"
+    assert f(pr, pub, suppressed=None)[0] == "unknown"
+
+
+def test_an_absent_file_outranks_a_missing_flag(ns):
+    """
+    "unpublished" is an observation about USDA; "unknown" is a statement about
+    our own feed. The observation wins -- we know the file is not there
+    whatever the volume panel did or did not say.
+    """
+    assert ns["daily_price_state"](
+        _priced([]), NONE_PUBLISHED, suppressed=None)[0] == "unpublished"
+
+
+def test_a_price_still_wins_when_the_flag_is_missing(ns):
+    rows = _priced([("Live FOB", "morning", 221.25, 900.0)])
+    state, row = ns["daily_price_state"](rows, _published(), suppressed=None)
+    assert state == "priced"
+    assert row["price"] == 221.25
+
+
+def test_the_page_passes_none_rather_than_false_for_a_missing_entry(ns):
+    """
+    The whole fix lives in one expression. `bool(_entry and ...)` turns a
+    missing volume row into False, which asserts "not withheld" -- the thing
+    nothing established. A test pins the expression because the page code
+    around it is not reachable from here.
+    """
+    src = APP.read_text(encoding="utf-8")
+    assert 'suppressed=(_entry["suppressed"] if _entry else None)' in src
+    assert 'suppressed=bool(_entry and _entry["suppressed"])' not in src
+
+
+def test_the_page_warns_when_the_volume_feed_is_missing(ns):
+    """
+    daily_err structurally cannot see this: _fetch_many's worker catches every
+    exception per job and returns [], so a Summary outage raises nothing and
+    the `elif daily_df.empty` gate passes on a healthy PRICE frame. Without
+    its own check the page renders "no volume data" tiles, drops the
+    week-to-date panel, and reports itself healthy.
+    """
+    src = APP.read_text(encoding="utf-8")
+    warn = src.index("if not wtd:")
+    assert warn < src.index("_PRICE_BLANK = {"), "must warn above the tiles"
+    block = src[warn:warn + 900]
+    assert "st.warning(" in block
+    assert "no volume data" in block, "must name what the tiles will say"
 
 
 # -- the flag must never overwrite a real print -----------------------------
@@ -250,17 +332,30 @@ def test_the_threshold_clears_the_longest_ordinary_price_run(ns):
 
 def test_the_page_has_a_rendering_for_every_state(ns):
     """
-    daily_price_state returns four states and the page maps three of them to a
+    daily_price_state returns five states and the page maps four of them to a
     blank tile by name. A state added without a caption would be a KeyError on
     the live page, which is worse than a wrong word.
+
+    Derived from the function rather than listed by hand, so a sixth state
+    cannot be added without a caption and still pass.
     """
     src = APP.read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    fn = next(n for n in tree.body
+              if isinstance(n, ast.FunctionDef) and n.name == "daily_price_state")
+    returned = {c.value for n in ast.walk(fn) if isinstance(n, ast.Return)
+                for c in ast.walk(n)
+                if isinstance(c, ast.Constant) and isinstance(c.value, str)}
+    blank_states = returned - {"priced"}
+    assert blank_states == {"withheld", "undefined", "unpublished", "unknown"}
+
     start = src.index("_PRICE_BLANK = {")
     block = src[start:src.index("cols = st.columns(len(DAILY_REGIONS))", start)]
-    for state in ("withheld", "undefined", "unpublished"):
+    for state in blank_states:
         assert f'"{state}":' in block, state
     assert "withheld by USDA" in block
     assert "no confirmed trade" in block
+    assert "no volume data" in block
 
 
 def test_weekly_to_date_is_computed_once_above_both_panels(ns):

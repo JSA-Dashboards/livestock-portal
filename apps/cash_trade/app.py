@@ -1118,12 +1118,12 @@ def daily_combined(df: pd.DataFrame) -> pd.DataFrame:
     return g.merge(wg[key + ["weight"]], on=key, how="left")
 
 
-def daily_price_state(priced_rows, published_rows, suppressed=False):
+def daily_price_state(priced_rows, published_rows, suppressed=None):
     """
-    Which of four things a region's price tile is saying on one trading day.
+    Which of five things a region's price tile is saying on one trading day.
 
     Returns (state, row): "priced" and the print to headline, or one of
-    "withheld", "undefined", "unpublished" and None.
+    "withheld", "undefined", "unpublished", "unknown" and None.
 
     `priced_rows` is the region's daily_combined() rows for the day -- averages
     only, the unpriced ones already dropped. `published_rows` is its raw
@@ -1166,9 +1166,31 @@ def daily_price_state(priced_rows, published_rows, suppressed=False):
     run 33, 36 and 63 where the region went dark, so SUPPRESSION_RUN_DAYS sits
     in that gap on this series as well as on the volume one.
 
-    `suppressed` defaults False, and a caller with no volume for the region
-    must leave it there: the tile falls back to USDA's own word rather than to
-    a claim about USDA that nothing has established.
+    `suppressed` IS THREE-VALUED AND THE THIRD VALUE IS THE POINT. True is
+    "the volume panel says this region is withheld", False is "it says it is
+    not", and None is "there is no volume evidence either way" -- which is NOT
+    the same as evidence of no withholding, and gets its own state.
+
+    IT DEFAULTED TO FALSE AND THAT WAS WRONG. The reasoning was that falling
+    back to USDA's own word is safe, because it cannot assert a withholding
+    nothing established. Half of that holds: it does avoid a false WITHHELD.
+    But "no confirmed trade" is itself a claim, and a false one about a market
+    that traded -- the exact defect this function exists to remove. Falling
+    back to the bug is not a safe fallback.
+
+    It is reachable without an exception, which is the worst part.
+    fetch_daily_volume reads each report's /Summary section and
+    fetch_daily_cash its /Detail, two separate requests; _fetch_many's worker
+    catches every exception per job and returns [], so a Summary outage with
+    Detail healthy yields an empty volume frame, an empty `wtd`, `daily_err`
+    still "" and no warning anywhere. Reproduced 2026-10-02 against this file:
+    TX/OK/NM went from ("--", "withheld by USDA") to ("Undefined", "no
+    confirmed trade") while the page reported itself healthy.
+
+    The two sections do not otherwise disagree -- over 263 trading days to
+    2026-10-02, weekly_to_date() returned {} on exactly none of the days that
+    carried a price -- so an empty volume frame beside published prices is a
+    feed failure rather than ordinary skew, and the page says so out loud.
     """
     for basis in ("Live FOB", "Dressed Delivered"):
         b = priced_rows[priced_rows["basis"] == basis]
@@ -1178,6 +1200,8 @@ def daily_price_state(priced_rows, published_rows, suppressed=False):
                 return "priced", hit.iloc[0]
     if published_rows is None or published_rows.empty:
         return "unpublished", None
+    if suppressed is None:
+        return "unknown", None
     return ("withheld" if suppressed else "undefined"), None
 
 
@@ -1622,6 +1646,31 @@ with tab_daily:
         # the class of bug where both numbers are defensible and nothing raises.
         wtd = weekly_to_date(daily_vol, last_trade)
 
+        # THE VOLUME FEED CAN FAIL ON ITS OWN AND NOTHING ELSE NOTICES. Prices
+        # come from each report's /Detail section and head counts from its
+        # /Summary, two separate requests, and _fetch_many's worker swallows
+        # every exception per job and returns []. So a Summary outage leaves
+        # daily_err == "", passes the `elif daily_df.empty` gate because the
+        # PRICE frame is fine, and silently drops the week-to-date panel at the
+        # `if wtd:` below. The page looks healthy and is not: without the
+        # volume flag the price tiles cannot tell a withheld region from a
+        # quiet one -- see daily_price_state, where that used to resolve to
+        # USDA's "Undefined" and reinstate the bug this page was fixed for.
+        #
+        # It does not cry wolf: over 263 trading days to 2026-10-02,
+        # weekly_to_date() returned {} on none of the days that carried a
+        # price, so the two sections move together and an empty one here is a
+        # real failure rather than the feeds being a few hours apart.
+        if not wtd:
+            st.warning(
+                "⚠️ **USDA's volume reports did not load.** Head counts and prices "
+                "come from different sections of the same reports and only the price "
+                "half returned, so the week-to-date panel is missing below and a region "
+                "USDA is **withholding** cannot be told apart from one that simply did "
+                "not trade. Tiles reading *no volume data* mean exactly that — not a "
+                "quiet market. Use **Refresh now** in the sidebar to retry."
+            )
+
         st.markdown(
             f'<div class="sec-header" style="border-left-color:{FOB_COLOR};margin-top:6px;">'
             f'Latest trading day &mdash; {last_trade.strftime("%A, %b %d, %Y")} '
@@ -1673,6 +1722,13 @@ with tab_daily:
             "withheld":    ("—", "withheld by USDA"),
             "undefined":   ("Undefined", "no confirmed trade"),
             "unpublished": ("—", "not published"),
+            # "not published" is USDA having published nothing for the region;
+            # this is us having lost the feed that would say WHY the price is
+            # blank. Different causes, and the reader can act on this one by
+            # coming back later, so it does not fold into the one above --
+            # folding them would collapse two states into one, which is the
+            # error being fixed here one line up.
+            "unknown":     ("—", "no volume data"),
         }
         # RESOLVED ONCE, READ BY THE TILES AND BY THE TABLE UNDER THEM. Same
         # reason weekly_to_date() is hoisted above both: two callers deciding
@@ -1686,7 +1742,9 @@ with tab_daily:
                 day[day["region"] == region],
                 daily_df[(daily_df["trade_date"] == last_trade)
                          & (daily_df["region"] == region)],
-                suppressed=bool(_entry and _entry["suppressed"]),
+                # None, not False: no volume row for this region is no
+                # evidence either way, and False would assert the opposite.
+                suppressed=(_entry["suppressed"] if _entry else None),
             )
 
         cols = st.columns(len(DAILY_REGIONS))
