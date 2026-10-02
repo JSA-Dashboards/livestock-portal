@@ -192,6 +192,16 @@ times** — under `apps/cme_feeder_cattle/`, `apps/us_cow_herd/`,
 `apps/backgrounding_crush/` — plus a sixth copy in the cme-feeder-cattle-index
 repo. `cash_calves.py` exists twice here and once there.
 
+`daily_slaughter.py` and `tests/test_daily_slaughter.py` exist **twice** — here
+and at the root of `beef-weight-dashboard` — and nowhere in
+cme-feeder-cattle-index. Both are byte-identical and listed in that repo's
+`test_no_drift.py` SHARED list, which now walks beef-weight-dashboard too.
+**The standalone needs `MARS_API_KEY` added to its own Streamlit secrets**: the
+portal already held it for the report 3658 tiles, but that repo had no MARS
+consumer at all before the Saturday view, so there was nothing to inherit.
+Without it the Saturday view shows one error naming the secret and the rest of
+that dashboard is unaffected.
+
 Each page does `sys.path.insert(0, <its own dir>)`, but Python caches modules by
 NAME in `sys.modules`, so whichever page loads first wins and every other page
 gets ITS copy. All six are byte-identical today, which is the only reason this
