@@ -646,12 +646,15 @@ work first.
 
 ## The Saturday Slaughter view
 
-Added 2026-10-02. The Cattle Weights page carries a **second report** behind an
-`st.segmented_control` at the top — `Cattle Weights | Saturday Slaughter` — the
-same shape as Cold Storage on the Cattle on Feed page, for the same two
-reasons. Fetching and the week arithmetic are in
+Added 2026-10-02 as the **fifth tab**, between AMS Weekly Slaughter and Beef
+Production. Fetching and the week arithmetic are in
 `apps/beef_weight/daily_slaughter.py`; the layout is in `app.py` next to the
 brand helpers it needs.
+
+**It shipped that morning as a top-level `st.segmented_control`, the Cold
+Storage shape, and was moved to a tab the same day** — it is a secondary view
+of slaughter, not a peer of the whole dashboard, and the switch gave it more
+billing than it earns.
 
 **Nothing else on the portal can answer a day-of-week question.** The NASS tab
 and the SJ_LS712 feed behind the AMS tab are both WEEKLY (week-ending
@@ -659,11 +662,25 @@ Saturday) totals, so a Saturday kill is not a slice of them — it is a
 different report, AMS **3208**, *Daily Livestock and Poultry Slaughter*. No new
 secret: it reuses the `MARS_API_KEY` the carcass-weight tiles already hold.
 
-**A switch, not a fifth tab.** A hidden Streamlit tab is hidden, not skipped,
-so as a tab it would run its MARS fetch on every Cattle Weights load and vice
-versa. It also sits **above** the page's `st.stop()` NASS guard, which is the
-other half of the point — verified locally with no Snowflake credentials at
-all, where the NASS cache errors and the Saturday view still renders in full.
+**The switch existed for two reasons. One was accepted, the other was kept —
+and the way it was kept is the thing not to delete.**
+
+- *A hidden tab is hidden, not skipped*, so the MARS fetch now runs on every
+  Cattle Weights load. Accepted: `_sat_load` is `@st.cache_data(ttl=3600)`, so
+  that is one request per hour per container, the same deal `_fetch_fis_weights`
+  already takes.
+- *A NASS outage must not take it down*, because it reads neither NASS nor the
+  cache. As a tab it sits BELOW the page's `st.stop()` guard and would have
+  died with it. So `if raw.empty:` now renders the Saturday tab on its own
+  **before** calling `st.stop()`. **That four-line block is not redundant** —
+  delete it and an unrelated Snowflake hiccup blanks a view that never needed
+  Snowflake. Verified locally with no credentials at all: NASS errors, the page
+  stops, and the Saturday tab still draws in full.
+
+**Its controls live in the tab body, not the sidebar**, for the first reason
+above: a hidden tab still executes, so `st.sidebar.multiselect` there would
+park a "Years" box in the weights sidebar on every tab. Same trap as the
+hidden-tab rule further up this file.
 
 **3208 is a SECTIONED slug**, the trap `direct_reports.py` documents for the
 direct/video slugs. `GET /reports/3208` answers HTTP 200 with narrative rows

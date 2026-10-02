@@ -155,33 +155,6 @@ st.markdown(f"""
   }}
   div[data-testid="stDataFrame"] {{ background:{DM_SURFACE}; border-radius:8px; }}
 
-  /* The report switch, dressed as a tab bar so it reads as one with the tabs
-     below it. It stays an st.segmented_control rather than becoming a fifth
-     st.tabs entry for the two reasons the Cold Storage view on the Cattle on
-     Feed page records: a hidden Streamlit tab is hidden, not skipped, so the
-     Saturday view would pay for the NASS + AMS load on every weights visit
-     and vice versa; and this switch sits ABOVE the st.stop() that guards the
-     NASS cache, so a cache outage cannot take down a view that reads neither
-     NASS nor the cache. */
-  [data-testid="stButtonGroup"] {{
-    margin:0 0 14px 0; border-bottom:1px solid {DM_BORDER}; gap:0 !important;
-  }}
-  [data-testid="stButtonGroup"] > div {{ gap:0 !important; }}
-  [data-testid="stButtonGroup"] button[data-variant="segmented_control"] {{
-    background:transparent !important; border:none !important;
-    border-bottom:2px solid transparent !important; border-radius:0 !important;
-    box-shadow:none !important; color:{DM_MUTED} !important;
-    font-size:0.95rem !important; font-weight:500 !important;
-    padding:6px 20px 9px 20px !important; margin:0 !important;
-  }}
-  [data-testid="stButtonGroup"] button[data-variant="segmented_control"]:hover {{
-    color:{DM_TEXT} !important;
-  }}
-  [data-testid="stButtonGroup"] button[aria-checked="true"] {{
-    color:{JSA_GREEN} !important; border-bottom-color:{JSA_GREEN} !important;
-    font-weight:700 !important;
-  }}
-
   .sat-call {{
     background:{DM_SURFACE}; border:1px solid {DM_BORDER};
     border-left:4px solid {JSA_GREEN}; border-radius:8px;
@@ -739,21 +712,29 @@ def render_saturday_slaughter() -> None:
     with st.spinner("Loading USDA AMS daily slaughter…"):
         raw = _sat_load()
 
-    hdr_l, hdr_r = st.columns([4, 1])
-    with hdr_l:
-        st.markdown(f"""
-        <div style="display:flex;align-items:center;gap:24px;padding:10px 0 8px">
-          <img src="{JSA_LOGO_FULL}" style="height:68px" />
-          <div>
-            <div style="font-size:2rem;font-weight:700;color:{DM_TEXT};line-height:1.1;letter-spacing:-0.01em">
-              JSA - Saturday Cattle Slaughter
-            </div>
-            <div style="color:{DM_MUTED};font-size:0.88rem;margin-top:5px;letter-spacing:.02em">
-              Daily estimates &nbsp;·&nbsp; USDA AMS report 3208 &nbsp;·&nbsp; Federally Inspected
-            </div>
-          </div>
+    # Header banner, in the compact in-tab style the AMS Weekly tab uses --
+    # the page already has its logo masthead above the tab strip, so repeating
+    # it here would print the letterhead twice.
+    _pub = raw["published"].strftime("%b %d, %Y") if raw.get("published") else "N/A"
+    st.markdown(f"""
+    <div style="display:flex;align-items:center;justify-content:space-between;
+      background:{DM_SURFACE2};border:1px solid {DM_BORDER};
+      border-left:4px solid {JSA_GREEN};border-radius:6px;padding:14px 20px;margin-bottom:18px">
+      <div>
+        <div style="color:{DM_TEXT};font-size:1.1rem;font-weight:700">
+          Saturday Slaughter — Daily Estimates
         </div>
-        """, unsafe_allow_html=True)
+        <div style="color:{DM_MUTED};font-size:0.78rem;margin-top:3px">
+          USDA Agricultural Marketing Service · report 3208 · Federally Inspected ·
+          the only JSA source with a day-of-week breakdown
+        </div>
+      </div>
+      <div style="text-align:right">
+        <div style="color:{DM_MUTED};font-size:0.68rem;text-transform:uppercase;letter-spacing:.06em">AMS 3208 Published</div>
+        <div style="color:{JSA_GREEN_LT};font-size:1.15rem;font-weight:700">{_pub}</div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
 
     if raw.get("error"):
         st.error(
@@ -770,29 +751,19 @@ def render_saturday_slaughter() -> None:
         st.warning("No complete Saturday weeks in report 3208.")
         return
 
-    with hdr_r:
-        st.markdown(f"""
-        <div style="text-align:right;padding-top:6px;font-size:0.75rem">
-          <div style="color:{DM_MUTED};font-size:0.6rem;text-transform:uppercase;letter-spacing:.07em;margin-bottom:4px">AMS 3208 — PUBLISHED</div>
-          <div style="color:{JSA_GREEN};font-weight:700;font-size:0.9rem">
-            {raw['published'].strftime('%b %d, %Y') if raw.get('published') else 'N/A'}
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-    # ── Sidebar controls ───────────────────────────────────────────────────────
+    # ── Controls, in the tab body rather than the sidebar ─────────────────────
+    # This renderer runs on every page load now that it is a tab (a hidden tab
+    # is hidden, not skipped), so a st.sidebar widget here would sit in the
+    # weights sidebar permanently, whichever tab the reader was actually on.
     yrs = sorted({d.year for d in sats["day"]})
-    pick = st.sidebar.multiselect("Years", yrs, default=yrs, key="sat_years")
+    pick = st.multiselect("Years", yrs, default=yrs, key="sat_years")
     if not pick:
         pick = yrs
-    st.sidebar.divider()
-    st.sidebar.markdown(
-        f'<div style="color:{DM_MUTED};font-size:.68rem;line-height:1.6">'
-        f'MARS keeps this slug back to {daily_slaughter.FIRST_YEAR} and no '
+    st.caption(
+        f"MARS keeps this slug back to {daily_slaughter.FIRST_YEAR} and no "
         f'further, so "the last time" is always read against that window. '
-        f'The newest Saturday is a projection until the next business day '
-        f'restates it, and Saturdays revise up far more often than down.</div>',
-        unsafe_allow_html=True,
+        f"The newest Saturday is a projection until the next business day "
+        f"restates it, and Saturdays revise up far more often than down."
     )
 
     shown = sats[sats["day"].map(lambda d: d.year in pick)]
@@ -896,23 +867,6 @@ def render_saturday_slaughter() -> None:
     )
 
 
-# ── Report switch ──────────────────────────────────────────────────────────────
-# Saturday slaughter is a DAILY report (AMS 3208) and everything else on this
-# page is weekly, so it reads its own series and shares no load with the rest.
-# It sits behind a switch rather than a fifth tab, and the switch is placed
-# ABOVE the NASS load and above the st.stop() that guards it -- a NASS cache
-# outage must not take down a view that never touches the cache. Same shape,
-# and the same reasoning, as Cold Storage on the Cattle on Feed page.
-
-VIEW_WEIGHTS = "Cattle Weights"
-VIEW_SAT     = "Saturday Slaughter"
-
-view = st.segmented_control(
-    "Report", (VIEW_WEIGHTS, VIEW_SAT), default=VIEW_WEIGHTS,
-    label_visibility="collapsed", key="bw_view",
-) or VIEW_WEIGHTS       # deselecting the active segment returns None
-
-
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 
 st.sidebar.markdown(
@@ -923,23 +877,14 @@ st.sidebar.markdown(
 st.sidebar.markdown(
     f'<div style="background:{JSA_GREEN};border-radius:4px;padding:5px 10px;'
     f'font-size:.7rem;color:#fff;font-weight:600;letter-spacing:.08em;'
-    f'text-transform:uppercase;margin-bottom:10px">'
-    + ("Saturday Slaughter" if view == VIEW_SAT else "Cattle Weights Dashboard")
-    + '</div>',
+    f'text-transform:uppercase;margin-bottom:10px">Cattle Weights Dashboard</div>',
     unsafe_allow_html=True,
 )
 st.sidebar.markdown(
-    f'<span style="color:{DM_MUTED};font-size:.72rem">'
-    + ("USDA AMS · Daily estimates, report 3208"
-       if view == VIEW_SAT else "USDA NASS · Federally Inspected")
-    + '</span>',
+    f'<span style="color:{DM_MUTED};font-size:.72rem">USDA NASS · Federally Inspected</span>',
     unsafe_allow_html=True,
 )
 st.sidebar.divider()
-
-if view == VIEW_SAT:
-    render_saturday_slaughter()
-    st.stop()
 
 current_year = datetime.now().year
 # Always load enough history for the 5-yr average + trend charts
@@ -975,6 +920,13 @@ with st.spinner("Loading USDA NASS data…"):
 if raw.empty:
     st.error("No data returned from the shared NASS cache (usda-nass-etl). "
              "Weight history and 5-yr averages are unavailable.")
+    # Saturday Slaughter reads USDA AMS report 3208 and touches neither NASS
+    # nor the cache, so it is still good. Rendering it here, before the guard
+    # stops the rest of the page, is what keeps a NASS outage from taking down
+    # a view that has no NASS in it -- the property the old top-level switch
+    # had by sitting above this line.
+    with st.tabs(["📅  Saturday Slaughter"])[0]:
+        render_saturday_slaughter()
     st.stop()
 
 wt  = raw[raw["unit_desc"].str.contains(unit_filter, case=False, na=False)].copy()
@@ -1196,10 +1148,11 @@ with hdr_r:
 st.divider()
 
 # ── Top-level page tabs ────────────────────────────────────────────────────────
-_page_summary, _page_nass, _page_ams, _page_prod = st.tabs([
+_page_summary, _page_nass, _page_ams, _page_sat, _page_prod = st.tabs([
     "⭐  Summary",
     "📊  NASS Cattle Weights & Slaughter",
     "🗓️  AMS Weekly Slaughter",
+    "📅  Saturday Slaughter",
     "🥩  Beef Production",
 ])
 
@@ -2469,6 +2422,9 @@ with _page_nass:
 
 with _page_ams:
     _render_ams_page()
+
+with _page_sat:
+    render_saturday_slaughter()
 
 with _page_prod:
     _render_beef_production()
