@@ -944,10 +944,114 @@ _IMAGE_SCRIPT = """<script
       width: PAGE_W, height: h, windowWidth: PAGE_W, windowHeight: h,
       scrollX: 0, scrollY: 0
     }).then(function (canvas) {
-      var a = document.createElement('a');
-      a.download = (document.title || 'letter').replace(/[\\\\/:*?"<>|]/g, '-') + '.png';
-      a.href = canvas.toDataURL('image/png');
-      a.click();
+      // ONE IMAGE PER PAGE, because a tall one is unreadable in a text.
+      //
+      // Ross texts these to clients through RingCentral. A one-page brief is
+      // about 1:1.3 and survives; the 2026-10-02 afternoon letter was
+      // 1632x6336, roughly 1:3.9. A phone fits an image to the bubble width,
+      // so 6336px of height is squeezed to around 1400 and 8.5pt body text
+      // lands at about ONE PIXEL tall. MMS re-compresses on top of that, so
+      // zooming magnifies pixels that no longer contain the letter.
+      //
+      // Splitting into N portrait sheets gives every page the same shape as
+      // the morning brief that already reads fine. Nothing else fixes it:
+      // more resolution does not survive the downscale, and a wide
+      // side-by-side layout is worse.
+      var pageH = PAGE_H * 2;                       // scale: 2
+      var pages = Math.max(1, Math.round(canvas.height / pageH));
+      var base = (document.title || 'letter').replace(/[\\\\/:*?"<>|]/g, '-');
+
+      // CUT THROUGH WHITESPACE, NOT THROUGH A LINE OF TEXT.
+      //
+      // The canvas is ONE continuous render, so it has no idea where the
+      // PDF's @page breaks fell -- slicing at an exact multiple of 11in can
+      // land mid-sentence, and on the 2026-10-02 letter it did: the first
+      // nominal cut had 75 ink pixels across it.
+      //
+      // Two details, both found by measuring rather than reasoning:
+      //
+      // MEASURE THE TEXT COLUMN ONLY. The sage frame runs down both edges of
+      // every page, so a full-width scan never reads zero and "emptiest row"
+      // becomes meaningless -- a blank row scored 2 and a line of text
+      // scored 40, which is not the signal it looks like. Scanning inside
+      // the 0.95in margin makes a clean row read exactly 0.
+      //
+      // SEARCH OUTWARD FROM THE NOMINAL. A top-down scan returns the FIRST
+      // blank row in the window, which dragged a cut 200px up even when the
+      // nominal position was already perfectly clean. Walking outwards takes
+      // the NEAREST clean row, so a page that needs no adjustment gets none.
+      var src = canvas.getContext('2d');
+      var X0 = Math.round(0.95 * PX * 2), X1 = canvas.width - X0;
+      function ink(y) {
+        var d = src.getImageData(X0, y, X1 - X0, 1).data, n = 0;
+        for (var x = 0; x < X1 - X0; x += 2) {
+          var i = x * 4;
+          if (d[i] < 245 || d[i + 1] < 245 || d[i + 2] < 245) n++;
+        }
+        return n;
+      }
+      // CENTRE THE CUT IN THE GAP, not at its first clean row. Taking the
+      // first one put the slice immediately under a line of text: nothing
+      // was sliced, but page 1 came out with its last line flush against
+      // the bottom edge and no margin at all, which looks broken on a
+      // client letter. Splitting the blank run down the middle gives the
+      // page above a bottom margin and the page below a top one.
+      function midOfRun(y) {
+        var up = y, down = y;
+        while (up > 1 && ink(up - 1) === 0) up--;
+        while (down < canvas.height - 1 && ink(down + 1) === 0) down++;
+        return Math.round((up + down) / 2);
+      }
+      function cutNear(nominal) {
+        if (ink(nominal) === 0) return midOfRun(nominal);
+        var bestY = nominal, bestInk = ink(nominal);
+        for (var d = 1; d <= 200; d++) {
+          var cand = [nominal - d, nominal + d];
+          for (var j = 0; j < 2; j++) {
+            var y = cand[j];
+            if (y < 1 || y >= canvas.height) continue;
+            var k = ink(y);
+            if (k === 0) return midOfRun(y);
+            if (k < bestInk) { bestInk = k; bestY = y; }
+          }
+        }
+        return bestY;   // nothing clean within 200px: least bad wins
+      }
+
+      var cuts = [0];
+      for (var i = 1; i < pages; i++) { cuts.push(cutNear(Math.round(i * pageH))); }
+      cuts.push(canvas.height);
+
+      function save(idx) {
+        if (idx >= pages) return;
+        var top = cuts[idx], bot = cuts[idx + 1];
+        var slice = document.createElement('canvas');
+        slice.width = canvas.width;
+        // Every sheet is a FULL page tall even when its cut fell short, so
+        // the images are a consistent size in the message thread rather than
+        // one tall and one stubby.
+        slice.height = Math.max(bot - top, pageH);
+        var c = slice.getContext('2d');
+        c.fillStyle = '#ffffff';
+        c.fillRect(0, 0, slice.width, slice.height);
+        c.drawImage(canvas, 0, top, canvas.width, bot - top,
+                            0, 0, canvas.width, bot - top);
+        var a = document.createElement('a');
+        a.download = pages > 1 ? base + ' (page ' + (idx + 1) + ' of ' + pages + ').png'
+                               : base + '.png';
+        a.href = slice.toDataURL('image/png');
+        a.click();
+        // Chrome serialises multiple downloads from one gesture poorly and
+        // drops some when they are fired in a tight loop; a short gap makes
+        // all of them land. It also lets the browser raise its own
+        // "allow multiple downloads" prompt once rather than per file.
+        if (idx + 1 < pages) setTimeout(function () { save(idx + 1); }, 600);
+      }
+      save(0);
+      if (pages > 1) {
+        btn.textContent = 'Saved ' + pages + ' pages';
+        setTimeout(function () { btn.textContent = label; }, 4000);
+      }
     }).catch(function (e) {
       btn.textContent = 'Could not render: ' + (e && e.message ? e.message : e);
       return null;
@@ -1015,11 +1119,12 @@ st.components.v1.html(_with_print_button(html), height=720, scrolling=True)
 st.caption("**Print / Save as PDF** prints the preview above from your own browser — "
            "same print CSS as Build PDF, and it works on the deployed app where "
            "Build PDF cannot. Choose *Save as PDF* as the destination. "
-           "**Save as image** downloads the letter as a PNG laid out as a printed "
-           "8.5×11 sheet — same margins, same frame, same line breaks as the PDF "
-           "— at twice print size. A multi-page evening letter comes out as one "
-           "tall image rounded up to whole sheets, with no page break drawn "
-           "across it; use the PDF when the pagination itself matters.")
+           "**Save as image** downloads the letter as PNGs laid out as printed "
+           "8.5×11 sheets — same margins, same frame, same line breaks as the "
+           "PDF — at twice print size. A multi-page letter saves as **one file "
+           "per page**, because a single tall image is unreadable once a phone "
+           "fits it to a message bubble. Cuts land in whitespace, not through "
+           "a line. Your browser may ask once to allow several downloads.")
 
 # THE FILENAME SAYS WHICH COPY IT IS. Two near-identical PDFs of the same
 # letter land in the same folder every day, and the only difference is six

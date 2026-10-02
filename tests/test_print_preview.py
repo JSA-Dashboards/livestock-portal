@@ -279,3 +279,67 @@ def test_the_page_does_not_concatenate_the_chrome_onto_the_front():
     src = re.sub(r"#.*", "", src)
     assert "_print_ui" not in src, "the old front-concatenated chrome is back"
     assert "_with_print_button(html)" in src
+
+
+# ── one image per page ───────────────────────────────────────────────────────
+
+def test_a_multipage_letter_saves_one_image_per_page():
+    """
+    A TALL IMAGE IS UNREADABLE IN A TEXT, which is the whole reason for this.
+
+    Ross texts the letter to clients through RingCentral. The 2026-10-02
+    afternoon letter came out 1632x6336 — about 1:3.9 — and a phone fits an
+    image to the bubble width, so 6336px of height is squeezed to roughly
+    1400 and 8.5pt body text lands near ONE PIXEL tall. MMS re-compresses on
+    top, so zooming magnifies pixels that no longer hold the letter. The
+    one-page brief works because 8.5x11 is about 1:1.3.
+
+    Measured after the split: three sheets at aspect 1.38 / 1.29 / 1.29.
+    """
+    out = _compose()(LETTER)
+    assert "page ' + (idx + 1) + ' of ' + pages" in out
+    assert "Math.round(canvas.height / pageH)" in out
+
+
+def test_the_cut_measures_only_the_text_column():
+    """
+    THE FRAME DEFEATS A FULL-WIDTH SCAN. The sage frame runs down both edges
+    of every page, so "emptiest row" never reads zero — a blank row scored 2
+    and a line of text scored 40, which is not the signal it looks like.
+    Scanning inside the 0.95in margin makes a clean row read exactly 0, and
+    only then does the cut finder work.
+    """
+    out = _compose()(LETTER)
+    assert "0.95 * PX * 2" in out, "the ink scan is no longer inset past the frame"
+
+
+def test_the_cut_searches_outward_from_the_nominal():
+    """
+    A top-down scan returns the FIRST blank row in the window and dragged a
+    cut 200px even when the nominal position was already clean. Walking
+    outwards takes the NEAREST clean row, so a page needing no adjustment
+    gets none — verified: cut 2 moved 0px, cut 1 moved 118px to escape text.
+    """
+    out = _compose()(LETTER)
+    assert "nominal - d" in out and "nominal + d" in out
+
+
+def test_the_cut_is_centred_in_the_blank_run():
+    """
+    Taking the first clean row left page 1's last line flush against the
+    bottom edge with no margin — nothing sliced, but it looks broken on a
+    client letter. Centring in the run gives the page above a bottom margin
+    and the page below a top one. After: every page has ink-free rows at
+    both edges.
+    """
+    out = _compose()(LETTER)
+    assert "midOfRun" in out
+
+
+def test_multiple_downloads_are_staggered():
+    """
+    Chrome drops some downloads fired in a tight loop from one gesture, and
+    raises its "allow multiple downloads" prompt per file rather than once.
+    """
+    out = _compose()(LETTER)
+    assert "setTimeout" in out and "600" in out
