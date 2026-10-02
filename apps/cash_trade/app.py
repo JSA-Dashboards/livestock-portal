@@ -86,6 +86,11 @@ DAILY_CUT_LABEL = {"morning": "Final", "afternoon": "1:30 pm cut"}
 # from Monday and resets on the trading Monday, not the file Monday.
 DAILY_VOLUME_PERIODS = {"Confirmed": "day", "Week to Date": "wtd"}
 
+# Consecutive trading days of NULL week-to-date volume after which a region is
+# reported as WITHHELD rather than quiet. See _null_run_days() for the measured
+# gap this sits in the middle of.
+SUPPRESSION_RUN_DAYS = 10
+
 # The window drives the FETCH, not just the view, so the default is the cheap
 # one. A hidden tab still executes (see the Tabs block), which means every load
 # of the WEEKLY tab pays for whatever this defaults to: 1M is about 12 s across
@@ -248,6 +253,16 @@ def hd_delta_html(cur, prior):
     color = "pos" if diff > 0 else ("neg" if diff < 0 else "neu")
     pct_str = f" ({pct:+.1f}%)" if pct is not None else ""
     return f'<div class="tile-delta-{color}">{sign} {abs(diff):,.0f} hd{pct_str}</div>'
+
+
+def and_list(items) -> str:
+    """["a"] -> "a"; ["a","b"] -> "a and b"; ["a","b","c"] -> "a, b and c"."""
+    items = list(items)
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    return f"{', '.join(items[:-1])} and {items[-1]}"
 
 
 def tile(label, value, delta="", cls=""):
@@ -650,15 +665,32 @@ def fetch_daily_volume(start: str, end: str, stamps: str) -> pd.DataFrame:
     09/18/2026 Nebraska that is 3,690 head confirmed against 1,547 in the live
     FOB steer row. Same market, different question.
 
-    A NULL VOLUME IS ZERO, NOT MISSING. USDA leaves the field empty for a
-    region with no confirmed trade, and its own aggregate adds that in as
-    nothing: summing these four regions with nulls as zero reproduces
-    LM_CT100's current_week_head_count EXACTLY on 118 of 118 file dates
-    (verified 2026-09-23). That is why the 5-Area figure on the page is a sum
-    of these four and not a fifth request -- and why a region that stops
-    publishing would silently understate the total rather than announce
-    itself. Coverage over the last 180 days, morning files: IA/MN 88%,
-    Nebraska 78%, Kansas 57%, TX/OK/NM 38%.
+    A NULL VOLUME IS ZERO IN THE 5-AREA SUM, AND NOT A ZERO ANYWHERE ELSE.
+    USDA leaves the field empty for a region it is not giving a number for, and
+    its own aggregate adds that in as nothing: summing these four regions with
+    nulls as zero reproduces LM_CT100's current_week_head_count EXACTLY on 118
+    of 118 file dates (verified 2026-09-23), and LM_CT150's published
+    previous_week_head_count on 23 of 23 weeks back to April 2026 (re-verified
+    2026-10-02). That is why the 5-Area figure on the page is a sum of these
+    four and not a fifth request.
+
+    THE RULE DOES NOT CARRY TO A PER-REGION FIGURE, and reading it as though it
+    did is what put "0 head" on the Kansas and TX/OK/NM tiles while USDA was
+    withholding both for confidentiality. USDA NEVER PUBLISHES A LITERAL 0 --
+    zero occurrences in 2,877 region-trading-days over 2024-01-01..2026-10-02 --
+    so a 0 on a region tile is always this page's own invention, and it reads
+    as "nobody traded". The trade is real: as TX/OK/NM (last number 2026-06-26)
+    and Kansas (2026-08-14) went dark, the gap between LM_CT154 national
+    confirmed negotiated and the LM_CT150 5-Area doubled from a median 11,567
+    hd/wk to 23,172 hd/wk, with 4 of 6 weeks above the entire pre-period max.
+    Roughly 11,600 hd/wk of real negotiated trade is counted nationally and
+    absent from the 5-Area -- absent from USDA's figure as well as ours, which
+    is why the sum above still reconciles. weekly_to_date() carries the raw
+    null out for the tiles and zeroes it only for the total; see there and
+    _null_run_days() for telling a withheld region from a quiet one.
+
+    Coverage over the last 180 days, morning files: IA/MN 88%, Nebraska 78%,
+    Kansas 57%, TX/OK/NM 38%.
     """
     jobs = [((region, cut), slug, "Summary",
              {"q": f"report_date={start}:{end}"})
@@ -703,13 +735,65 @@ def fetch_daily_volume(start: str, end: str, stamps: str) -> pd.DataFrame:
     return df.sort_values(["trade_date", "region", "cut"]).reset_index(drop=True)
 
 
+def _null_run_days(vol: pd.DataFrame, region: str, trade_date) -> int:
+    """
+    Consecutive trading days up to `trade_date` on which USDA published this
+    region's week-to-date volume BLANK.
+
+    THE FIELD ALONE CANNOT SAY WHY IT IS BLANK, which is the whole reason this
+    exists. USDA never publishes a literal 0 -- zero occurrences in 2,877
+    region-trading-days over 2024-01-01..2026-10-02 -- so "no confirmed trade"
+    and "withheld for confidentiality" are the SAME empty field on the day, and
+    the obvious discriminators do not work. The full-skeleton signature in
+    particular does not: on days where NEGOTIATED CASH is blank, NEGOTIATED
+    GRID BASE still carries a number 90% of the time for Iowa/Minnesota.
+
+    The RUN separates them cleanly. Over those same three years:
+
+        Iowa/Minnesota   longest blank run  3
+        Nebraska         longest blank run  4
+        Kansas           runs of 1-4, then one run now 35 days and open
+        TX/OK/NM         runs of 1-4, then two runs reaching 36 and 67
+
+    Every ordinary quiet stretch ended by day 4; every run that reached day 5
+    went on to at least 35. SUPPRESSION_RUN_DAYS sits in that empty middle, so
+    a quiet week is never called withheld and a region that goes dark is named
+    within two trading weeks. The measurement needs the fetched window to be
+    longer than the threshold: the shortest DAILY_WINDOWS option is 30 calendar
+    days, about 21 trading days, so it is.
+    """
+    d = vol[(vol["period"] == "wtd") & (vol["region"] == region)
+            & (vol["trade_date"] <= trade_date)]
+    if d.empty:
+        return 0
+    # Morning is the final figure and wins where both cuts exist -- the same
+    # precedence the tiles use, so the run describes the number on screen.
+    seen = {}
+    for cut in ("afternoon", "morning"):
+        hit = d[d["cut"] == cut]
+        seen.update(dict(zip(hit["trade_date"], hit["head"])))
+    run = 0
+    for td in sorted(seen, reverse=True):
+        if pd.notna(seen[td]):
+            break
+        run += 1
+    return run
+
+
 def weekly_to_date(vol: pd.DataFrame, trade_date) -> dict:
     """
     Week-to-date head per region for one trading day, plus the 5-Area sum.
 
     Prefers the final (morning) figure and falls back to the 1:30 pm cut, the
     same precedence the price tiles use, so a region reports as far through the
-    day as USDA has taken it. Nulls count as zero -- see fetch_daily_volume.
+    day as USDA has taken it.
+
+    A BLANK VOLUME MEANS DIFFERENT THINGS IN THE TWO HALVES OF THIS RETURN, and
+    that is not an inconsistency. The 5-Area total adds it in as zero because
+    USDA's own aggregate does -- see fetch_daily_volume, and the 2026-10-02
+    re-verification in the footnote this feeds. The per-region entry carries the
+    raw None, because on a tile a 0 is a number this page invented and reads as
+    "nobody traded" for a region whose trade USDA is withholding.
     """
     if vol.empty:
         return {}
@@ -727,20 +811,38 @@ def weekly_to_date(vol: pd.DataFrame, trade_date) -> dict:
                 break
         if row is None:
             continue
+        blank = bool(pd.isna(row["head"]))
         out[region] = {
-            "head": 0.0 if pd.isna(row["head"]) else float(row["head"]),
+            "head": None if blank else float(row["head"]),
             "week_ago": (None if pd.isna(row["head_week_ago"])
                          else float(row["head_week_ago"])),
             "cut": row["cut"],
+            # A blank that has lasted -- USDA is publishing the file and
+            # holding the number back. Short blanks stay unflagged: they are
+            # indistinguishable from a quiet day and must not be asserted.
+            "suppressed": (blank and _null_run_days(vol, region, trade_date)
+                           >= SUPPRESSION_RUN_DAYS),
         }
     if not out:
         return {}
+    # Bound before the assignment rather than read out of `out` inside the
+    # literal, so nobody has to reason about whether _total is in its own sum.
+    withheld = [r for r, v in out.items() if v["suppressed"]]
+    counted = [r for r, v in out.items() if not v["suppressed"]]
     out["_total"] = {
-        "head": sum(v["head"] for v in out.values()),
+        # NULLS SUM AS ZERO HERE AND MUST KEEP DOING SO. USDA's published
+        # 5-Area total drops a withheld region exactly this way: summing these
+        # four with blanks as zero reproduces LM_CT150's own
+        # previous_week_head_count on 23 of 23 weeks back to April 2026
+        # (verified 2026-10-02), a span covering both TX/OK/NM and Kansas going
+        # dark. The identity breaks if a blank is ever treated as missing here.
+        "head": sum(0.0 if v["head"] is None else v["head"] for v in out.values()),
         "week_ago": (sum(v["week_ago"] for v in out.values()
                          if v["week_ago"] is not None)
                      if any(v["week_ago"] is not None for v in out.values()) else None),
         "cut": None,
+        "withheld": withheld,
+        "counted": counted,
     }
     return out
 
@@ -1014,6 +1116,69 @@ def daily_combined(df: pd.DataFrame) -> pd.DataFrame:
     wg = wg[wg["hw"] > 0].copy()
     wg["weight"] = wg["ww"] / wg["hw"]
     return g.merge(wg[key + ["weight"]], on=key, how="left")
+
+
+def daily_price_state(priced_rows, published_rows, suppressed=False):
+    """
+    Which of four things a region's price tile is saying on one trading day.
+
+    Returns (state, row): "priced" and the print to headline, or one of
+    "withheld", "undefined", "unpublished" and None.
+
+    `priced_rows` is the region's daily_combined() rows for the day -- averages
+    only, the unpriced ones already dropped. `published_rows` is its raw
+    fetch_daily_cash() rows, which KEEP the unpriced ones, and asking both is
+    the only way to tell a file USDA never published from one it published
+    blank. Reading the combined frame alone collapses those two into a single
+    "Undefined", which is what this exists to stop.
+
+    THE PRINT TO HEADLINE IS LIVE FOB IF IT TRADED, ELSE DRESSED; final cut
+    preferred over the 1:30 pm cut.
+
+    IT MUST FALL BACK TO DRESSED. Some days trade dressed only -- Tuesday
+    09/22/2026 was one, its entire national print being Nebraska 2,349 steers
+    and 550 heifers at 350.00 dressed with no live FOB anywhere. Headlining
+    Live FOB alone put "Undefined" on all four tiles under that day's own
+    heading, which reads as "nothing traded" when nearly 2,900 head did. The
+    tile names the basis for that reason: on a mixed day the four tiles are not
+    all the same quote.
+
+    "UNDEFINED" IS USDA'S OWN MARKET TEST AND STAYS. On a genuine quiet day it
+    is the right word and the 09/22/2026 day above is the case it was written
+    for. It is simply not what a WITHHELD region is doing: USDA has the trade,
+    is publishing the file, and is holding the number back under LMR
+    confidentiality. Calling that "no confirmed trade" says nobody traded in
+    Texas since June, which is false.
+
+    THE DISCRIMINATOR IS THE VOLUME FLAG, NOT A SECOND RUN DETECTOR ON PRICES.
+    `suppressed` comes from weekly_to_date(); the two panels headline the same
+    `last_trade`, so they line up by construction. Measured over
+    2024-01-01..2026-10-02, a blank week-to-date volume NEVER coincides with a
+    published price: 0 counterexamples in 2,833 region-trading-days, every
+    region. So the flag can only ever fire on a day whose price is blank
+    anyway, which makes reusing it strictly conservative -- it cannot overwrite
+    a real print. The converse is common and must stay "undefined": 316 days
+    carry a week-to-date volume with no price that day, because the region
+    traded earlier in the week and was quiet on it.
+
+    The threshold behind the flag transfers. Blank-PRICE runs over the same
+    window end at 6 for an ordinary quiet stretch (TX/OK/NM; 4 elsewhere) and
+    run 33, 36 and 63 where the region went dark, so SUPPRESSION_RUN_DAYS sits
+    in that gap on this series as well as on the volume one.
+
+    `suppressed` defaults False, and a caller with no volume for the region
+    must leave it there: the tile falls back to USDA's own word rather than to
+    a claim about USDA that nothing has established.
+    """
+    for basis in ("Live FOB", "Dressed Delivered"):
+        b = priced_rows[priced_rows["basis"] == basis]
+        for cut in ("morning", "afternoon"):
+            hit = b[b["cut"] == cut]
+            if not hit.empty:
+                return "priced", hit.iloc[0]
+    if published_rows is None or published_rows.empty:
+        return "unpublished", None
+    return ("withheld" if suppressed else "undefined"), None
 
 
 # ── Load Data ────────────────────────────────────────────────────────────────
@@ -1447,6 +1612,16 @@ with tab_daily:
         _priced = dcombo["trade_date"].max() if not dcombo.empty else None
         _quiet = _priced is not None and _priced < last_trade
 
+        # COMPUTED HERE, DISPLAYED TWICE, AND THE ORDER IS THE POINT. The price
+        # tiles below need the per-region `suppressed` flag, and the week-to-date
+        # panel further down needs the whole dict. Script order decides what is
+        # available, not the order things appear on screen (see the tabs rule in
+        # CLAUDE.md), so this has to sit above the first of the two. Calling
+        # weekly_to_date() twice would work and is worse: the two panels would
+        # be free to disagree about which regions are withheld, which is exactly
+        # the class of bug where both numbers are defensible and nothing raises.
+        wtd = weekly_to_date(daily_vol, last_trade)
+
         st.markdown(
             f'<div class="sec-header" style="border-left-color:{FOB_COLOR};margin-top:6px;">'
             f'Latest trading day &mdash; {last_trade.strftime("%A, %b %d, %Y")} '
@@ -1454,43 +1629,75 @@ with tab_daily:
             unsafe_allow_html=True)
 
         if _quiet:
+            # "No trade in any region" is a claim about EVERY region, so it has
+            # to exclude the ones USDA is withholding. On a day where the
+            # reporting regions are quiet and the others are suppressed, the old
+            # wording asserted a silent Texas that is in fact trading.
+            #
+            # All four withheld gets its own sentence rather than a subtraction:
+            # the region list would be empty and the sentence would read "no
+            # confirmed negotiated trade in ." It is reachable -- _quiet means
+            # nothing priced, which is exactly what four withheld regions look
+            # like -- so it is written out rather than guarded against.
+            _held_q = [r for r in DAILY_REGIONS
+                       if (wtd.get(r) or {}).get("suppressed")] if wtd else []
+            _open_q = [r for r in DAILY_REGIONS if r not in _held_q]
+            _last_p = f'The last day that priced was <b>{_priced.strftime("%A, %b %d, %Y")}</b>.'
+            if not _held_q:
+                _msg = f'USDA published this day with no confirmed negotiated trade in any region. {_last_p}'
+            elif not _open_q:
+                _msg = (f'USDA is withholding every region for confidentiality on this day, so '
+                        f'there is no published price anywhere. {_last_p}')
+            else:
+                _msg = (f'USDA published this day with no confirmed negotiated trade in '
+                        f'{and_list(_open_q)}. It is withholding {and_list(_held_q)} for '
+                        f'confidentiality, so '
+                        f'{"those regions are" if len(_held_q) > 1 else "that region is"} '
+                        f'not part of that statement. {_last_p}')
             st.markdown(
-                f'<div class="note" style="margin:-6px 0 12px;">USDA published this '
-                f'day with no confirmed negotiated trade in any region. The last day '
-                f'that priced was <b>{_priced.strftime("%A, %b %d, %Y")}</b>.</div>',
+                f'<div class="note" style="margin:-6px 0 12px;">{_msg}</div>',
                 unsafe_allow_html=True)
 
-        def _headline(reg_rows):
-            """
-            The print to headline for one region: Live FOB if it traded, else
-            Dressed; final cut preferred over the 1:30 pm cut.
+        # One tile per region: the final print where USDA has closed the day
+        # out, otherwise the 1:30 pm cut, labelled so the two are never
+        # confused. The decision is daily_price_state() at module level, where
+        # a test can reach it -- this block only renders what it returns.
+        #
+        # THREE WAYS TO HAVE NO PRICE, AND THEY ARE DIFFERENT NEWS. "Undefined"
+        # is USDA's own market test and is right on a quiet day; it is wrong for
+        # a region whose trade USDA is withholding, which is what Kansas and
+        # TX/OK/NM have been doing since 08/14 and 06/26/2026. The captions stay
+        # short because .tile-delta-neu is nowrap and four tiles share the row;
+        # the reason goes in the footnote, which has space for it.
+        _PRICE_BLANK = {
+            "withheld":    ("—", "withheld by USDA"),
+            "undefined":   ("Undefined", "no confirmed trade"),
+            "unpublished": ("—", "not published"),
+        }
+        # RESOLVED ONCE, READ BY THE TILES AND BY THE TABLE UNDER THEM. Same
+        # reason weekly_to_date() is hoisted above both: two callers deciding
+        # separately are two callers free to disagree, and a table that said
+        # "no confirmed trade" beside a tile saying "withheld by USDA" would be
+        # the exact defect this page is being fixed for, one row lower.
+        _states = {}
+        for region in DAILY_REGIONS:
+            _entry = wtd.get(region) if wtd else None
+            _states[region] = daily_price_state(
+                day[day["region"] == region],
+                daily_df[(daily_df["trade_date"] == last_trade)
+                         & (daily_df["region"] == region)],
+                suppressed=bool(_entry and _entry["suppressed"]),
+            )
 
-            IT MUST FALL BACK TO DRESSED. Some days trade dressed only --
-            Tuesday 09/22/2026 was one, its entire national print being Nebraska
-            2,349 steers and 550 heifers at 350.00 dressed with no live FOB
-            anywhere. Headlining Live FOB alone put "Undefined" on all four
-            tiles under that day's own heading, which reads as "nothing traded"
-            when nearly 2,900 head did. The tile names the basis for that
-            reason: on a mixed day the four tiles are not all the same quote.
-            """
-            for basis in ("Live FOB", "Dressed Delivered"):
-                b = reg_rows[reg_rows["basis"] == basis]
-                for cut in ("morning", "afternoon"):
-                    hit = b[b["cut"] == cut]
-                    if not hit.empty:
-                        return hit.iloc[0]
-            return None
-
-        # One tile per region: the final print where USDA has closed the day out,
-        # otherwise the 1:30 pm cut, labelled so the two are never confused.
         cols = st.columns(len(DAILY_REGIONS))
         for col, region in zip(cols, DAILY_REGIONS):
-            row = _headline(day[day["region"] == region])
+            state, row = _states[region]
             with col:
                 if row is None:
+                    _val, _why = _PRICE_BLANK[state]
                     st.markdown(
-                        tile(region, "Undefined",
-                             '<div class="tile-delta-neu">no confirmed trade</div>',
+                        tile(region, _val,
+                             f'<div class="tile-delta-neu">{_why}</div>',
                              "tile-neu"),
                         unsafe_allow_html=True)
                 else:
@@ -1507,6 +1714,17 @@ with tab_daily:
             '<div class="sec-header">Both cuts of the same trading day</div>',
             unsafe_allow_html=True)
 
+        # EVERY CELL IN A WITHHELD ROW IS A DASH, AND A DASH SAYS NOTHING. The
+        # tiles above distinguish a quiet region from one USDA is withholding;
+        # six identical dashes across this row put the reader straight back to
+        # not knowing which. The reason goes in a column of its own rather than
+        # into the price cells, which would repeat it four times and widen the
+        # table for a sentence that is about the ROW.
+        #
+        # The column is always present, including on a day when no region is
+        # blank. A table that changes shape day to day is harder to read at a
+        # glance than one with an empty column, and this is a page people check
+        # every morning.
         grid = []
         for region in DAILY_REGIONS:
             reg = day[day["region"] == region]
@@ -1518,16 +1736,21 @@ with tab_daily:
                     entry[f"{short} {DAILY_CUT_LABEL[cut]}"] = (
                         fmt_price(m.iloc[0]["price"]) if not m.empty else "—")
             # Head across BOTH bases, not Live FOB alone -- on a dressed-only
-            # day (see _headline) a live-only count reads "—" for a region that
-            # actually traded thousands of head.
+            # day (see daily_price_state) a live-only count reads "—" for a
+            # region that actually traded thousands of head.
             fin = reg[reg["cut"] == "morning"]
             entry["Head (final)"] = (
                 fmt_hd(fin["head"].sum()) if not fin.empty else "—")
+            # Blank for a region that priced: the row speaks for itself, and
+            # filling it with "published" would bury the two rows that matter.
+            _state = _states[region][0]
+            entry["USDA status"] = ("" if _state == "priced"
+                                    else _PRICE_BLANK[_state][1])
             grid.append(entry)
         st.dataframe(pd.DataFrame(grid), width="stretch", hide_index=True)
 
         # ── Week to date ─────────────────────────────────────────────────────
-        wtd = weekly_to_date(daily_vol, last_trade)
+        # `wtd` is built above the price tiles, which share its suppressed flag.
         if wtd:
             st.markdown(
                 f'<div class="sec-header" style="border-left-color:{CONF_COLOR};">'
@@ -1549,9 +1772,20 @@ with tab_daily:
                     _cmp = (f' <span style="color:{_col};font-weight:600;">{_arrow} '
                             f'{abs(_d):,.0f} hd</span> against {_tot["week_ago"]:,.0f} hd '
                             f'at the same point last week')
+                # Name what the total is actually made of while a region is
+                # withheld. The figure is still USDA's -- their 5-Area drops a
+                # withheld region too -- but "5-Area" invites the reader to
+                # assume five regions are in it, and right now two are not.
+                _held = ""
+                if _tot["withheld"]:
+                    _held = (f' USDA is withholding {and_list(_tot["withheld"])} for '
+                             f'confidentiality and leaves '
+                             f'{"them" if len(_tot["withheld"]) > 1 else "it"} out of its '
+                             f'own 5-Area figure as well, so this is '
+                             f'{and_list(_tot["counted"])}.')
                 st.markdown(
                     f'<div style="font-size:0.95rem;color:{JPSI_DARK};margin:-4px 0 12px;">'
-                    f'<b>5-Area total {_tot["head"]:,.0f} head</b>{_cmp}.</div>',
+                    f'<b>5-Area total {_tot["head"]:,.0f} head</b>{_cmp}.{_held}</div>',
                     unsafe_allow_html=True)
 
             cols = st.columns(len(DAILY_REGIONS))
@@ -1562,6 +1796,25 @@ with tab_daily:
                         st.markdown(
                             tile(region, "—",
                                  '<div class="tile-delta-neu">not published</div>',
+                                 "tile-neu"),
+                            unsafe_allow_html=True)
+                    elif entry["head"] is None:
+                        # USDA published the file and left the volume blank.
+                        # "0 head" here is a number USDA never prints and reads
+                        # as "nobody traded" -- see weekly_to_date. Only a
+                        # sustained blank is called withheld; a short one is
+                        # indistinguishable from a quiet day and says so.
+                        #
+                        # Both captions are kept short enough not to overflow
+                        # the tile at a narrow window, which the nowrap in
+                        # .tile-delta-neu makes a real constraint. The reason a
+                        # region is withheld goes on the 5-Area line above and
+                        # in the footnote below, which have room for it.
+                        _why = ("withheld by USDA"
+                                if entry["suppressed"] else "no volume published")
+                        st.markdown(
+                            tile(region, "—",
+                                 f'<div class="tile-delta-neu">{_why}</div>',
                                  "tile-neu"),
                             unsafe_allow_html=True)
                     else:
@@ -1579,7 +1832,13 @@ with tab_daily:
                 'Steer and Heifer on Live FOB and Dressed Delivered only; this is every class '
                 'and all four selling bases, so it is the size of the week&rsquo;s trade rather than '
                 'the head behind those quotes. The 5-Area figure is the four regions added up, '
-                'which reproduces USDA&rsquo;s own 5-Area total exactly.</div>',
+                'which reproduces USDA&rsquo;s own 5-Area total exactly. '
+                '<b>A region shown as withheld is absent from that total</b> &mdash; USDA '
+                'publishes the report with the head count blank when too few buyers reported '
+                'to disclose it, and drops it from its own 5-Area figure the same way, so the '
+                'total is the regions named above it and not the whole 5-Area trade. That '
+                'cattle is still counted in the national confirmed negotiated figure on the '
+                'Weekly tab, which is why the two have diverged.</div>',
                 unsafe_allow_html=True)
 
         # ── Daily trend ──────────────────────────────────────────────────────
@@ -1657,8 +1916,19 @@ with tab_daily:
         'weekly average on the Weekly tab.<br><br>'
         '<b>Week to date</b> is USDA&rsquo;s own cumulative negotiated cash head from Monday, read from each report&rsquo;s Summary section. It counts every class and all four selling bases, so it is a wider count than the Steer/Heifer Live-FOB-and-Dressed averages above and will not tie to them. The 5-Area figure is the four regions summed, which reproduces USDA&rsquo;s own 5-Area week-to-date exactly.<br><br>'
         '<b>&ldquo;Undefined&rdquo;</b> is USDA\'s own state when a region has too little confirmed '
-        'trade to publish a market test &mdash; a real answer, not a failed fetch. Kansas and '
-        'TX/OK/NM are routinely undefined early in the week.<br><br>'
+        'trade to publish a market test &mdash; a real answer, not a failed fetch. Regions are '
+        'routinely undefined early in the week.<br><br>'
+        '<b>&ldquo;Withheld by USDA&rdquo; is not the same thing</b>, and the difference is the '
+        'whole market. A withheld region traded; USDA is publishing the report with the price '
+        'and the head count left blank because too few buyers reported to disclose them under '
+        'LMR confidentiality. An undefined region is one USDA is telling you was quiet. The '
+        'report itself cannot say which &mdash; the field is empty either way and USDA never '
+        'prints a literal zero &mdash; so this page reads the length of the blank run. A '
+        'few quiet days in a row is an ordinary stretch; a run reaching '
+        f'{SUPPRESSION_RUN_DAYS} trading days is a region that has gone dark. '
+        '<b>TX/OK/NM has published no daily price since 26 Jun 2026 and Kansas '
+        'none since 14 Aug 2026.</b> That cattle is still counted in the national confirmed '
+        'negotiated figure on the Weekly tab, which is why the two have diverged.<br><br>'
         'Negotiated cash only, Steer and Heifer combined head-count-weighted, &ldquo;Total all '
         'grades&rdquo;. Sources: <b>LM_CT117/118</b> (TX/OK/NM), <b>LM_CT120/121</b> (Kansas), '
         '<b>LM_CT123/124</b> (Nebraska), <b>LM_CT136/137</b> (Iowa/Minnesota) — prices from each report&rsquo;s Detail section, week-to-date head from its Summary. Cached until USDA republishes, checked every 5 minutes.'
