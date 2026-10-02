@@ -1674,15 +1674,24 @@ with tab_daily:
             "undefined":   ("Undefined", "no confirmed trade"),
             "unpublished": ("—", "not published"),
         }
-        cols = st.columns(len(DAILY_REGIONS))
-        for col, region in zip(cols, DAILY_REGIONS):
+        # RESOLVED ONCE, READ BY THE TILES AND BY THE TABLE UNDER THEM. Same
+        # reason weekly_to_date() is hoisted above both: two callers deciding
+        # separately are two callers free to disagree, and a table that said
+        # "no confirmed trade" beside a tile saying "withheld by USDA" would be
+        # the exact defect this page is being fixed for, one row lower.
+        _states = {}
+        for region in DAILY_REGIONS:
             _entry = wtd.get(region) if wtd else None
-            state, row = daily_price_state(
+            _states[region] = daily_price_state(
                 day[day["region"] == region],
                 daily_df[(daily_df["trade_date"] == last_trade)
                          & (daily_df["region"] == region)],
                 suppressed=bool(_entry and _entry["suppressed"]),
             )
+
+        cols = st.columns(len(DAILY_REGIONS))
+        for col, region in zip(cols, DAILY_REGIONS):
+            state, row = _states[region]
             with col:
                 if row is None:
                     _val, _why = _PRICE_BLANK[state]
@@ -1705,6 +1714,17 @@ with tab_daily:
             '<div class="sec-header">Both cuts of the same trading day</div>',
             unsafe_allow_html=True)
 
+        # EVERY CELL IN A WITHHELD ROW IS A DASH, AND A DASH SAYS NOTHING. The
+        # tiles above distinguish a quiet region from one USDA is withholding;
+        # six identical dashes across this row put the reader straight back to
+        # not knowing which. The reason goes in a column of its own rather than
+        # into the price cells, which would repeat it four times and widen the
+        # table for a sentence that is about the ROW.
+        #
+        # The column is always present, including on a day when no region is
+        # blank. A table that changes shape day to day is harder to read at a
+        # glance than one with an empty column, and this is a page people check
+        # every morning.
         grid = []
         for region in DAILY_REGIONS:
             reg = day[day["region"] == region]
@@ -1716,11 +1736,16 @@ with tab_daily:
                     entry[f"{short} {DAILY_CUT_LABEL[cut]}"] = (
                         fmt_price(m.iloc[0]["price"]) if not m.empty else "—")
             # Head across BOTH bases, not Live FOB alone -- on a dressed-only
-            # day (see _headline) a live-only count reads "—" for a region that
-            # actually traded thousands of head.
+            # day (see daily_price_state) a live-only count reads "—" for a
+            # region that actually traded thousands of head.
             fin = reg[reg["cut"] == "morning"]
             entry["Head (final)"] = (
                 fmt_hd(fin["head"].sum()) if not fin.empty else "—")
+            # Blank for a region that priced: the row speaks for itself, and
+            # filling it with "published" would bury the two rows that matter.
+            _state = _states[region][0]
+            entry["USDA status"] = ("" if _state == "priced"
+                                    else _PRICE_BLANK[_state][1])
             grid.append(entry)
         st.dataframe(pd.DataFrame(grid), width="stretch", hide_index=True)
 

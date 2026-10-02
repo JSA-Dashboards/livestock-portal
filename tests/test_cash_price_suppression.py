@@ -34,6 +34,7 @@ Three states on each side, and the third is real: TX/OK/NM is absent from the
 feed entirely on 3 days of the window (most recently 23-27 Jul 2026), which is
 neither a blank nor a price.
 """
+import ast
 import sys
 from pathlib import Path
 
@@ -303,3 +304,56 @@ def test_the_quiet_day_banner_handles_every_region_withheld(ns):
     # and the partial case still names only the regions it can speak for
     assert "no confirmed negotiated trade in '" in block
     assert "and_list(_open_q)" in block
+
+
+# -- the table under the tiles says the same thing ---------------------------
+
+def test_the_table_carries_the_same_distinction_as_the_tiles(ns):
+    """
+    Every cell in a withheld row is a dash, and a dash says nothing. The table
+    gets a status column rather than text in the price cells, which would
+    repeat the same sentence four times across one row.
+    """
+    src = APP.read_text(encoding="utf-8")
+    start = src.index("# ── Both cuts, side by side")
+    block = src[start:src.index("st.dataframe(pd.DataFrame(grid)", start)]
+    assert 'entry["USDA status"]' in block
+    # the wording comes from the same table the tiles read, not a second copy
+    assert "_PRICE_BLANK[_state][1]" in block
+    assert "withheld by USDA" not in block, "the table must not re-spell the captions"
+
+
+def test_a_priced_region_gets_an_empty_status_cell(ns):
+    """
+    The row speaks for itself. Filling it with "published" would bury the two
+    rows that are actually saying something.
+    """
+    src = APP.read_text(encoding="utf-8")
+    start = src.index("# ── Both cuts, side by side")
+    block = src[start:src.index("st.dataframe(pd.DataFrame(grid)", start)]
+    assert '"" if _state == "priced"' in block
+
+
+def test_the_tiles_and_the_table_resolve_the_state_once(ns):
+    """
+    Two callers deciding separately are two callers free to disagree -- a table
+    reading "no confirmed trade" beside a tile reading "withheld by USDA" would
+    be this very defect, one row lower. Same reasoning as the single
+    weekly_to_date() call.
+    """
+    src = APP.read_text(encoding="utf-8")
+
+    # ast, not a substring count: "daily_price_state()" also appears in a
+    # comment two lines above the call, and a test that matches prose instead
+    # of code is the mistake streamlit_source.py's own docstring warns about.
+    calls = [n for n in ast.walk(ast.parse(src))
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+             and n.func.id == "daily_price_state"]
+    assert len(calls) == 1, [n.lineno for n in calls]
+
+    body = src[src.index("with tab_daily:"):]
+    assert "state, row = _states[region]" in body       # the tiles
+    assert "_state = _states[region][0]" in body        # the table
+    assert (body.index("_states[region] = daily_price_state(")
+            < body.index("state, row = _states[region]")
+            < body.index("_state = _states[region][0]"))
