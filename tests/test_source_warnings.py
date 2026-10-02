@@ -354,21 +354,27 @@ def test_the_weekly_slaughter_line_names_its_week_and_marks_it_estimated():
     """
     from letter import render
 
-    assert render._week_tag("2026-09-26") == " (est., w/e 9/26)"
-    row = (f"Weekly slaughter{render._week_tag('2026-09-26')}: 484,000")
-    assert row.startswith("Weekly slaughter (est., w/e 9/26):")
+    # THE TAG WAS REMOVED 2026-10-02 at Ross's request. What it was guarding
+    # against is still true -- the headline has two projected days in it and
+    # the three figures are Estimate / Estimate / Actual -- but he writes the
+    # letter and knows which week he is quoting. The docstring correction
+    # from the same change stays; only the printed hedge went.
+    assert not hasattr(render, "_week_tag")
 
 
-def test_an_unparseable_week_still_says_estimate():
+def test_the_weekly_line_prints_bare():
     """
-    The date is the nicety; "est." is the part that stops a projection being
-    read as a count. A label nobody can check is worse than none, so the date
-    drops and the warning stays.
+    "Weekly slaughter: 548,000 compared to ..." and nothing else. Replaces a
+    test of the "(est., w/e ...)" tag, removed 2026-10-02 at Ross's request.
     """
     from letter import render
 
-    for bad in (None, "", "garbage", "2026-13-45"):
-        assert render._week_tag(bad) == " (est.)"
+    html = render.friday_rundown_block(
+        {}, {"weekly": {"value": 548000, "last_week": 484000,
+                        "year_ago": 568000, "week_ending": "2026-10-03"}}, {})
+    assert "Weekly slaughter: 548,000 compared to 484,000 head LW" in html
+    assert "est." not in html
+    assert "w/e" not in html
 
 
 def test_the_docstring_no_longer_has_the_timing_backwards():
