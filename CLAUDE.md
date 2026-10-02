@@ -542,6 +542,65 @@ plain `pct_change` bridges those gaps and prints a 13-month move as a "MoM".
 `tests/test_cold_storage.py` pins that, the run-splitting, and the red-meat
 identity.
 
+## The Saturday Slaughter view
+
+Added 2026-10-02. The Cattle Weights page carries a **second report** behind an
+`st.segmented_control` at the top — `Cattle Weights | Saturday Slaughter` — the
+same shape as Cold Storage on the Cattle on Feed page, for the same two
+reasons. Fetching and the week arithmetic are in
+`apps/beef_weight/daily_slaughter.py`; the layout is in `app.py` next to the
+brand helpers it needs.
+
+**Nothing else on the portal can answer a day-of-week question.** The NASS tab
+and the SJ_LS712 feed behind the AMS tab are both WEEKLY (week-ending
+Saturday) totals, so a Saturday kill is not a slice of them — it is a
+different report, AMS **3208**, *Daily Livestock and Poultry Slaughter*. No new
+secret: it reuses the `MARS_API_KEY` the carcass-weight tiles already hold.
+
+**A switch, not a fifth tab.** A hidden Streamlit tab is hidden, not skipped,
+so as a tab it would run its MARS fetch on every Cattle Weights load and vice
+versa. It also sits **above** the page's `st.stop()` NASS guard, which is the
+other half of the point — verified locally with no Snowflake credentials at
+all, where the NASS cache errors and the Saturday view still renders in full.
+
+**3208 is a SECTIONED slug**, the trap `direct_reports.py` documents for the
+direct/video slugs. `GET /reports/3208` answers HTTP 200 with narrative rows
+and **no head counts**, which reads exactly like a report that has stopped
+publishing. The data is one path segment away at
+`/reports/3208/Report Livestock Commodity` (and
+`/Report Livestock Class` for Steers/Heifers vs Cows/Bulls). The section is a
+path segment, not a query param.
+
+Four things that look wrong and are not:
+
+- **History starts 2024-01-01 and that is all MARS keeps.** One unfiltered
+  call returns the whole series. Any question about 2023 or earlier is
+  unanswerable here, so `FIRST_YEAR` is printed on the page rather than left
+  to be inferred from an axis.
+- **One `slaughter_date` appears in several reports.** Friday carries Saturday
+  as a PROJECTION and Monday restates it, so the dedupe takes the latest
+  `report_date`. **Saturdays revise UP far more often than down** — 14 of the
+  first 145 were revised, 2024-11-30 going 39,000 → 47,000 — so keeping the
+  forecast leaves a series that looks entirely reasonable and reads low.
+- **A Saturday without its week is close to meaningless.** Every Saturday at
+  or above 38,000 head on file sat in a week that had lost a weekday to a
+  holiday — New Year's, Memorial Day, July 4th, Labor Day, Thanksgiving. The
+  2026-09-12 Saturday of 70,000, the largest on file, sat in a Labor Day week
+  whose Monday killed 2,000, and that week still totalled only 505,000 against
+  a 2026 median full week of 527,500 — the sixth day recovered most of the
+  lost Monday, not all of it. So `saturday_frame` never returns a Saturday
+  alone and the chart colours short weeks apart rather than hiding them.
+- **`lost_day` is a RATIO, not a head count** (`LOST_DAY_FRAC`, half the
+  week's own weekday median). A fixed threshold would stop working as the herd
+  contracts and the whole level drifts down: a 2024 holiday Monday and a 2026
+  one are both ~2,000 head against very different normal weeks.
+
+`week_to_date` is the report's own running total and is the free audit — Mon–Sat
+summed must equal it. `reconcile()` checks it and all 144 weeks on file
+balance. A dedupe mistake does not raise and does not look wrong on a chart; it
+looks like a slightly different market. `tests/test_daily_slaughter.py` pins
+all of it.
+
 ## The daily letter generator (`letter/`)
 
 `python -m letter.build [--session am|pm] [--day monday..friday] [--kind ...]
