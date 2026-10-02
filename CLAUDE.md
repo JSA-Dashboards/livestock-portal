@@ -13,7 +13,7 @@ still `beef-weight`, deliberately, so existing bookmarks keep working. Do not
 
 ## Never set SNOWFLAKE_SCHEMA in this app's secrets
 
-Five bundled modules read Snowflake and each defaults `SNOWFLAKE_SCHEMA` to
+Six bundled modules read Snowflake and each defaults `SNOWFLAKE_SCHEMA` to
 the schema **it** owns:
 
 | module | its default |
@@ -23,8 +23,17 @@ the schema **it** owns:
 | `apps/cme_feeder_cattle/snowflake_db.py` | `CME_FEEDER_CATTLE` |
 | `apps/us_cow_herd/snowflake_db.py` | `CME_FEEDER_CATTLE` |
 | `apps/mexican_feeder_imports/snowflake_db.py` | `CME_FEEDER_CATTLE` |
+| `apps/beef_trimmings/app.py` (`_sf_connect`) | `BEEF_TRIMMINGS` |
 
-Setting it to any one value overrides all five and silently breaks the others.
+Added 2026-10-04: `marsapi.ams.usda.gov` rejects requests from Streamlit
+Community Cloud's IPs, so the import side of Beef Trimmings (South America /
+Australia-NZ Frozen 90s) moved to a droplet cron job writing
+`JSA.BEEF_TRIMMINGS.IMPORT_COW90`, read via a dedicated `LIVESTOCK_PORTAL_SVC`
+grant on that schema (same identity already used for `NASS_CACHE` +
+`CME_FEEDER_CATTLE`). US Fresh 90s still calls `mpr.datamart.ams.usda.gov`
+live — that domain isn't blocked, only `marsapi.ams.usda.gov` is.
+
+Setting it to any one value overrides all six and silently breaks the others.
 Pages load, queries miss, charts come back empty, nothing raises. **Unset is the
 only working configuration.** `SNOWFLAKE_DATABASE = "JSA"` is safe to set.
 
