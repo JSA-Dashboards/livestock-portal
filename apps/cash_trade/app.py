@@ -772,9 +772,67 @@ def _null_run_days(vol: pd.DataFrame, region: str, trade_date) -> int:
     for cut in ("afternoon", "morning"):
         hit = d[d["cut"] == cut]
         seen.update(dict(zip(hit["trade_date"], hit["head"])))
+    return _trailing_blank_run({td: pd.isna(v) for td, v in seen.items()},
+                               trade_date)
+
+
+def _price_blank_run_days(df: pd.DataFrame, region: str, trade_date) -> int:
+    """
+    The same run, measured on the PRICE frame instead of the volume one.
+
+    This exists so a volume outage cannot blind the price tiles. The two feeds
+    are different requests -- /Summary and /Detail -- and _fetch_many returns
+    [] for a failed job, so one can go dark while the other is healthy. The
+    volume flag is still preferred where it exists, because reusing it is what
+    keeps the two panels agreeing by construction; this is the fallback for
+    when it does not exist at all.
+
+    "Usable" is head and price both present, which is exactly what
+    daily_combined() keeps and therefore what decides whether a quote is found
+    -- so this counts the days the tile actually rendered blank, not some
+    neighbouring definition of it.
+
+    IT READS daily_df, NOT dcombo. The unpriced rows fetch_daily_cash
+    deliberately keeps are the entire evidence: without them a withheld day
+    and a day USDA never published are the same absence, which is the
+    distinction being drawn. See the unpriced-rows note in fetch_daily_cash,
+    which made the same point for the headline date.
+
+    The threshold transfers -- blank-PRICE runs end at 6 for an ordinary quiet
+    stretch (TX/OK/NM; 4 elsewhere) against 33, 36 and 63 where a region went
+    dark, so SUPPRESSION_RUN_DAYS sits in the gap on this series too. The
+    PRICE floor of 6 is the binding one, not the volume series' 4.
+    """
+    reg = df[(df["region"] == region) & (df["trade_date"] <= trade_date)]
+    if reg.empty:
+        return 0
+    usable = reg["head"].notna() & reg["price"].notna()
+    by_day = usable.groupby(reg["trade_date"]).any()
+    return _trailing_blank_run({td: not ok for td, ok in by_day.items()},
+                               trade_date)
+
+
+def _trailing_blank_run(blank_by_day: dict, upto) -> int:
+    """
+    Consecutive OBSERVED days up to `upto` that were blank, newest first.
+
+    One definition of "run" for both series, rather than two near-identical
+    loops -- this file already carries the cost of a module that exists five
+    times, and two copies of a rule is how they start.
+
+    A day USDA never published is simply not in the map, so it neither counts
+    toward the run nor breaks it: the run is about what USDA said on the days
+    it spoke, not about the calendar.
+
+    The measurement needs the fetched window to be longer than the threshold it
+    feeds. The shortest DAILY_WINDOWS option is 30 calendar days, about 21
+    trading days, against a SUPPRESSION_RUN_DAYS of 10. A window too short to
+    reach the threshold simply yields a short run, so the caller reports a
+    blank rather than a withholding it cannot see.
+    """
     run = 0
-    for td in sorted(seen, reverse=True):
-        if pd.notna(seen[td]):
+    for td in sorted((d for d in blank_by_day if d <= upto), reverse=True):
+        if not blank_by_day[td]:
             break
         run += 1
     return run
@@ -1118,7 +1176,8 @@ def daily_combined(df: pd.DataFrame) -> pd.DataFrame:
     return g.merge(wg[key + ["weight"]], on=key, how="left")
 
 
-def daily_price_state(priced_rows, published_rows, suppressed=None):
+def daily_price_state(priced_rows, published_rows, suppressed=None,
+                      blank_run=0):
     """
     Which of five things a region's price tile is saying on one trading day.
 
@@ -1191,6 +1250,21 @@ def daily_price_state(priced_rows, published_rows, suppressed=None):
     2026-10-02, weekly_to_date() returned {} on exactly none of the days that
     carried a price -- so an empty volume frame beside published prices is a
     feed failure rather than ordinary skew, and the page says so out loud.
+
+    `blank_run` IS THE WAY OUT OF BEING BLIND, and it is a fallback rather
+    than a replacement. When the volume flag exists it decides, because
+    reusing it is what keeps this panel and the week-to-date panel agreeing by
+    construction. When it does not exist -- and only then -- the price frame
+    answers for itself: _price_blank_run_days() counts the same kind of run on
+    the data this panel already has, so a /Summary outage no longer costs the
+    page the distinction. The feeds are independent requests and one failing
+    should not change what the other reports.
+
+    The fallback stays conservative in the same direction as everything else
+    here. A run short of SUPPRESSION_RUN_DAYS is not evidence of no
+    withholding any more than a missing flag was, so it yields "unknown" and
+    the tile says it does not know. Nothing reaches "withheld" without a run
+    long enough to have earned it on one series or the other.
     """
     for basis in ("Live FOB", "Dressed Delivered"):
         b = priced_rows[priced_rows["basis"] == basis]
@@ -1201,6 +1275,10 @@ def daily_price_state(priced_rows, published_rows, suppressed=None):
     if published_rows is None or published_rows.empty:
         return "unpublished", None
     if suppressed is None:
+        # No volume flag: let the price frame speak for itself, and fall back
+        # to "unknown" when its own run is too short to settle it either.
+        if blank_run >= SUPPRESSION_RUN_DAYS:
+            return "withheld", None
         return "unknown", None
     return ("withheld" if suppressed else "undefined"), None
 
@@ -1652,23 +1730,37 @@ with tab_daily:
         # every exception per job and returns []. So a Summary outage leaves
         # daily_err == "", passes the `elif daily_df.empty` gate because the
         # PRICE frame is fine, and silently drops the week-to-date panel at the
-        # `if wtd:` below. The page looks healthy and is not: without the
-        # volume flag the price tiles cannot tell a withheld region from a
-        # quiet one -- see daily_price_state, where that used to resolve to
-        # USDA's "Undefined" and reinstate the bug this page was fixed for.
+        # `if wtd:` below. The page looks healthy and is not, so it says so.
+        #
+        # THE TILES NO LONGER DEPEND ON THIS BEING READ. _price_blank_run_days
+        # gives daily_price_state a fallback, so a region withheld through a
+        # Summary outage is still named rather than reverting to USDA's
+        # "Undefined". The warning survives that because the week-to-date
+        # panel really is gone and the remaining evidence really is weaker --
+        # a reader comparing head counts needs to know which, and the wording
+        # below says so rather than claiming the distinction was lost.
         #
         # It does not cry wolf: over 263 trading days to 2026-10-02,
         # weekly_to_date() returned {} on none of the days that carried a
         # price, so the two sections move together and an empty one here is a
         # real failure rather than the feeds being a few hours apart.
+        #
+        # "Refresh now" is the right advice and was checked rather than
+        # assumed: both fetches are @st.cache_data(persist="disk") keyed on
+        # the publication stamps, so the empty frame a failed fetch returns is
+        # CACHED and re-served on every rerun until USDA republishes. The
+        # sidebar button calls st.cache_data.clear(), which drops persisted
+        # entries too, so it genuinely retries rather than redrawing the same
+        # cached failure.
         if not wtd:
             st.warning(
                 "⚠️ **USDA's volume reports did not load.** Head counts and prices "
                 "come from different sections of the same reports and only the price "
-                "half returned, so the week-to-date panel is missing below and a region "
-                "USDA is **withholding** cannot be told apart from one that simply did "
-                "not trade. Tiles reading *no volume data* mean exactly that — not a "
-                "quiet market. Use **Refresh now** in the sidebar to retry."
+                "half returned, so the week-to-date panel is missing below. Which "
+                "regions USDA is **withholding** is being read from each region's price "
+                "history instead — less direct than the head counts, and a tile reading "
+                "*no volume data* is one the price history could not settle either. "
+                "Use **Refresh now** in the sidebar to retry."
             )
 
         st.markdown(
@@ -1745,6 +1837,11 @@ with tab_daily:
                 # None, not False: no volume row for this region is no
                 # evidence either way, and False would assert the opposite.
                 suppressed=(_entry["suppressed"] if _entry else None),
+                # Computed here and passed in, so daily_price_state keeps its
+                # single call site and stays a pure decision a test can reach.
+                # It costs nothing when the flag exists -- the state resolves
+                # on `suppressed` before `blank_run` is ever consulted.
+                blank_run=_price_blank_run_days(daily_df, region, last_trade),
             )
 
         cols = st.columns(len(DAILY_REGIONS))
