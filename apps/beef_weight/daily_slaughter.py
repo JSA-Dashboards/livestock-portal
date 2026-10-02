@@ -56,9 +56,17 @@ therefore close to meaningless, and `saturday_frame` never returns one.
 summed must equal the Saturday row's WTD. `reconcile()` checks it so a silent
 dedupe mistake shows up as a number rather than a plausible chart.
 
-Vendored nowhere -- like `cold_storage` and `cof_recap`, this name exists once
-in the repo, so the by-name `sys.modules` collision the portal lives with (see
-CLAUDE.md on `snowflake_db.py`) does not apply here.
+VENDORED TWICE -- here and at the root of the beef-weight-dashboard repo,
+which runs this same page standalone. The two must stay byte-identical;
+`tests/test_no_drift.py` in cme-feeder-cattle-index compares them and lists
+this name in SHARED.
+
+The in-process `sys.modules` collision CLAUDE.md describes for
+`snowflake_db.py` does NOT apply: those five copies live in one Streamlit
+process, where whichever page imports first wins. These two live in separate
+deployments and never meet. The risk here is the quieter one -- a fix landing
+in one repo and not the other, invisible until someone compares the two live
+pages -- which is exactly what the drift test is for.
 """
 from datetime import date, datetime, timedelta
 from urllib.parse import quote

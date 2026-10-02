@@ -24,8 +24,16 @@ from datetime import date, timedelta
 
 import pytest
 
+# This file is shared verbatim with the beef-weight-dashboard repo, where the
+# module sits at the repo root rather than under apps/beef_weight -- so both
+# layouts are tried rather than hardcoding the portal's. Listed in SHARED in
+# cme-feeder-cattle-index/tests/test_no_drift.py.
 _HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(_HERE, "..", "apps", "beef_weight"))
+for _rel in (("..", "apps", "beef_weight"), ("..",)):
+    _cand = os.path.join(_HERE, *_rel)
+    if os.path.isfile(os.path.join(_cand, "daily_slaughter.py")):
+        sys.path.insert(0, _cand)
+        break
 
 import daily_slaughter as ds  # noqa: E402
 
