@@ -195,6 +195,14 @@ here does nothing to the standalone app — and vice versa. Check both.
 US Cow Herd and Mexican Feeder Imports have no standalone twin, so they are the
 two you can change here without checking elsewhere.
 
+**Beef Cutout is a third case and the list above used to omit it.**
+`JSA-Dashboards/jsa-beef-cutout-dashboard` exists, but it is not a vendored
+copy — it is an ancestor. 682 lines against this page's 1,397, and it carries
+none of `_cut_numbers`, `primal_weights` or `cutout_attribution`, so the whole
+attribution panel is portal-only. Check it before porting a fix in the shared
+*fetch* code; do not assume a change here has a counterpart there, and do not
+copy this page over it (verified 2026-10-02).
+
 A related trap, and the worst one here: `snowflake_db.py` now exists **five
 times** — under `apps/cme_feeder_cattle/`, `apps/us_cow_herd/`,
 `apps/mexican_feeder_imports/`, `apps/fed_cattle_crush/` and

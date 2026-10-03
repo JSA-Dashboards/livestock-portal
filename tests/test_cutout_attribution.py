@@ -101,6 +101,29 @@ def test_the_effects_sum_to_the_cutout_move():
     assert tbl["Effect"].sum() == pytest.approx(c.iloc[-1] - c.iloc[-2], abs=0.01)
 
 
+def _bump(primal, desc, amt):
+    """
+    Move one primal on the last report, THE WAY THE FEED WOULD CARRY IT.
+
+    The fixture builds these columns as USDA serves them -- comma-formatted
+    strings, the trap `_cut_numbers` exists to spring ("1,361.58"). So a bump
+    has to be written back as a string too.
+
+    Writing a bare float here raised under pandas 3:
+
+        TypeError: Invalid value '272.96' for dtype 'str'
+
+    pandas 2 inferred the column as object and silently upcast; pandas 3
+    infers the `str` dtype and refuses the float. The refusal is right -- the
+    float was never a value this feed could produce, and it skipped the comma
+    parsing on the one row the test is actually about.
+    """
+    m = ((primal["report_date"] == primal["report_date"].max())
+         & (primal["primal_desc"] == desc))
+    v = float(primal.loc[m, "choice_600_900"].iloc[0].replace(",", "")) + amt
+    primal.loc[m, "choice_600_900"] = f"{v:,.2f}"
+
+
 def test_the_biggest_mover_need_not_be_the_biggest_cause():
     """
     The reason the Effect column exists. A small primal with a huge move
@@ -109,15 +132,10 @@ def test_the_biggest_mover_need_not_be_the_biggest_cause():
     ns = _load()
     sections = _sections()
     primal = sections["Composite Primal Values"]
-    last = primal["report_date"].max()
     # Flank (3.35%) jumps 20; Chuck (29.62%) moves 5. Flank is the bigger
     # mover, Chuck is by far the bigger cause.
-    def bump(desc, amt):
-        m = (primal["report_date"] == last) & (primal["primal_desc"] == desc)
-        primal.loc[m, "choice_600_900"] = (
-            float(primal.loc[m, "choice_600_900"].iloc[0].replace(",", "")) + amt)
-    bump("Primal Flank", 20.0)
-    bump("Primal Chuck", 5.0)
+    _bump(primal, "Primal Flank", 20.0)
+    _bump(primal, "Primal Chuck", 5.0)
     tbl, _ = ns["cutout_attribution"](sections, "choice")
     eff = dict(zip(tbl["Primal"], tbl["Effect"]))
     assert abs(eff["Primal Chuck"]) > abs(eff["Primal Flank"]), (
@@ -169,15 +187,8 @@ def test_the_recap_names_the_biggest_CAUSE_not_the_biggest_mover():
     ns = _load()
     sections = _sections()
     primal = sections["Composite Primal Values"]
-    last = primal["report_date"].max()
-
-    def bump(desc, amt):
-        m = (primal["report_date"] == last) & (primal["primal_desc"] == desc)
-        primal.loc[m, "choice_600_900"] = (
-            float(primal.loc[m, "choice_600_900"].iloc[0].replace(",", "")) + amt)
-
-    bump("Primal Flank", 20.0)
-    bump("Primal Chuck", 5.0)
+    _bump(primal, "Primal Flank", 20.0)
+    _bump(primal, "Primal Chuck", 5.0)
     text = " ".join(ns["cutout_recap"](sections, _hist_from(sections, ns), "choice"))
     assert "Chuck did most of it" in text, text
 
