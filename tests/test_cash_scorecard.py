@@ -198,3 +198,97 @@ def test_empty_when_there_is_nothing_to_score(fc):
                                fc["forecast_national"], fc["CUT_ORDER"])
     assert board.empty
     assert sc.summarise(board) == {}
+
+
+# ── the week in flight ───────────────────────────────────────────────────────
+
+def _live_week(fc, n_history=8, open_week="2026-03-02"):
+    """History of settled weeks, plus one open week standing at Friday 1:30."""
+    rows, fin = _history(n_history, start="2026-01-05")
+    rows += _week_rows(open_week, [(None, None), (None, None), (None, 36000),
+                                   (None, 36000), (40000, None)])
+    vol = _vol(rows)
+    nat = pd.Series({k: v + 20000.0 for k, v in fin.items()})
+    return vol, fin, nat
+
+
+def test_the_open_week_appears_as_a_pending_row(fc):
+    """What the page puts on top of the table: a call with no answer yet."""
+    vol, fin, nat = _live_week(fc)
+    row = sc.pending_row(vol, fin, nat, fc["forecast_5area"],
+                         fc["forecast_national"])
+    assert len(row) == 1
+    r = row.iloc[0]
+    assert r["week"] == pd.Timestamp("2026-03-02")
+    assert r["pending"] is True or bool(r["pending"])
+    # The estimates are there...
+    assert r["f5"] > 0 and r["fn"] > 0
+    assert r["wtd"] == 40000
+    # ...and nothing that would need an actual is.
+    assert pd.isna(r["a5"]) and pd.isna(r["an"])
+    assert pd.isna(r["miss5"]) and pd.isna(r["missn"])
+
+
+def test_the_pending_row_vanishes_once_usda_prints(fc):
+    """The whole correctness condition.
+
+    Leave it in after the print and the week shows TWICE -- once scored, once
+    blank -- and the blank one reads as a second call that failed.
+    """
+    vol, fin, nat = _live_week(fc)
+    week = pd.Timestamp("2026-03-02")
+    assert not sc.pending_row(vol, fin, nat, fc["forecast_5area"],
+                              fc["forecast_national"]).empty
+
+    printed = pd.concat([fin, pd.Series({week: 43000.0})])
+    printed_nat = pd.concat([nat, pd.Series({week: 63000.0})])
+    assert sc.pending_row(vol, printed, printed_nat, fc["forecast_5area"],
+                          fc["forecast_national"]).empty
+
+
+def test_a_pending_row_never_reaches_the_accuracy_figures(fc):
+    """summarise() must describe settled calls only.
+
+    Its actual is NaN, so a median would skip it and report "the last 10"
+    while averaging 9 -- true-looking, and wrong by one.
+    """
+    vol, fin, nat = _live_week(fc)
+    board = sc.build_scorecard(vol, fin, nat, fc["forecast_5area"],
+                               fc["forecast_national"], fc["CUT_ORDER"], weeks=10)
+    clean = sc.summarise(board)
+    assert clean and clean["n"] == len(board)
+
+    row = sc.pending_row(vol, fin, nat, fc["forecast_5area"],
+                         fc["forecast_national"])
+    polluted = sc.summarise(pd.concat([row, board], ignore_index=True))
+    assert polluted == clean, "an unsettled week changed the accuracy figures"
+
+
+def test_scored_rows_are_marked_not_pending(fc):
+    """The flag the page and summarise() both switch on."""
+    vol, fin, nat = _live_week(fc)
+    board = sc.build_scorecard(vol, fin, nat, fc["forecast_5area"],
+                               fc["forecast_national"], fc["CUT_ORDER"], weeks=10)
+    assert "pending" in board.columns
+    assert not board["pending"].any()
+
+
+def test_pending_and_scored_rows_concatenate(fc):
+    """They are displayed as one table, so the columns have to line up."""
+    vol, fin, nat = _live_week(fc)
+    board = sc.build_scorecard(vol, fin, nat, fc["forecast_5area"],
+                               fc["forecast_national"], fc["CUT_ORDER"], weeks=10)
+    row = sc.pending_row(vol, fin, nat, fc["forecast_5area"],
+                         fc["forecast_national"])
+    assert set(row.columns) == set(board.columns)
+    both = pd.concat([row, board], ignore_index=True)
+    assert len(both) == len(board) + 1
+    assert bool(both["pending"].iloc[0]) is True
+
+
+def test_no_pending_row_without_a_live_forecast(fc):
+    """Empty rather than a row of NaNs when there is nothing to stand on."""
+    rows, fin = _history(8, start="2026-01-05")
+    assert sc.pending_row(_vol(rows), fin,
+                          pd.Series({k: v + 20000.0 for k, v in fin.items()}),
+                          fc["forecast_5area"], fc["forecast_national"]).empty

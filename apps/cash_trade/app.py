@@ -2318,6 +2318,12 @@ with tab_fcst:
             fcst_vol, head5, headn, forecast_5area, forecast_national,
             CUT_ORDER, weeks=10)
         stats = scorecard.summarise(board)
+        # Deliberately after summarise(). The accuracy line above the table
+        # describes CALLS THAT HAVE BEEN SETTLED; this week has not been, so it
+        # is appended for display only and never reaches the median or the band
+        # count. scorecard.summarise() also drops it defensively.
+        pending = scorecard.pending_row(
+            fcst_vol, head5, headn, forecast_5area, forecast_national)
         if not board.empty and stats:
             st.markdown(
                 f'<div class="sec-header" style="border-left-color:{D14_COLOR};">'
@@ -2335,23 +2341,50 @@ with tab_fcst:
                 f'{_n["in_band"] * stats["n"]:.0f} of {stats["n"]}</b>.</div>',
                 unsafe_allow_html=True)
 
-            _b = board.copy()
-            _b["Week of"] = _b["week"].dt.strftime("%b %d")
-            _b["Week to date"] = _b["wtd"].map(lambda v: f"{v:,.0f}")
-            _b["Confidence"] = _b["grade"].str.title()
-            _b["5-Area est."] = _b["f5"].map(lambda v: f"{v:,.0f}")
-            _b["5-Area actual"] = _b["a5"].map(lambda v: f"{v:,.0f}")
-            _b["5-Area miss"] = [f"{m:+,.0f} ({p:+.1%})"
-                                 for m, p in zip(_b["miss5"], _b["pct5"])]
-            _b["National est."] = _b["fn"].map(lambda v: f"{v:,.0f}")
-            _b["National actual"] = _b["an"].map(lambda v: f"{v:,.0f}")
-            _b["National miss"] = [f"{m:+,.0f} ({p:+.1%})"
-                                   for m, p in zip(_b["missn"], _b["pctn"])]
+            # The live week rides on top, newest first like the rest.
+            _b = (board.copy() if pending.empty
+                  else pd.concat([pending, board], ignore_index=True))
+            _live = _b["pending"].fillna(False).astype(bool)
+
+            # Every actual and every miss on the pending row is NaN. Formatted
+            # with the scored rows' f-strings those print "nan", which reads as
+            # a broken number rather than an unanswered one.
+            def _hd(v):
+                return "\u2014" if pd.isna(v) else f"{v:,.0f}"
+
+            def _ms(m, q):
+                return ("\u2014" if pd.isna(m) or pd.isna(q)
+                        else f"{m:+,.0f} ({q:+.1%})")
+
+            _b["Week of"] = [d.strftime("%b %d") + (" \u00b7 live" if lv else "")
+                             for d, lv in zip(_b["week"], _live)]
+            _b["Week to date"] = _b["wtd"].map(_hd)
+            _b["Confidence"] = _b["grade"].fillna("").str.title()
+            _b["5-Area est."] = _b["f5"].map(_hd)
+            _b["5-Area actual"] = _b["a5"].map(_hd)
+            _b["5-Area miss"] = [_ms(m, q) for m, q in zip(_b["miss5"], _b["pct5"])]
+            _b["National est."] = _b["fn"].map(_hd)
+            _b["National actual"] = _b["an"].map(_hd)
+            _b["National miss"] = [_ms(m, q) for m, q in zip(_b["missn"], _b["pctn"])]
             st.dataframe(
                 _b[["Week of", "Week to date", "Confidence", "5-Area est.",
                     "5-Area actual", "5-Area miss", "National est.",
                     "National actual", "National miss"]],
                 use_container_width=True, hide_index=True)
+
+            if not pending.empty:
+                _pw = pending["week"].iloc[0]
+                _prints = (_pw + pd.Timedelta(days=7)).strftime("%a %b %d")
+                st.markdown(
+                    f'<div class="note" style="margin-top:6px;">'
+                    f'<b>The top row is this week, still open.</b> It is the same '
+                    f'call as the tiles above &mdash; estimates and confidence only, '
+                    f'with no actual to score against until USDA prints the week of '
+                    f'{_pw.strftime("%b %d")} on <b>{_prints}</b>. '
+                    f'It is <b>not</b> in the accuracy figures above, which cover the '
+                    f'{stats["n"]} settled calls; when the print lands this row is '
+                    f'scored like any other and the averages take it in.</div>',
+                    unsafe_allow_html=True)
 
             st.markdown(
                 f'<div class="note" style="margin-top:6px;">Each past week is replayed '

@@ -163,12 +163,63 @@ def build_scorecard(vol: pd.DataFrame, published5: pd.Series, national: pd.Serie
     sc = pd.DataFrame(rows)
     if sc.empty:
         return sc
+    # Every row here is a SCORED week. pending_row() sets this True, and
+    # summarise() drops those -- see the guard there for why that matters.
+    sc["pending"] = False
     for side, f, a, lo, hi in (("5", "f5", "a5", "f5_lo", "f5_hi"),
                                ("n", "fn", "an", "fn_lo", "fn_hi")):
         sc[f"miss{side}"] = sc[f] - sc[a]
         sc[f"pct{side}"] = sc[f"miss{side}"] / sc[a]
         sc[f"in{side}"] = (sc[a] >= sc[lo]) & (sc[a] <= sc[hi])
     return sc
+
+
+def pending_row(vol: pd.DataFrame, published5: pd.Series, national: pd.Series,
+                forecast_5area, forecast_national) -> pd.DataFrame:
+    """
+    The week in flight, as an UNSCORED row — or empty once USDA has printed it.
+
+    Same columns build_scorecard returns, so the two concatenate, but with the
+    actuals and every miss left as NaN because there is nothing yet to compare
+    against. `pending` is True here and False there, which is what tells the
+    page and summarise() apart from each other.
+
+    IT DISAPPEARS THE MOMENT THE WEEK PRINTS, and that is the only thing this
+    function really has to get right. Once `published5` carries the week,
+    build_scorecard scores it for real; a pending row surviving alongside that
+    would show the same week twice, once with a miss and once blank, and the
+    blank one would look like a second, failed call.
+
+    IT STANDS AT THE LIVE CHECKPOINT, not the stepped-back one build_scorecard
+    uses. Those differ on a Monday: once Friday's final lands the live number
+    is the answer rather than a forecast, so the scored rows step back to the
+    last checkpoint that still had something to predict (see build_scorecard).
+    This row is the call shown in the tiles above it on the page, so it has to
+    be the live one or the table would contradict the tiles.
+    """
+    live = forecast_5area(vol, published5)
+    if not live:
+        return pd.DataFrame()
+    week = pd.Timestamp(live["week"])
+    if not published5.empty and week in published5.index:
+        return pd.DataFrame()
+
+    fn = forecast_national(live, published5, national) if not national.empty else None
+    nan = float("nan")
+    return pd.DataFrame([{
+        "week": week,
+        "wtd": live["wtd"],
+        "grade": live.get("grade"),
+        "f5": live["central"], "f5_lo": live["low"], "f5_hi": live["high"],
+        "a5": nan,
+        "fn": fn.get("central") if fn else nan,
+        "fn_lo": fn.get("low") if fn else nan,
+        "fn_hi": fn.get("high") if fn else nan,
+        "an": nan,
+        "miss5": nan, "pct5": nan, "in5": False,
+        "missn": nan, "pctn": nan, "inn": False,
+        "pending": True,
+    }])
 
 
 def summarise(sc: pd.DataFrame) -> dict:
@@ -179,6 +230,15 @@ def summarise(sc: pd.DataFrame) -> dict:
     (late trade can surprise upward and cannot go below zero), so a mean is
     dragged by the one back-loaded week in ten and describes none of them.
     """
+    if sc.empty:
+        return {}
+    # THE PENDING ROW MUST NEVER REACH THE AVERAGE. Its actual is NaN, so a
+    # median would skip it silently and "the last 10 calls" would describe 9 --
+    # or, once a caller concatenates before summarising, count a week that has
+    # not happened yet. The page keeps them apart by calling this first; this
+    # guard means it stays true even if someone later stops doing that.
+    if "pending" in sc.columns:
+        sc = sc[~sc["pending"].fillna(False).astype(bool)]
     if sc.empty:
         return {}
     out = {"n": int(len(sc))}
