@@ -392,7 +392,7 @@ def fetch_volume_history(stamps: str) -> pd.DataFrame:
 
 
 @st.cache_data(persist="disk", max_entries=8, show_spinner=False)
-def fetch_leverage(stamps: str) -> dict:
+def fetch_leverage(stamps: str, schema: int) -> dict:
     """
     The four purchase-mix and committed-inventory series, full history.
 
@@ -402,6 +402,7 @@ def fetch_leverage(stamps: str) -> dict:
     already makes, so the hidden-tab rule costs roughly what the other tabs
     do rather than multiplying it.
     """
+    del schema          # cache key only, exactly like `stamps` above
     return leverage.load(_session)
 
 
@@ -2580,7 +2581,7 @@ with tab_lev:
     with st.spinner("Loading USDA purchase-mix and committed inventory…"):
         try:
             _lev_stamps = stamps_for(_probe, [leverage.CT142_ID, leverage.CT153_ID])
-            lev_f = fetch_leverage(_lev_stamps)
+            lev_f = fetch_leverage(_lev_stamps, leverage.SCHEMA)
             lev_err = ""
         except Exception as e:
             lev_f, lev_err = {}, str(e)
@@ -2624,19 +2625,29 @@ with tab_lev:
                              f"{_r['committed_pct']:.1%}",
                              f'<div class="tile-delta-neu">formula + forward</div>',
                              "tile-d14"), unsafe_allow_html=True)
+        # c3/c4 ARE THE STANDING BOOK, not the weekly flow that used to sit
+        # here. "Committed inventory" and "weeks of coverage" both read
+        # LM_CT142, whose Committed column is head committed DURING the week —
+        # a flow — so the first was not an inventory and the second was not
+        # weeks of anything. The real inventory is LM_CT153's forward book:
+        # "Cumulative Total for Listed Months" on ams_2480.pdf, cattle bought
+        # and not yet delivered.
+        _sch = _L.get("schedule")
+        _fw = _L.get("forward")
+        _near = leverage.near_months(_sch, 3) if _sch is not None else {}
         with c3:
-            _cm = _L.get("committed")
-            st.markdown(tile("Committed inventory",
-                             fmt_hd(_cm["committed"]) if _cm is not None else "—",
-                             (hd_delta_html(_cm["committed"], _L["committed_prior"]["committed"])
-                              if _cm is not None and _L.get("committed_prior") is not None else ""),
+            st.markdown(tile("Forward book, undelivered",
+                             fmt_hd(_fw["fwd_book"]) if _fw is not None else "—",
+                             (hd_delta_html(_fw["fwd_book"], _L["forward_prior"]["fwd_book"])
+                              if _fw is not None and _L.get("forward_prior") is not None else ""),
                              "tile-del"), unsafe_allow_html=True)
         with c4:
-            _cm = _L.get("committed")
-            st.markdown(tile("Weeks of coverage",
-                             f"{_cm['coverage_weeks']:.2f}" if _cm is not None
-                             and pd.notna(_cm["coverage_weeks"]) else "—",
-                             f'<div class="tile-delta-neu">book &divide; 4-wk ship pace</div>',
+            _nc = _near.get("change")
+            st.markdown(tile("Next 3 months vs year ago",
+                             f"{_nc:+.0%}" if _nc is not None else "—",
+                             (f'<div class="tile-delta-{"neg" if _nc < 0 else "pos"}">'
+                              f'{_near["committed"]:,.0f} vs {_near["last_year"]:,.0f} hd</div>')
+                             if _nc is not None else "",
                              "tile-neu"), unsafe_allow_html=True)
 
         # ── what it means, in the market's own recent terms ─────────────────
@@ -2770,27 +2781,72 @@ with tab_lev:
         # ── the forward book and what else is captive ───────────────────────
         st.markdown(
             f'<div class="sec-header" style="border-left-color:{DEL_COLOR};">'
-            f'The standing book</div>', unsafe_allow_html=True)
-        _ow, _fw, _cm = _L.get("owned"), _L.get("forward"), _L.get("committed")
-        _parts = []
-        if _cm is not None:
-            _parts.append(f'<b>{_cm["committed"]:,.0f} hd</b> committed for delivery '
-                          f'against <b>{_cm["delivered"]:,.0f} hd</b> shipped')
-        if _fw is not None:
-            _parts.append(f'a forward book of <b>{_fw["fwd_book"]:,.0f} hd</b> '
-                          f'(<b>{_fw["fwd_week"]:,.0f}</b> added this week)')
-        if _ow is not None and pd.notna(_ow["packer_owned"]):
-            _parts.append(f'<b>{_ow["packer_owned"]:,.0f} hd</b> packer-owned and fed')
-        if _parts:
+            f'The standing book &mdash; cattle bought and not yet delivered</div>',
+            unsafe_allow_html=True)
+        if _sch is not None and not _sch.empty and _fw is not None:
+            _ok = leverage.reconciles(_sch, _fw["fwd_book"])
             st.markdown(
                 f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
-                + ", ".join(_parts) + '.</div>', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="note" style="margin-bottom:14px;">Coverage is the committed book '
-            'over the <b>four-week</b> shipping pace, not last week&rsquo;s alone &mdash; a '
-            'holiday week halves the denominator and would print a coverage spike that is '
-            'just the calendar. Packer-owned cattle are the purest captive supply there '
-            'is: never bought at all.</div>', unsafe_allow_html=True)
+                f'<b>{_fw["fwd_book"]:,.0f} hd</b> on forward contract and not yet '
+                f'delivered, <b>{_fw["fwd_week"]:,.0f} hd</b> newly signed last week'
+                + (f'. Over the next {_near["n"]} delivery months they hold '
+                   f'<b>{_near["committed"]:,.0f} hd</b> against '
+                   f'<b>{_near["last_year"]:,.0f} hd</b> a year ago, '
+                   f'<b style="color:{NEG if _near["change"] < 0 else POS};">'
+                   f'{_near["change"]:+.1%}</b>.' if _near else ".")
+                + '</div>', unsafe_allow_html=True)
+
+            _s = _sch.head(12).copy()
+            fig2 = go.Figure()
+            fig2.add_trace(go.Bar(
+                x=[f"{m} '{str(y)[2:]}" for m, y in zip(_s["month"], _s["year"])],
+                y=_s["last_year"], name="A year ago",
+                marker_color=BORDER,
+                hovertemplate="%{x}<br>a year ago %{y:,.0f} hd<extra></extra>"))
+            fig2.add_trace(go.Bar(
+                x=[f"{m} '{str(y)[2:]}" for m, y in zip(_s["month"], _s["year"])],
+                y=_s["committed"], name="Committed now",
+                marker_color=DEL_COLOR,
+                hovertemplate="%{x}<br>committed %{y:,.0f} hd<extra></extra>"))
+            fig2.update_layout(
+                height=300, margin=dict(l=10, r=10, t=10, b=10), barmode="overlay",
+                plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
+                font=dict(family="Source Sans Pro, sans-serif", color=JPSI_DARK, size=12),
+                hovermode="x unified",
+                legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
+                xaxis=dict(title="delivery month", showgrid=False, linecolor=BORDER),
+                yaxis=dict(title="head", gridcolor="#f0f2f4", linecolor=BORDER,
+                           zeroline=False, tickformat=","))
+            st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
+
+            st.markdown(
+                f'<div class="note" style="margin-top:-6px;margin-bottom:14px;">'
+                f'USDA&rsquo;s own heading is &ldquo;Cumulative Total for Listed Months&rdquo; '
+                f'&mdash; cattle contracted and still to be delivered, by the month they are '
+                f'due. <b>The near months are the ones that bear on this week&rsquo;s '
+                f'bidding</b>: cattle contracted for next spring do nothing for a packer '
+                f'filling a kill on Thursday. The sixteen monthly totals add back to the '
+                f'published book figure '
+                + ('<b>exactly</b>' if _ok else '<b style="color:%s;">— and currently do '
+                   'NOT, so the row layout has moved and these figures should not be '
+                   'trusted</b>' % NEG)
+                + f', which is the audit on this table.</div>', unsafe_allow_html=True)
+
+        _ow, _cm = _L.get("owned"), _L.get("committed")
+        _bits = []
+        if _ow is not None and pd.notna(_ow["packer_owned"]):
+            _bits.append(f'<b>{_ow["packer_owned"]:,.0f} hd</b> were packer-owned and fed')
+        if _cm is not None and pd.notna(_cm.get("signings_vs_pace")):
+            _bits.append(f'and new commitments ran at <b>{_cm["signings_vs_pace"]:.2f}&times;</b> '
+                         f'the four-week shipping pace, so the book '
+                         f'{"grew" if _cm["signings_vs_pace"] > 1 else "drained"} over the week')
+        if _bits:
+            st.markdown(
+                f'<div class="note" style="margin-bottom:14px;">In the reported kill, '
+                + " ".join(_bits) + '. That last ratio is a comparison of two weekly '
+                'FLOWS &mdash; head committed during the week against head shipped &mdash; '
+                'and is not a measure of supply on hand; the standing inventory is the '
+                'forward book above.</div>', unsafe_allow_html=True)
 
         _tbl = _mix.tail(12).sort_values("week", ascending=False).copy()
         _tbl["Week ending"] = _tbl["week"].dt.strftime("%b %d")
