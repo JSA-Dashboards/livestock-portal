@@ -639,18 +639,71 @@ to 23,172 — about 11,600 head/wk of real trade that is in the national number
 and absent from the 5-Area. A region sitting at zero across a whole week on the
 Daily tab's week-to-date tiles is the signal.
 
-### The prediction on the record
+### The prediction on the record — SETTLED 2026-10-05
 
 The tab's first live run, for the week of 9/28–10/2 and standing at Friday's
 1:30 pm cut, called **5-Area 61,167** (range 59,428–68,363) and **national
-81,723** (range 74,476–94,063). USDA settles both on Monday 2026-10-05.
+81,723** (range 74,476–94,063). USDA printed **60,063** and **88,019** on
+Monday 2026-10-05.
 
-Worth recording the outcome here when it lands, because the two halves fail
-independently: a 5-Area miss means the identity or the late-trade estimate is
-wrong and deserves real investigation, while a national-only miss is the gap
-model — which rests on six post-blackout weeks and is the half expected to need
-work first.
+| | called | printed | miss | in range |
+|---|---|---|---|---|
+| 5-Area | 61,167 | 60,063 | +1,104 (+1.8%) | yes |
+| National | 81,723 | 88,019 | −6,296 (−7.2%) | yes |
 
+Both landed inside the stated ranges, and both missed in the direction and by
+roughly the amount the method advertises — the 5-Area's 1.8% against a
+backtested median of 1.5%, the national's 7.2% against 7.7%. **The national
+under-predicted, exactly as the post-blackout bias warned it would**: the gap
+came in at 27,956 head against the 20,556 four-week median used, above the
+15,048–25,700 the previous six weeks had run. That is the whole error — step 1
+was nearly exact and step 2 carried it.
+
+### A replayed call is NOT the call we made, until you pin the pool
+
+**Found 2026-10-05, and it had already corrupted the scorecard.** The page
+fetches a rolling 365 days ending *today*, so the analogue pool loses its
+oldest week about every seven days. Replaying the same 9/28 call from windows
+three weeks apart gave **61,167 / 60,897 / 60,627** — a 540-head spread on a
+call whose median miss is about 1.5%. The number we are judged on was quietly
+decaying after the fact.
+
+This is the failure the sibling FCI `snapshots.py` exists to prevent, arriving
+by a different route. There it is USDA's data that grows under the estimate;
+here it was *our own pool* moving under it. `scorecard.py`'s docstring checked
+the first and missed the second — corrections really are rare (0 in LM_CT150
+over twelve months, 0.54% of daily rows), and that reasoning was sound as far
+as it went.
+
+`FORECAST_MAX_ANALOGUES = 20` fixes it by anchoring the pool to the 20 most
+recent qualifying weeks *before the week being forecast*, so any window
+reaching back far enough gives the identical answer. Measured over 47 Friday
+checkpoints the cap is **free** — 6.31% median absolute error and 57% within
+10%, the same to two decimals as no cap — while 16 costs 0.5 points and 12
+costs 2.3. `tests/test_cash_forecast.py` pins the stability, not just the
+accuracy.
+
+One consequence worth knowing: under the cap the 9/28 call replays as
+**60,897**, not the 61,167 actually printed on the night, because the live
+call that evening used 27 analogues. 60,897 is the better of the two against
+USDA's 60,063 (−1.4% against +1.8%), but **the figures in the table above are
+the ones that were really made** and the page will not reproduce them.
+
+### Once the week prints, the tiles must stop forecasting
+
+`forecast_5area` returns `done=True` once Friday's final lands and hands back
+the week-to-date unchanged. A headline tile reading `central` in that state
+therefore prints **the actual, twice**, and the call we made disappears. On
+2026-10-05 the tiles read "5-Area week to date 60,063 / 5-Area forecast print
+60,063" while the scorecard six inches below reported a call of 61,167. Both
+were true; together they were a bug — the same shape as the letter-vs-dashboard
+FCI disagreement above, and caught the same way, by putting the two numbers
+side by side.
+
+The tiles now switch to a scoreboard — *we called* against *USDA printed*, for
+both figures — as soon as the week is in `published5`, reading the scorecard's
+own newest row so the two cannot drift apart. Step 2 also prints the
+**realised gap**, since when the national call misses that is always why.
 
 ## The Saturday Slaughter view
 

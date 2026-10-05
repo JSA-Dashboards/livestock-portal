@@ -39,7 +39,8 @@ def fc():
     return load_from_app(
         APP, "_week_start", "weekly_5area_head", "weekly_national_head",
         "wtd_checkpoints", "_front_of", "forecast_5area", "forecast_national",
-        consts=("CUT_ORDER", "FORECAST_GAP_WEEKS", "FORECAST_BAND_WEEKS"),
+        consts=("CUT_ORDER", "FORECAST_GAP_WEEKS", "FORECAST_BAND_WEEKS",
+                "FORECAST_MAX_ANALOGUES"),
         globals_={"pd": pd},
     )
 
@@ -238,3 +239,45 @@ def test_confidence_grade_tracks_how_much_has_traded(fc):
     busy = rows + _week(cur, [(None, None), (None, None), (None, 36000),
                               (None, 36000), (41000, None)])
     assert fc["forecast_5area"](_vol(busy), finals)["grade"] == "firm"
+
+def test_the_call_does_not_move_when_the_fetch_window_rolls(fc):
+    """A call that depends on WHEN you ask it cannot be scored honestly.
+
+    The page fetches a rolling 365 days ending today, so without a cap the
+    analogue pool loses its oldest week about every seven days and the
+    estimate drifts with it. Replaying the real 2026-09-28 call from windows
+    three weeks apart gave 61,167 / 60,897 / 60,627 — a 540-head spread on a
+    call whose median miss is about 1.5%, so more than a third of the error
+    being measured was an artefact of the clock.
+
+    Both the scorecard and the settled tiles replay past calls, so this is
+    load-bearing for anything the page claims about its own accuracy.
+    """
+    # 30 identical weeks, then one that differs, so a pool that reaches past
+    # the cap would pick up a different median than one that stops at it.
+    rows, finals = [], {}
+    base = pd.Timestamp("2026-01-05")
+    for i in range(30):
+        wk = base + pd.Timedelta(days=7 * i)
+        late = 9000 if i < 6 else 3000          # the OLD weeks are the odd ones
+        rows += _week(wk, [(None, None), (None, None), (None, 36000),
+                           (None, 36000), (40000, 40000 + late)])
+        finals[wk] = 40000.0 + late
+    finals = pd.Series(finals)
+    cur = base + pd.Timedelta(days=7 * 30)
+    rows += _week(cur, [(None, None), (None, None), (None, 36000),
+                        (None, 36000), (40000, None)])
+    vol = _vol(rows)
+
+    # Three fetch windows, each dropping more of the old, unusual weeks.
+    calls = []
+    for drop_weeks in (0, 3, 6):
+        start = base + pd.Timedelta(days=7 * drop_weeks)
+        f = fc["forecast_5area"](vol[vol["trade_date"] >= start],
+                                 finals[finals.index >= start])
+        calls.append(f["central"])
+        assert f["n"] <= fc["FORECAST_MAX_ANALOGUES"]
+
+    assert len(set(calls)) == 1, (
+        f"the call moved with the fetch window: {calls} — the analogue cap is "
+        f"not holding the pool steady")

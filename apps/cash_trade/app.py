@@ -133,6 +133,26 @@ FORECAST_CAL_DAYS = 365
 # volumes the gap roughly doubled and every method under-predicts; measured
 # over those weeks the bias is -3.5% at 4 weeks, -12.4% at 8, -16.0% at 13 and
 # -15.1% at 26. The short window is the one that notices a regime change.
+# How many past weeks the late-trade estimate may draw on. TWENTY, AND THE
+# REASON IS REPRODUCIBILITY RATHER THAN ACCURACY.
+#
+# Without a cap the pool is "every qualifying week in the fetch window", and
+# that window is a rolling 365 days ending TODAY — so it loses its oldest week
+# roughly every seven days and the estimate silently moves with it. Replaying
+# the 2026-09-28 call from windows starting a few weeks apart gave 61,167 /
+# 60,897 / 60,627: a 540-head spread on a call whose median miss is about 1.5%.
+# The scorecard and the settled tiles both replay past calls, so a call that
+# depends on when you ask cannot be scored honestly — the number we are judged
+# on would decay quietly after the fact.
+#
+# Anchoring the pool to the N most recent weeks BEFORE the week being forecast
+# makes the answer identical from any window that reaches back far enough.
+# Measured 2026-10-05 over 47 Friday checkpoints: a cap of 20 is free —
+# 6.31% median absolute error and 57% within 10%, the same to two decimals as
+# no cap at all — while 16 costs 0.5 points and 12 costs 2.3. So 20 buys
+# determinism for nothing, which is why it is not tuned any tighter.
+FORECAST_MAX_ANALOGUES = 20
+
 FORECAST_GAP_WEEKS = 4
 # Band is drawn from a slightly longer window so it spans a real range of
 # outcomes rather than the four points the centre is built from.
@@ -1072,6 +1092,13 @@ def forecast_5area(vol: pd.DataFrame, published5: pd.Series) -> dict:
         near = hist[hist["front"].notna() & ((hist["front"] - front).abs() <= 0.10)]
         if len(near) >= 5:
             pool, narrowed = near, True
+
+    # Newest first, then truncate: the cap must drop the OLDEST weeks, so the
+    # surviving set is the same one any later replay would choose. Sorting the
+    # other way would make the pool depend on the fetch window again, which is
+    # the whole thing FORECAST_MAX_ANALOGUES exists to stop.
+    if len(pool) > FORECAST_MAX_ANALOGUES:
+        pool = pool.sort_values("week").tail(FORECAST_MAX_ANALOGUES)
 
     # HOW FAR INTO THE WEEK WE ARE STANDING IS THE ACCURACY, and it is worth
     # saying out loud rather than printing one number with one error bar.
@@ -2149,38 +2176,107 @@ with tab_fcst:
         _wk = pd.Timestamp(f5["week"])
         _print_day = (_wk + pd.Timedelta(days=7)).strftime("%A, %b %d")
 
+        _last_wk_hdr = _wk - pd.Timedelta(days=7)
+        _settled_hdr = (_wk in head5.index) and (_wk in headn.index)
+        _wow5 = _wown = ""
+        if _settled_hdr:
+            _p5h, _pnh = head5.get(_last_wk_hdr), headn.get(_last_wk_hdr)
+            _wow5 = (f'<b>{head5[_wk] - _p5h:+,.0f} hd</b> on the 5-Area '
+                     if _p5h is not None and pd.notna(_p5h) else "")
+            _wown = (f'<b>{headn[_wk] - _pnh:+,.0f} hd</b> nationally '
+                     if _pnh is not None and pd.notna(_pnh) else "")
         st.markdown(
             f'<div class="note" style="margin:-4px 0 12px;">Trading week of '
             f'<b>{_wk.strftime("%b %d")}&ndash;{(_wk + pd.Timedelta(days=4)).strftime("%b %d, %Y")}</b>. '
-            f'USDA last published the <b>{_dow} {_cut}</b> figure; the weekly reports '
-            f'print <b>{_print_day}</b>.</div>', unsafe_allow_html=True)
+            + (f'Both weekly reports are in. Against the '
+               f'{_last_wk_hdr.strftime("%b %d")} week they are '
+               f'{(_wow5 + "and " + _wown).strip()}.'
+               if _settled_hdr else
+               f'USDA last published the <b>{_dow} {_cut}</b> figure; the weekly reports '
+               f'print <b>{_print_day}</b>.')
+            + '</div>', unsafe_allow_html=True)
 
-        # ── the two headline numbers, with where they came from ─────────────
+        # The board is built here rather than down beside the table because the
+        # tiles need its newest row: once USDA prints, they stop forecasting
+        # and start reporting. Same object feeds both, so they cannot disagree.
+        board = scorecard.build_scorecard(
+            fcst_vol, head5, headn, forecast_5area, forecast_national,
+            CUT_ORDER, weeks=10)
+
+        # ── headline numbers ────────────────────────────────────────────────
+        # TWO STATES, AND THE SECOND ONE EXISTS BECAUSE THE FIRST LIED.
+        #
+        # Until USDA prints, these are a forecast and its inputs. AFTER it
+        # prints they must become a scoreboard, because forecast_5area reports
+        # done=True once Friday's final lands and returns the week-to-date
+        # unchanged -- so a "forecast print" tile in that state shows the
+        # ACTUAL, twice, and the call we actually made is gone from the page.
+        # On 2026-10-05 that read "5-Area week to date 60,063 / 5-Area forecast
+        # print 60,063" while the scorecard table six inches below reported we
+        # had called 61,167. Both were true; together they were a bug. Same
+        # class as the letter-vs-dashboard FCI disagreement in CLAUDE.md, and
+        # it is caught the same way -- by putting one number in front of
+        # another and seeing them differ.
+        _scored = None
+        if not board.empty and pd.Timestamp(board.iloc[0]["week"]) == _wk \
+                and not board.iloc[0].get("pending", False):
+            _scored = board.iloc[0]
+
         c1, c2, c3, c4 = st.columns(4)
         _last_wk = _wk - pd.Timedelta(days=7)
         _prev5 = head5.get(_last_wk)
         _prevn = headn.get(_last_wk)
-        with c1:
-            st.markdown(tile("5-Area &mdash; week to date",
-                             fmt_hd(f5["wtd"]),
-                             f'<div class="tile-delta-neu">{_dow} {_cut}, published</div>',
-                             "tile-conf"), unsafe_allow_html=True)
-        with c2:
-            st.markdown(tile("5-Area &mdash; forecast print",
-                             fmt_hd(f5["central"]),
-                             hd_delta_html(f5["central"], _prev5),
-                             "tile-d14"), unsafe_allow_html=True)
-        with c3:
-            st.markdown(tile("National &mdash; forecast print",
-                             fmt_hd(fn["central"]),
-                             hd_delta_html(fn["central"], _prevn),
-                             "tile-del"), unsafe_allow_html=True)
-        with c4:
-            st.markdown(tile("National &mdash; last week printed",
-                             fmt_hd(_prevn),
-                             f'<div class="tile-delta-neu">'
-                             f'{_last_wk.strftime("%b %d")} week, actual</div>',
-                             "tile-neu"), unsafe_allow_html=True)
+
+        if _scored is not None:
+            # The call is the REPLAYED one from the last checkpoint that still
+            # had something to predict, which is what the scorecard scores and
+            # what we actually said. Verified 2026-10-05: replaying the 9/28
+            # week three days later reproduced 61,167 and 81,723 to the head.
+            _s_dow = ["Monday", "Tuesday", "Wednesday", "Thursday",
+                      "Friday"][int(_scored["cp_weekday"])] \
+                if "cp_weekday" in _scored else _dow
+            with c1:
+                st.markdown(tile("5-Area &mdash; we called",
+                                 fmt_hd(_scored["f5"]),
+                                 f'<div class="tile-delta-neu">before the print</div>',
+                                 "tile-d14"), unsafe_allow_html=True)
+            with c2:
+                st.markdown(tile("5-Area &mdash; USDA printed",
+                                 fmt_hd(_scored["a5"]),
+                                 hd_delta_html(_scored["a5"], _scored["f5"]),
+                                 "tile-conf"), unsafe_allow_html=True)
+            with c3:
+                st.markdown(tile("National &mdash; we called",
+                                 fmt_hd(_scored["fn"]),
+                                 f'<div class="tile-delta-neu">before the print</div>',
+                                 "tile-del"), unsafe_allow_html=True)
+            with c4:
+                st.markdown(tile("National &mdash; USDA printed",
+                                 fmt_hd(_scored["an"]),
+                                 hd_delta_html(_scored["an"], _scored["fn"]),
+                                 "tile-neu"), unsafe_allow_html=True)
+        else:
+            with c1:
+                st.markdown(tile("5-Area &mdash; week to date",
+                                 fmt_hd(f5["wtd"]),
+                                 f'<div class="tile-delta-neu">{_dow} {_cut}, published</div>',
+                                 "tile-conf"), unsafe_allow_html=True)
+            with c2:
+                st.markdown(tile("5-Area &mdash; forecast print",
+                                 fmt_hd(f5["central"]),
+                                 hd_delta_html(f5["central"], _prev5),
+                                 "tile-d14"), unsafe_allow_html=True)
+            with c3:
+                st.markdown(tile("National &mdash; forecast print",
+                                 fmt_hd(fn["central"]),
+                                 hd_delta_html(fn["central"], _prevn),
+                                 "tile-del"), unsafe_allow_html=True)
+            with c4:
+                st.markdown(tile("National &mdash; last week printed",
+                                 fmt_hd(_prevn),
+                                 f'<div class="tile-delta-neu">'
+                                 f'{_last_wk.strftime("%b %d")} week, actual</div>',
+                                 "tile-neu"), unsafe_allow_html=True)
 
         _GRADE = {
             "final": (POS, "The week is closed", "Friday&rsquo;s final file has landed, so the "
@@ -2215,35 +2311,75 @@ with tab_fcst:
             f'Step 1 &mdash; finishing the 5-Area week (LM_CT150)</div>',
             unsafe_allow_html=True)
         _front_s = f"{f5['front']:.0%}" if f5.get("front") is not None else "&mdash;"
-        st.markdown(
-            f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
-            f'<b>{f5["wtd"]:,.0f} hd</b> confirmed through the {_dow} {_cut.lower()}, '
-            f'plus an estimated <b>{f5["late_median"]:,.0f} hd</b> still to be reported '
-            f'&rarr; <b>{f5["central"]:,.0f} hd</b>, with a likely range of '
-            f'<b>{f5["low"]:,.0f}&ndash;{f5["high"]:,.0f} hd</b>.</div>',
-            unsafe_allow_html=True)
+        if _scored is not None:
+            _m5 = _scored["a5"] - _scored["f5"]
+            _in5 = bool(_scored["in5"])
+            st.markdown(
+                f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
+                f'From <b>{_scored["wtd"]:,.0f} hd</b> on the board we called '
+                f'<b>{_scored["f5"]:,.0f} hd</b>. USDA printed '
+                f'<b>{_scored["a5"]:,.0f} hd</b> &mdash; '
+                f'<b style="color:{POS if _in5 else NEG};">{abs(_m5):,.0f} hd '
+                f'{"below" if _m5 < 0 else "above"} the call '
+                f'({abs(_m5) / _scored["a5"]:.1%})</b>, '
+                f'{"inside" if _in5 else "<b>outside</b>"} the '
+                f'{_scored["f5_lo"]:,.0f}&ndash;{_scored["f5_hi"]:,.0f} hd range we gave.'
+                f'</div>', unsafe_allow_html=True)
+        else:
+            st.markdown(
+                f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
+                f'<b>{f5["wtd"]:,.0f} hd</b> confirmed through the {_dow} {_cut.lower()}, '
+                f'plus an estimated <b>{f5["late_median"]:,.0f} hd</b> still to be reported '
+                f'&rarr; <b>{f5["central"]:,.0f} hd</b>, with a likely range of '
+                f'<b>{f5["low"]:,.0f}&ndash;{f5["high"]:,.0f} hd</b>.</div>',
+                unsafe_allow_html=True)
         st.markdown(
             f'<div class="note" style="margin-bottom:14px;">The week-to-date is USDA&rsquo;s '
             f'own cumulative count, and the four daily regions summed at Friday&rsquo;s final '
             f'reproduce USDA&rsquo;s published 5-Area weekly figure <b>exactly</b> &mdash; checked '
-            f'on every week the daily window covers. So the only unknown is trade reported '
-            f'after the last cut, estimated from the <b>{f5["n"]}</b> past weeks standing at '
-            f'the same point'
-            + (f' with similar front-loading (the previous cut held {_front_s} of the current one)'
-               if f5.get("narrowed") else ' in the week')
-            + '.</div>', unsafe_allow_html=True)
+            f'on every week the daily window covers. '
+            + ('So the call above was the week-to-date plus the late trade seen in '
+               'comparable past weeks at the same point.'
+               if _scored is not None else
+               f'So the only unknown is trade reported after the last cut, estimated from '
+               f'the <b>{f5["n"]}</b> past weeks standing at the same point'
+               + (f' with similar front-loading (the previous cut held {_front_s} of the '
+                  f'current one)' if f5.get("narrowed") else ' in the week')
+               + '.')
+            + '</div>', unsafe_allow_html=True)
 
         # ── step 2 ──────────────────────────────────────────────────────────
         st.markdown(
             f'<div class="sec-header" style="border-left-color:{DEL_COLOR};">'
             f'Step 2 &mdash; 5-Area across to national (LM_CT154)</div>',
             unsafe_allow_html=True)
-        st.markdown(
-            f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
-            f'<b>{f5["central"]:,.0f} hd</b> plus the recent 5-Area-to-national gap of '
-            f'<b>{fn["gap"]:,.0f} hd</b> &rarr; <b>{fn["central"]:,.0f} hd</b>, '
-            f'range <b>{fn["low"]:,.0f}&ndash;{fn["high"]:,.0f} hd</b>.</div>',
-            unsafe_allow_html=True)
+        if _scored is not None:
+            # THE REALISED GAP IS THE WHOLE STORY OF STEP 2 and is worth
+            # printing rather than leaving the reader to subtract. It is the
+            # only part of the chain with no running total to watch, so when
+            # the national call misses this is always why.
+            _gap_used = _scored["fn"] - _scored["f5"]
+            _gap_real = _scored["an"] - _scored["a5"]
+            _mn = _scored["an"] - _scored["fn"]
+            _inn = bool(_scored["inn"])
+            st.markdown(
+                f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
+                f'We added a gap of <b>{_gap_used:,.0f} hd</b> to get '
+                f'<b>{_scored["fn"]:,.0f} hd</b>. USDA printed '
+                f'<b>{_scored["an"]:,.0f} hd</b> &mdash; '
+                f'<b style="color:{POS if _inn else NEG};">{abs(_mn):,.0f} hd '
+                f'{"below" if _mn < 0 else "above"} the call '
+                f'({abs(_mn) / _scored["an"]:.1%})</b>, '
+                f'{"inside" if _inn else "<b>outside</b>"} the range we gave. '
+                f'The gap actually came in at <b>{_gap_real:,.0f} hd</b>.</div>',
+                unsafe_allow_html=True)
+        else:
+            st.markdown(
+                f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
+                f'<b>{f5["central"]:,.0f} hd</b> plus the recent 5-Area-to-national gap of '
+                f'<b>{fn["gap"]:,.0f} hd</b> &rarr; <b>{fn["central"]:,.0f} hd</b>, '
+                f'range <b>{fn["low"]:,.0f}&ndash;{fn["high"]:,.0f} hd</b>.</div>',
+                unsafe_allow_html=True)
         st.markdown(
             f'<div class="note" style="margin-bottom:14px;">The gap is negotiated trade outside '
             f'the five areas, plus any region USDA is currently withholding. It is taken as a '
@@ -2314,9 +2450,6 @@ with tab_fcst:
         # flatter a Wednesday reading of this page roughly tenfold. See
         # scorecard.py, which also records why replaying past calls is honest
         # here when it is not for the sibling FCI scorecard.
-        board = scorecard.build_scorecard(
-            fcst_vol, head5, headn, forecast_5area, forecast_national,
-            CUT_ORDER, weeks=10)
         stats = scorecard.summarise(board)
         # Deliberately after summarise(). The accuracy line above the table
         # describes CALLS THAT HAVE BEEN SETTLED; this week has not been, so it
