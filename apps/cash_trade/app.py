@@ -16,6 +16,7 @@ from pathlib import Path
 # `snowflake_db` is not -- see CLAUDE.md on the five identical copies of that
 # one and why whichever page loads first wins.
 sys.path.insert(0, str(Path(__file__).parent))
+import leverage  # noqa: E402
 import scorecard  # noqa: E402
 
 # ── JPSI Brand ───────────────────────────────────────────────────────────────
@@ -388,6 +389,20 @@ def fetch_volume_history(stamps: str) -> pd.DataFrame:
 
     df = df.dropna(subset=["report_date"]).sort_values("report_date").reset_index(drop=True)
     return df[["report_date", "trend"] + num_cols]
+
+
+@st.cache_data(persist="disk", max_entries=8, show_spinner=False)
+def fetch_leverage(stamps: str) -> dict:
+    """
+    The four purchase-mix and committed-inventory series, full history.
+
+    `stamps` is unused in the body and is the cache key, exactly as in
+    fetch_price_history -- see there. About 3 s and 6 MB for all four
+    concurrently, which is the same order as the weekly fetches this page
+    already makes, so the hidden-tab rule costs roughly what the other tabs
+    do rather than multiplying it.
+    """
+    return leverage.load(_session)
 
 
 def combine_steer_heifer(df: pd.DataFrame) -> pd.DataFrame:
@@ -1373,8 +1388,9 @@ with c2:
 # And the hidden-tab rule: a hidden tab is hidden, NOT skipped. The Daily block
 # runs on every rerun whether or not anyone opens it, which is why its fetch is
 # one cached range request per region rather than one per day.
-tab_weekly, tab_daily, tab_fcst = st.tabs(
-    ["Weekly Cash Trade Averages", "Daily Cash Trade", "Monday Print Forecast"])
+tab_weekly, tab_daily, tab_fcst, tab_lev = st.tabs(
+    ["Weekly Cash Trade Averages", "Daily Cash Trade", "Monday Print Forecast",
+     "Packer Leverage"])
 
 with tab_weekly:
     if not load_ok:
@@ -2548,6 +2564,211 @@ with tab_fcst:
             '<b>Neither number is USDA&rsquo;s.</b> They are estimates built from USDA&rsquo;s '
             'published daily reports, and they carry no official standing until the Monday '
             'release.</div>', unsafe_allow_html=True)
+
+
+# ── Packer Leverage ──────────────────────────────────────────────────────────
+# What share of the kill packers did NOT have to bid for this week, from AMS's
+# own breakdown of slaughter by purchase type. See leverage.py for why every
+# share is computed inside LM_CT153 alone -- the negotiated PURCHASES series on
+# the other tabs is a different population on a different clock, and dividing
+# one by the other yields a number that looks like a share and is not one.
+with tab_lev:
+    st.markdown(
+        '<div class="sec-header">Packer Leverage &mdash; how much of the kill was '
+        'already bought</div>', unsafe_allow_html=True)
+
+    with st.spinner("Loading USDA purchase-mix and committed inventory…"):
+        try:
+            _lev_stamps = stamps_for(_probe, [leverage.CT142_ID, leverage.CT153_ID])
+            lev_f = fetch_leverage(_lev_stamps)
+            lev_err = ""
+        except Exception as e:
+            lev_f, lev_err = {}, str(e)
+
+    _mix = lev_f.get("mix", pd.DataFrame())
+    _L = leverage.latest(lev_f) if lev_f else {}
+
+    if lev_err:
+        st.warning("⏳ **USDA data unavailable** — the purchase-mix reports are not "
+                   "responding. Use **Refresh now** in the sidebar to retry.")
+        with st.expander("Technical details"):
+            st.code(lev_err)
+    elif _mix.empty or "mix" not in _L:
+        st.info("USDA has published no purchase-mix data for this period.")
+    else:
+        _r = _L["mix"]
+        _wk = pd.Timestamp(_r["week"])
+        _pr = _L.get("mix_prior")
+        _yr = _L.get("mix_year")
+        _pct = leverage.percentile(_mix, "negotiated_pct", _r["negotiated_pct"])
+
+        st.markdown(
+            f'<div class="note" style="margin:-4px 0 12px;">Slaughter week ending '
+            f'<b>{_wk.strftime("%b %d, %Y")}</b>, from USDA&rsquo;s own split of the kill '
+            f'by how each animal was bought (LM_CT153). This is the SLAUGHTER side &mdash; '
+            f'cattle killed that week, bought whenever they were bought. The negotiated '
+            f'volume on the other tabs is the PURCHASE side and runs on a different '
+            f'clock.</div>', unsafe_allow_html=True)
+
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            st.markdown(tile("Negotiated share of kill",
+                             f"{_r['negotiated_pct']:.1%}",
+                             (f'<div class="tile-delta-{"neg" if _r["negotiated_pct"] < _pr["negotiated_pct"] else "pos"}">'
+                              f'{"▼" if _r["negotiated_pct"] < _pr["negotiated_pct"] else "▲"} '
+                              f'{abs(_r["negotiated_pct"] - _pr["negotiated_pct"]) * 100:.1f} pt vs week ago</div>')
+                             if _pr is not None else "",
+                             "tile-conf"), unsafe_allow_html=True)
+        with c2:
+            st.markdown(tile("Already committed",
+                             f"{_r['committed_pct']:.1%}",
+                             f'<div class="tile-delta-neu">formula + forward</div>',
+                             "tile-d14"), unsafe_allow_html=True)
+        with c3:
+            _cm = _L.get("committed")
+            st.markdown(tile("Committed inventory",
+                             fmt_hd(_cm["committed"]) if _cm is not None else "—",
+                             (hd_delta_html(_cm["committed"], _L["committed_prior"]["committed"])
+                              if _cm is not None and _L.get("committed_prior") is not None else ""),
+                             "tile-del"), unsafe_allow_html=True)
+        with c4:
+            _cm = _L.get("committed")
+            st.markdown(tile("Weeks of coverage",
+                             f"{_cm['coverage_weeks']:.2f}" if _cm is not None
+                             and pd.notna(_cm["coverage_weeks"]) else "—",
+                             f'<div class="tile-delta-neu">book &divide; 4-wk ship pace</div>',
+                             "tile-neu"), unsafe_allow_html=True)
+
+        # ── what it means, in the market's own recent terms ─────────────────
+        if _pct == _pct:
+            _tight = _pct >= 0.67
+            _loose = _pct <= 0.33
+            _col = POS if _tight else (NEG if _loose else D30_COLOR)
+            _verdict = ("Packers are leaning on the cash market MORE than usual"
+                        if _tight else
+                        "Packers are leaning on the cash market LESS than usual"
+                        if _loose else
+                        "Packers are about as covered as usual")
+            _side = ("so a larger share of the week's needs has to be bid for, which "
+                     "is the feedlot-friendly end of this measure"
+                     if _tight else
+                     "so more of the week arrives on commitments already made and the "
+                     "cash market decides less of it"
+                     if _loose else
+                     "so neither side gets much help from the mix this week")
+            st.markdown(
+                f'<div style="border-left:3px solid {_col};background:#fafbfc;padding:8px 12px;'
+                f'margin:4px 0 14px;font-size:0.8rem;line-height:1.55;color:{JPSI_DARK};">'
+                f'<b style="color:{_col};">{_verdict}.</b> At '
+                f'<b>{_r["negotiated_pct"]:.1%}</b> the negotiated share sits in the '
+                f'<b>{_pct * 100:.0f}th percentile</b> of the last three years &mdash; {_side}.'
+                + (f'<br><span style="color:{MUTED};">A year ago it was '
+                   f'{_yr["negotiated_pct"]:.1%}.</span>' if _yr is not None else "")
+                + '</div>', unsafe_allow_html=True)
+
+        # ── the mix itself ──────────────────────────────────────────────────
+        st.markdown(
+            f'<div class="sec-header" style="border-left-color:{CONF_COLOR};">'
+            f'How the kill was bought</div>', unsafe_allow_html=True)
+        _bits = " &middot; ".join(
+            f'<b>{leverage.MIX_LABEL[k]}</b> {_r[k]:,.0f} hd ({_r[k + "_pct"]:.1%})'
+            for k in ("formula", "forward", "negotiated", "neg_grid"))
+        st.markdown(
+            f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
+            f'{_bits} &mdash; <b>{_r["total"]:,.0f} hd</b> in all.</div>',
+            unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="note" style="margin-bottom:12px;"><b>Negotiated grid is kept '
+            f'separate and is not folded into the headline.</b> Its base price is '
+            f'negotiated in the week, so for &ldquo;did the packer have to transact&rdquo; it '
+            f'belongs with cash &mdash; on that reading they must buy '
+            f'<b>{_r["must_buy_pct"]:.1%}</b> of the week rather than '
+            f'{_r["negotiated_pct"]:.1%}. For &ldquo;what share of the kill discovered a cash '
+            f'price&rdquo;, the convention is cash alone. Both are defensible and they '
+            f'differ by a third, so the page shows both and picks neither for you.'
+            f'</div>', unsafe_allow_html=True)
+
+        _hist = _mix[_mix["week"] >= _mix["week"].max() - pd.Timedelta(weeks=156)]
+        if not _hist.empty:
+            fig = go.Figure()
+            for key, colr in (("formula", JPSI_BLUE), ("forward", D14_COLOR),
+                              ("neg_grid", D30_COLOR), ("negotiated", NEG)):
+                fig.add_trace(go.Scatter(
+                    x=_hist["week"], y=_hist[f"{key}_pct"], name=leverage.MIX_LABEL[key],
+                    mode="lines", stackgroup="one", line=dict(width=0.5, color=colr),
+                    hovertemplate="%{x|%b %d, %Y}<br>" + leverage.MIX_LABEL[key]
+                                  + " %{y:.1%}<extra></extra>"))
+            fig.update_layout(
+                height=320, margin=dict(l=10, r=10, t=10, b=10),
+                plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
+                font=dict(family="Source Sans Pro, sans-serif", color=JPSI_DARK, size=12),
+                hovermode="x unified",
+                legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
+                xaxis=dict(showgrid=False, linecolor=BORDER),
+                yaxis=dict(title="share of kill", gridcolor="#f0f2f4", linecolor=BORDER,
+                           zeroline=False, tickformat=".0%", range=[0, 1]))
+            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+            st.markdown(
+                '<div class="note" style="margin-top:-6px;">Three years. The red band at '
+                'the top is the only part of the week that has to find a price in the '
+                'cash market.</div>', unsafe_allow_html=True)
+
+        # ── the forward book and what else is captive ───────────────────────
+        st.markdown(
+            f'<div class="sec-header" style="border-left-color:{DEL_COLOR};">'
+            f'The standing book</div>', unsafe_allow_html=True)
+        _ow, _fw, _cm = _L.get("owned"), _L.get("forward"), _L.get("committed")
+        _parts = []
+        if _cm is not None:
+            _parts.append(f'<b>{_cm["committed"]:,.0f} hd</b> committed for delivery '
+                          f'against <b>{_cm["delivered"]:,.0f} hd</b> shipped')
+        if _fw is not None:
+            _parts.append(f'a forward book of <b>{_fw["fwd_book"]:,.0f} hd</b> '
+                          f'(<b>{_fw["fwd_week"]:,.0f}</b> added this week)')
+        if _ow is not None and pd.notna(_ow["packer_owned"]):
+            _parts.append(f'<b>{_ow["packer_owned"]:,.0f} hd</b> packer-owned and fed')
+        if _parts:
+            st.markdown(
+                f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
+                + ", ".join(_parts) + '.</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="note" style="margin-bottom:14px;">Coverage is the committed book '
+            'over the <b>four-week</b> shipping pace, not last week&rsquo;s alone &mdash; a '
+            'holiday week halves the denominator and would print a coverage spike that is '
+            'just the calendar. Packer-owned cattle are the purest captive supply there '
+            'is: never bought at all.</div>', unsafe_allow_html=True)
+
+        _tbl = _mix.tail(12).sort_values("week", ascending=False).copy()
+        _tbl["Week ending"] = _tbl["week"].dt.strftime("%b %d")
+        _tbl["Negotiated %"] = _tbl["negotiated_pct"].map(lambda v: f"{v:.1%}")
+        _tbl["Neg grid %"] = _tbl["neg_grid_pct"].map(lambda v: f"{v:.1%}")
+        _tbl["Committed %"] = _tbl["committed_pct"].map(lambda v: f"{v:.1%}")
+        for k in ("formula", "forward", "negotiated", "neg_grid"):
+            _tbl[leverage.MIX_LABEL[k]] = _tbl[k].map(lambda v: f"{v:,.0f}")
+        _tbl["Total kill"] = _tbl["total"].map(lambda v: f"{v:,.0f}")
+        st.dataframe(
+            _tbl[["Week ending", "Negotiated %", "Neg grid %", "Committed %",
+                  "Negotiated cash", "Negotiated grid", "Formula", "Forward contract",
+                  "Total kill"]],
+            use_container_width=True, hide_index=True)
+
+        st.markdown(
+            '<div class="note" style="margin-top:10px;">'
+            '<b>What this is.</b> USDA breaks the slaughter it reports down by how each '
+            'animal was bought. Formula and forward cattle were priced before the week '
+            'began, so they are supply the packer never has to bid for; only the '
+            'negotiated share has to find a price now. A low negotiated share means the '
+            'packer can stand back from the cash market, and a high one means they '
+            'cannot.<br><br>'
+            '<b>The number this does NOT give you.</b> It is the share of the '
+            '<i>reported</i> kill, not of total US fed slaughter — plants outside the '
+            'mandatory reporting universe are not in the denominator. Use it as a ratio '
+            'over time, which is how it is published, rather than as a head count of the '
+            'national market.<br><br>'
+            '<b>It also lags.</b> LM_CT153 reports the PRIOR week\'s slaughter, so the '
+            'newest row here is a week behind the daily cash prices on the other tabs. '
+            'That is USDA\'s publication schedule, not a staleness bug.</div>',
+            unsafe_allow_html=True)
 
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────

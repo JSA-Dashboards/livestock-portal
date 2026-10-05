@@ -705,6 +705,59 @@ both figures — as soon as the week is in `published5`, reading the scorecard's
 own newest row so the two cannot drift apart. Step 2 also prints the
 **realised gap**, since when the national call misses that is always why.
 
+## The Packer Leverage tab
+
+Added 2026-10-05 as the **fourth tab** on Cash Cattle Trade. It answers how
+much of the week's kill packers never had to bid for, from USDA's own split of
+slaughter by purchase type. Fetching and the arithmetic are in
+`apps/cash_trade/leverage.py`; the layout is in `app.py`, the same split as
+`scorecard.py`.
+
+    LM_CT153 §B  slaughter split formula / forward / negotiated / neg grid
+    LM_CT153 §A  packer-owned slaughter
+    LM_CT153 §C  forward contract purchases, weekly and cumulative
+    LM_CT142     committed and delivered head
+
+**TWO CLOCKS, AND MIXING THEM IS THE TRAP.** LM_CT154's row dated 9/28 is
+47,138 head **purchased** in the week just ended. LM_CT153's row dated 9/28 is
+62,190 head **slaughtered** that week, bought whenever they were bought. They
+are different populations on different timelines and their ratio wanders —
+0.83, 1.04, 1.15, 1.14, 1.15, 1.32 across 2026-08-24..09-28. A "share" built
+from one over the other looks like a share, moves like a share and measures
+nothing. **Every share on the tab is computed inside LM_CT153 alone**, and a
+test asserts the module never reads slug 2481.
+
+**Section names are a PATH SEGMENT**, the trap `direct_reports.py` documents
+for MARS. The bare slug answers 200 with a near-empty row rather than an error.
+The datamart catalog lists them under **`sectionNames`** — `GET /reports` and
+read that key, rather than guessing at a name.
+
+### Four things that look wrong and are not
+
+- **Negotiated grid is NOT folded into the headline.** Its base is negotiated
+  in the week, so for "did the packer have to transact" it belongs with cash;
+  for "what share discovered a cash price" the convention is cash alone. They
+  differ by a third — 19.7% against 29.1% for w/e 2026-09-28 — so the page
+  prints the strict one, shows grid as its own band, and picks neither.
+- **The denominator is USDA's published total, not the four parts summed.**
+  They agree exactly today (0 head across 12 weeks). If USDA ever adds a fifth
+  category, a derived total would keep the shares summing to 100% while
+  describing less than the whole kill; the published one makes that visible.
+- **Coverage divides the committed book by a FOUR-WEEK shipping pace.** A
+  holiday week halves the denominator and prints a coverage spike that is only
+  the calendar.
+- **Imported head are counted as committed supply.** An imported formula steer
+  is still an animal nobody had to bid for.
+
+**It is the share of the REPORTED kill, not of US fed slaughter.** Plants
+outside mandatory reporting are not in the denominator, so read it as a ratio
+over time — which is how it is published — not as a national head count. And
+LM_CT153 reports the PRIOR week, so the tab is one week behind the daily cash
+prices on the other tabs. That is USDA's schedule, not staleness.
+
+A share is a number between 0 and 1 whether or not it is right, so none of the
+above fails loudly. `tests/test_packer_leverage.py` pins all of it.
+
 ## The Saturday Slaughter view
 
 Added 2026-10-02 as the **fifth tab**, between AMS Weekly Slaughter and Beef
