@@ -753,6 +753,67 @@ percentile. Including grid it is **7.3%** — grid and cash partly offset each
 other week to week, so the wider measure is the steadier one, which is not the
 intuitive result.
 
+### "Weeks of coverage" shipped WRONG, and the tell was read as a virtue
+
+**Corrected 2026-10-05, after a few hours live.** The tab carried a tile
+reading "Weeks of coverage · book ÷ 4-wk ship pace", at 1.21. It was not weeks
+of anything.
+
+`Committed` in LM_CT142 is head committed **during** that week — a weekly
+FLOW, not a standing stock. The daily sibling LM_CT106 settles it beyond
+argument: `acc_current_volume` accumulates within the week, resets each
+Monday, and ends on exactly the weekly figure (316,910 for w/e 09-28, 409,230
+for 10-05). So committed ÷ delivered is one flow over another, and what it
+measures is whether the book grew or drained that week. It is now called
+`signings_vs_pace` and described that way.
+
+**The evidence was in hand and was misread as a feature.** The ratio's median
+is 1.03 with a standard deviation of 0.08 across 859 weeks and sixteen years —
+reported at the time as "remarkable stability" and used to argue that a
+reading of 1.21 was a 97th-percentile outlier. Two flows in steady state is
+exactly what that distribution looks like. A stock over a weekly flow would
+swing far wider. **A series that will not move is evidence about what it is,
+not a property worth admiring.**
+
+### The standing book, which is what leverage actually needs
+
+LM_CT153 §C and its Breakdown section carry the real inventory — cattle bought
+and not yet delivered. USDA's own heading on `ams_2480.pdf` is **"Cumulative
+Total for Listed Months"**, 714,623 head on 2026-09-28, with a month-by-month
+delivery schedule and the same months a year earlier.
+
+That comparison is the leverage signal: 313,908 head committed over the next
+three delivery months against 453,610 a year ago, **−31%**, and the gap widens
+further out (Dec −47%, Jan −60%). Packers have far less captive supply coming
+than they did, which is why the negotiated share sits high.
+
+**THE MONTH LABELS REPEAT AND CANNOT BE KEYED ON.** The table spans two years,
+so `Total Sep Deliveries` appears twice — 86,305 for Sep '26 and 9,453 for
+Sep '27 — and a dict keyed on the label silently keeps the far month, then
+reports a near-month book an order of magnitude too small with nothing
+raising. Only the DETAIL rows carry a year (`Sep '26/Oct`), so the delivery
+months are read from those in order and the summary rows are zipped on by
+position. The layout is 16 delivery months × 6 basis rows, then 16 `Total`
+rows, then 16 `Last Yr` rows, each block in the same order.
+
+The audit is that the sixteen monthly totals sum to the published book figure
+**exactly** — 714,623 on 2026-09-28. `reconciles()` checks it and the page
+says so; if the row layout ever shifts, the sum stops matching instead of
+quietly mis-attributing a month.
+
+### `leverage.SCHEMA` exists because the cache serves shape, not freshness
+
+Adding the `schedule` key to `load()` changed nothing on the page: the tile
+read "—" and the whole section vanished, silently. `st.cache_data` keys on the
+decorated function's own code and arguments and **never on the modules it
+calls** — the trap recorded further up this file — and `fetch_leverage`'s body
+is one line that had not changed, so the disk cache kept handing back a dict
+from before the key existed.
+
+`leverage.SCHEMA` is passed into the cached fetch purely as part of the key.
+**Bump it whenever `load()` changes the shape of what it returns.** A reboot
+would also clear it, but only on the deployed app and only if someone knew to.
+
 ### Four things that look wrong and are not
 
 - **Negotiated grid is NOT folded into the headline.** Its base is negotiated

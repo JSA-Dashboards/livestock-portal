@@ -35,10 +35,23 @@ in the mix, and never silently picks.
 """
 from __future__ import annotations
 
+import re
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
+
+# Bump whenever load() changes the SHAPE of what it returns — a new key, a
+# renamed column, a different index. The page passes this into its cached
+# fetch, so the cache key moves with it.
+#
+# WITHOUT IT A SHAPE CHANGE SERVES THE OLD SHAPE SILENTLY. st.cache_data keys
+# on the decorated function's own code and arguments, never on the modules it
+# calls (CLAUDE.md records this costing two debugging sessions). fetch_leverage's
+# body is one line that has not changed, so adding the `schedule` key here left
+# the cache handing back a dict that lacked it — and the page rendered a tile
+# reading "—" with nothing raising anywhere.
+SCHEMA = 2
 
 LMR_BASE = "https://mpr.datamart.ams.usda.gov/services/v1.1/reports"
 
@@ -53,6 +66,7 @@ CT153_ID = 2480   # National Weekly - Prior Week Slaughter and Contract Purchase
 SEC_MIX = "B. Prior Week Formula & Contract Slaughter"
 SEC_OWNED = "A. Packer Owned Slaughter"
 SEC_FORWARD = "C. Forward Contract Purchases"
+SEC_SCHEDULE = "C. Forward Contract Purchases Breakdown"
 
 # The four ways a reported animal was bought. Domestic and imported are
 # separate columns throughout and are summed: an imported formula steer is
@@ -65,6 +79,22 @@ MIX = {
 }
 MIX_LABEL = {"formula": "Formula", "forward": "Forward contract",
              "negotiated": "Negotiated cash", "neg_grid": "Negotiated grid"}
+
+
+# The breakdown table's row layout, verified against ams_2480.pdf 2026-10-05.
+# SIXTEEN delivery months, each with six basis-month detail rows, then sixteen
+# "Total <Mon> Deliveries" rows in the same order, then sixteen
+# "Last Yr <Mon> Deliveries" rows in that same order again.
+#
+# THE MONTH LABELS REPEAT AND CANNOT BE KEYED ON. The window spans two years,
+# so "Total Sep Deliveries" appears twice — 86,305 for Sep '26 and 9,453 for
+# Sep '27 — and a dict keyed on the label silently keeps whichever came last,
+# which is the far month. Only the DETAIL rows carry a year ("Sep '26/Oct"),
+# so the delivery months are read from those in order and the summary rows are
+# zipped onto that sequence by position.
+_DETAIL = re.compile(r"^(\w{3}) '(\d{2})/(\w{3})$")
+_TOTAL = re.compile(r"^Total (\w{3}) Deliveries$")
+_LASTYR = re.compile(r"^Last Yr (\w{3}) Deliveries$")
 
 
 def _num(s: pd.Series) -> pd.Series:
@@ -121,12 +151,14 @@ def load(session_factory) -> dict:
         ("owned", CT153_ID, SEC_OWNED),
         ("forward", CT153_ID, SEC_FORWARD),
         ("committed", CT142_ID, None),
+        ("schedule", CT153_ID, SEC_SCHEDULE),
     ])
     return {
         "mix": _mix_frame(got.get("mix", [])),
         "owned": _owned_frame(got.get("owned", [])),
         "forward": _forward_frame(got.get("forward", [])),
         "committed": _committed_frame(got.get("committed", [])),
+        "schedule": _schedule_frame(got.get("schedule", [])),
     }
 
 
@@ -190,8 +222,21 @@ def _committed_frame(rows: list) -> pd.DataFrame:
     LM_CT142's committed book and what actually shipped against it.
 
     Two rows per week — `purchasing_basis` is Committed or Delivered — so this
-    pivots rather than filters. Coverage is the book divided by the delivery
-    pace: how many weeks of kill the packer has already secured.
+    pivots rather than filters.
+
+    BOTH COLUMNS ARE WEEKLY FLOWS AND NEITHER IS AN INVENTORY. `Committed` is
+    head committed DURING that week, not head standing committed; the daily
+    sibling LM_CT106 settles it, where `acc_current_volume` accumulates within
+    the week, resets each Monday, and ends the week on exactly this figure
+    (316,910 for w/e 2026-09-28, 409,230 for 10-05).
+    
+    This shipped once as "weeks of coverage" — committed over a four-week
+    delivery pace — which read as weeks of supply and is nothing of the kind.
+    The tell was there and was misread as a virtue: the ratio sits at a median
+    1.03 with a standard deviation of 0.08 across sixteen years, which is what
+    two flows in steady state look like, not a stock over a flow. What it
+    actually measures is whether the book grew or drained that week, so that is
+    what it is now called. The standing inventory is in _schedule_frame.
     """
     if not rows:
         return pd.DataFrame()
@@ -208,9 +253,116 @@ def _committed_frame(rows: list) -> pd.DataFrame:
             p[c] = float("nan")
     # Delivery pace over four weeks, not one: a holiday week halves the
     # denominator and would print a coverage spike that is the calendar.
+    # Four weeks, not one: a holiday week halves the denominator and would
+    # swing this hard on nothing but the calendar.
     pace = p["delivered"].rolling(4, min_periods=2).mean()
-    p["coverage_weeks"] = p["committed"] / pace
+    p["signings_vs_pace"] = p["committed"] / pace
     return p.sort_values("week")
+
+
+_MONTHS = {m: i for i, m in enumerate(
+    ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], start=1)}
+
+
+def _schedule_frame(rows: list) -> pd.DataFrame:
+    """
+    The forward book broken out by the month the cattle are due to be
+    delivered, against the same month a year earlier.
+
+    THIS IS THE STANDING INVENTORY, not a weekly flow. USDA's own heading on
+    ams_2480.pdf reads "Cumulative Total for Listed Months: 714,623" — cattle
+    bought and not yet delivered, summed across every month still listed. The
+    book rises as contracts are signed and steps down as a delivery month
+    completes and drops off the window.
+
+    Parsed by POSITION, never by label — see the _DETAIL / _TOTAL / _LASTYR
+    note above for why the repeated month names cannot be keyed on.
+
+    The sixteen monthly totals sum to the published book total exactly
+    (714,623 on 2026-09-28), which `reconciles()` checks and a test pins. That
+    identity is the whole audit: if the row layout ever shifts, the sum stops
+    matching rather than quietly mis-attributing a month.
+    """
+    if not rows:
+        return pd.DataFrame()
+    latest_date = None
+    for r in rows:
+        d = pd.to_datetime(r.get("report_date"), format="%m/%d/%Y", errors="coerce")
+        if d is not pd.NaT and (latest_date is None or d > latest_date):
+            latest_date = d
+    if latest_date is None:
+        return pd.DataFrame()
+    cur = [r for r in rows
+           if pd.to_datetime(r.get("report_date"), format="%m/%d/%Y",
+                             errors="coerce") == latest_date]
+
+    order, seen = [], set()
+    totals, lastyr = [], []
+    for r in cur:
+        t = (r.get("left_title") or "").strip()
+        m = _DETAIL.match(t)
+        if m:
+            key = (m.group(1), m.group(2))
+            if key not in seen:
+                seen.add(key)
+                order.append(key)
+            continue
+        if _TOTAL.match(t):
+            totals.append((_TOTAL.match(t).group(1), r))
+        elif _LASTYR.match(t):
+            lastyr.append((_LASTYR.match(t).group(1), r))
+
+    if not order or len(totals) != len(order):
+        return pd.DataFrame()
+
+    out = []
+    for i, (mon, yy) in enumerate(order):
+        tmon, trow = totals[i]
+        # The summary row's month must line up with the detail block it is
+        # being attached to, or the zip has slipped and every figure after it
+        # belongs to the wrong month.
+        if tmon != mon:
+            return pd.DataFrame()
+        lrow = lastyr[i][1] if i < len(lastyr) and lastyr[i][0] == mon else None
+        out.append({
+            "delivery": pd.Timestamp(year=2000 + int(yy), month=_MONTHS[mon], day=1),
+            "month": mon, "year": 2000 + int(yy),
+            "committed": _num(pd.Series([trow.get("cumulative_total_for_month")])).iloc[0],
+            "new_last_week": _num(pd.Series([trow.get("new_last_week")])).iloc[0],
+            "last_year": (_num(pd.Series([lrow.get("cumulative_total_for_month")])).iloc[0]
+                          if lrow else float("nan")),
+            "report_date": latest_date,
+        })
+    d = pd.DataFrame(out)
+    d["vs_last_year"] = d["committed"] / d["last_year"] - 1
+    return d
+
+
+def reconciles(schedule: pd.DataFrame, book_total: float, tol: int = 0) -> bool:
+    """Do the monthly totals add back to the book USDA published?"""
+    if schedule.empty or book_total != book_total:
+        return False
+    return abs(float(schedule["committed"].sum()) - float(book_total)) <= tol
+
+
+def near_months(schedule: pd.DataFrame, n: int = 3) -> dict:
+    """
+    The next `n` delivery months against the same months a year ago.
+
+    The near months are the ones that bear on this week's bidding: cattle
+    contracted for delivery next spring do nothing for a packer who needs a
+    kill filled on Thursday.
+    """
+    if schedule.empty:
+        return {}
+    d = schedule.head(n)
+    cur, prior = float(d["committed"].sum()), float(d["last_year"].sum())
+    if not prior or prior != prior:
+        return {}
+    return {"n": int(len(d)), "committed": cur, "last_year": prior,
+            "change": cur / prior - 1,
+            "from": d.iloc[0]["month"], "to": d.iloc[-1]["month"]}
 
 
 def latest(frames: dict) -> dict:
@@ -224,6 +376,9 @@ def latest(frames: dict) -> dict:
         out["mix"] = r
         out["mix_prior"] = prior
         out["mix_year"] = yr.iloc[-1] if not yr.empty else None
+    sch = frames.get("schedule")
+    if sch is not None and not sch.empty:
+        out["schedule"] = sch
     for key in ("owned", "forward", "committed"):
         f = frames.get(key)
         if f is not None and not f.empty:

@@ -100,22 +100,22 @@ def _committed_rows(weeks):
     return out
 
 
-def test_coverage_uses_a_four_week_pace_not_one_holiday_week():
-    """A short week halves the denominator and fakes a supply spike.
+def test_signings_vs_pace_uses_four_weeks_not_one_holiday_week():
+    """A short week halves the denominator and fakes a move in the ratio.
 
-    Thanksgiving, July 4th and Christmas all do it. Dividing a steady book by
-    one holiday week's shipments prints coverage leaping by half, which reads
-    as packers suddenly bought ahead when nothing moved but the calendar.
+    Thanksgiving, July 4th and Christmas all do it. The ratio compares two
+    weekly FLOWS — head committed during the week against head shipped — so a
+    holiday week's shipments would make new signings look like a surge when
+    nothing moved but the calendar.
     """
     weeks = [(f"0{i}/01/2026", 400_000, 350_000) for i in range(1, 5)]
     weeks.append(("05/01/2026", 400_000, 175_000))      # the holiday week
     c = lev._committed_frame(_committed_rows(weeks))
     last = c.iloc[-1]
     assert last["delivered"] == 175_000
-    # one-week coverage would be 2.29; the four-week pace keeps it near 1.3
     naive = 400_000 / 175_000
-    assert last["coverage_weeks"] < naive * 0.65
-    assert 1.2 < last["coverage_weeks"] < 1.5
+    assert last["signings_vs_pace"] < naive * 0.65
+    assert 1.2 < last["signings_vs_pace"] < 1.5
 
 
 def test_committed_and_delivered_are_pivoted_not_filtered():
@@ -214,3 +214,96 @@ def test_need_accuracy_declines_to_speak_on_a_short_series():
     """Fewer weeks than the window plus a margin is no basis for a claim."""
     assert lev.need_accuracy(_run([(70_000, 30_000)] * 5), weeks=4) == {}
     assert lev.cash_need(lev._mix_frame([])) == {}
+
+# ── the forward delivery schedule ───────────────────────────────────────────
+
+def _sched_rows(months, totals, lastyr, date="09/28/2026"):
+    """Lay the breakdown out exactly as AMS does: details, Totals, Last Yr."""
+    rows = []
+    for mon, yy in months:                       # six basis rows per month
+        for basis in ("Feb", "Apr", "Jun", "Aug", "Oct", "Dec"):
+            rows.append({"report_date": date, "left_title": f"{mon} '{yy}/{basis}",
+                         "cumulative_total_for_month": None, "new_last_week": None})
+    for (mon, _), tot in zip(months, totals):
+        rows.append({"report_date": date, "left_title": f"Total {mon} Deliveries",
+                     "cumulative_total_for_month": f"{tot:,}", "new_last_week": None})
+    for (mon, _), ly in zip(months, lastyr):
+        rows.append({"report_date": date, "left_title": f"Last Yr {mon} Deliveries",
+                     "cumulative_total_for_month": f"{ly:,}", "new_last_week": None})
+    return rows
+
+
+def test_repeated_month_labels_are_resolved_by_position_not_name():
+    """The window spans two years, so every month name appears twice.
+
+    On the real 2026-09-28 report "Total Sep Deliveries" is 86,305 for Sep '26
+    and 9,453 for Sep '27. Anything keyed on the label keeps whichever came
+    last — the far month — and then reports a near-month book an order of
+    magnitude too small, with no error anywhere.
+    """
+    months = [("Sep", "26"), ("Oct", "26"), ("Sep", "27"), ("Oct", "27")]
+    d = lev._schedule_frame(_sched_rows(months, [86_305, 117_500, 9_453, 5_963],
+                                        [108_567, 176_293, 86_305, 117_500]))
+    assert len(d) == 4
+    near = d[(d["month"] == "Sep") & (d["year"] == 2026)].iloc[0]
+    far = d[(d["month"] == "Sep") & (d["year"] == 2027)].iloc[0]
+    assert near["committed"] == 86_305        # not 9,453
+    assert far["committed"] == 9_453
+    assert near["last_year"] == 108_567
+    assert near["vs_last_year"] == pytest.approx(86_305 / 108_567 - 1)
+
+
+def test_schedule_reconciles_to_the_published_book_total():
+    """The monthly totals adding back to USDA's own figure is the audit.
+
+    On 2026-09-28 the sixteen months sum to 714,623, which is exactly the
+    "Cumulative Total for Listed Months" on the report. If the row layout ever
+    shifts, this stops matching instead of quietly mis-attributing a month.
+    """
+    months = [("Sep", "26"), ("Oct", "26"), ("Nov", "26")]
+    d = lev._schedule_frame(_sched_rows(months, [86_305, 117_500, 110_103],
+                                        [108_567, 176_293, 168_750]))
+    assert lev.reconciles(d, 313_908)
+    assert not lev.reconciles(d, 313_907)
+    assert not lev.reconciles(pd.DataFrame(), 313_908)
+
+
+def test_a_slipped_layout_returns_nothing_rather_than_wrong_months():
+    """If the Total rows stop lining up, every figure after the slip is wrong.
+
+    Returning empty makes the page say it has no schedule; mis-attributing
+    would have it print a confident table of the wrong months.
+    """
+    rows = _sched_rows([("Sep", "26"), ("Oct", "26")], [86_305, 117_500],
+                       [108_567, 176_293])
+    for r in rows:
+        if r["left_title"] == "Total Sep Deliveries":
+            r["left_title"] = "Total Mar Deliveries"      # the slip
+    assert lev._schedule_frame(rows).empty
+
+
+def test_near_months_sums_only_the_front_of_the_book():
+    """Cattle contracted for next spring do not fill a kill on Thursday."""
+    months = [("Sep", "26"), ("Oct", "26"), ("Nov", "26"), ("Dec", "26")]
+    d = lev._schedule_frame(_sched_rows(months, [86_305, 117_500, 110_103, 93_357],
+                                        [108_567, 176_293, 168_750, 177_195]))
+    n = lev.near_months(d, 3)
+    assert n["committed"] == 313_908                      # Dec excluded
+    assert n["last_year"] == 453_610
+    assert n["change"] == pytest.approx(313_908 / 453_610 - 1)
+
+
+def test_the_weekly_flow_ratio_is_no_longer_called_coverage():
+    """It was shipped as "weeks of coverage" and is not weeks of anything.
+
+    LM_CT142's Committed column is head committed DURING the week — the daily
+    sibling's acc_current_volume accumulates within the week and ends on this
+    exact figure. A median of 1.03 with sd 0.08 over sixteen years is two
+    flows in steady state, not a stock over a flow.
+    """
+    src = (ROOT / "apps" / "cash_trade" / "leverage.py").read_text(encoding="utf-8")
+    assert "coverage_weeks" not in src
+    c = lev._committed_frame(_committed_rows([(f"0{i}/01/2026", 400_000, 350_000)
+                                              for i in range(1, 6)]))
+    assert "signings_vs_pace" in c
+    assert c.iloc[-1]["signings_vs_pace"] == pytest.approx(400_000 / 350_000)
