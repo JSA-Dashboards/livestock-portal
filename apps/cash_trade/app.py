@@ -2666,6 +2666,60 @@ with tab_lev:
                    f'{_yr["negotiated_pct"]:.1%}.</span>' if _yr is not None else "")
                 + '</div>', unsafe_allow_html=True)
 
+        # ── what the ratio costs them in head ───────────────────────────────
+        # A RUN RATE, NOT A FORECAST, and the wording has to carry that. There
+        # is no published "cattle still to buy this week": the week's purchases
+        # and the week's slaughter are different populations on different
+        # clocks, so subtracting one from the other would manufacture a figure
+        # rather than measure one. What can be said honestly is how many head
+        # recent weeks each required, how much that varied, and how close the
+        # average has landed to the week that followed.
+        _need = leverage.cash_need(_mix)
+        _acc = leverage.need_accuracy(_mix)
+        if _need:
+            st.markdown(
+                f'<div class="sec-header" style="border-left-color:{NEG};">'
+                f'Cash need &mdash; head they have to transact for in a week</div>',
+                unsafe_allow_html=True)
+
+            n1, n2 = st.columns(2)
+            with n1:
+                st.markdown(tile("Negotiated cash, per week",
+                                 fmt_hd(_need["cash"]),
+                                 f'<div class="tile-delta-neu">'
+                                 f'{_need["cash_lo"]:,.0f}&ndash;{_need["cash_hi"]:,.0f} hd '
+                                 f'over {_need["weeks"]} wks</div>',
+                                 "tile-conf"), unsafe_allow_html=True)
+            with n2:
+                st.markdown(tile("Including negotiated grid",
+                                 fmt_hd(_need["must"]),
+                                 f'<div class="tile-delta-neu">'
+                                 f'{_need["must_lo"]:,.0f}&ndash;{_need["must_hi"]:,.0f} hd '
+                                 f'over {_need["weeks"]} wks</div>',
+                                 "tile-del"), unsafe_allow_html=True)
+
+            _acc_s = ""
+            if _acc.get("cash") and _acc.get("must"):
+                _acc_s = (
+                    f' Over the last {_acc["cash"]["n"]} weeks a '
+                    f'{_need["weeks"]}-week average has landed within a median '
+                    f'<b>{_acc["cash"]["median"]:.1%}</b> of the week that followed '
+                    f'({_acc["cash"]["p90"]:.0%} at the 90th percentile), and '
+                    f'<b>{_acc["must"]["median"]:.1%}</b> including grid &mdash; '
+                    f'grid and cash partly offset each other week to week, so the '
+                    f'wider measure is the steadier one.')
+            st.markdown(
+                f'<div class="note" style="margin-bottom:14px;">'
+                f'<b>This is a run rate, not a forecast of the week in front of you.</b> '
+                f'USDA publishes no &ldquo;still to buy&rdquo; figure, and the week&rsquo;s '
+                f'purchases and the week&rsquo;s slaughter are different populations on '
+                f'different clocks &mdash; subtracting one from the other would invent a '
+                f'number rather than measure one. What this says is how many head the '
+                f'{_need["weeks"]} weeks to '
+                f'<b>{_need["to"].strftime("%b %d")}</b> each required, against an average '
+                f'kill of <b>{_need["kill"]:,.0f} hd</b>.{_acc_s}</div>',
+                unsafe_allow_html=True)
+
         # ── the mix itself ──────────────────────────────────────────────────
         st.markdown(
             f'<div class="sec-header" style="border-left-color:{CONF_COLOR};">'

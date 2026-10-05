@@ -732,6 +732,27 @@ for MARS. The bare slug answers 200 with a near-empty row rather than an error.
 The datamart catalog lists them under **`sectionNames`** — `GET /reports` and
 read that key, rather than guessing at a name.
 
+### Cash need is a RUN RATE and the page has to keep saying so
+
+Added 2026-10-05 under the headline: how many head packers have to transact
+for in a week — about **71,700** negotiated cash, **103,900** including grid,
+on the four weeks to 2026-09-28.
+
+**There is no published "still to buy this week" figure and one cannot be
+derived.** The week's purchases and the week's slaughter are the two clocks
+above; subtracting one from the other invents a number rather than measuring
+one. So the tab reports what recent weeks each *required*, with the real high
+and low of those weeks rather than a standard deviation — with four
+observations a spread can be pointed at and a sigma is decoration.
+
+The honesty check is printed beside it and **computed live rather than
+hard-coded**, so the claim keeps describing the market rather than the market
+of the day it was written: over the last 52 weeks a four-week average landed
+within a median **8.3%** of the week that followed, 23% at the 90th
+percentile. Including grid it is **7.3%** — grid and cash partly offset each
+other week to week, so the wider measure is the steadier one, which is not the
+intuitive result.
+
 ### Four things that look wrong and are not
 
 - **Negotiated grid is NOT folded into the headline.** Its base is negotiated
