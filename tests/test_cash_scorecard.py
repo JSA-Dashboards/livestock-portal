@@ -36,7 +36,8 @@ def fc():
     return load_from_app(
         APP, "_week_start", "weekly_5area_head", "weekly_national_head",
         "wtd_checkpoints", "_front_of", "forecast_5area", "forecast_national",
-        consts=("CUT_ORDER", "FORECAST_GAP_WEEKS", "FORECAST_BAND_WEEKS"),
+        consts=("CUT_ORDER", "FORECAST_GAP_WEEKS", "FORECAST_BAND_WEEKS",
+                "FORECAST_MAX_ANALOGUES"),
         globals_={"pd": pd},
     )
 
@@ -292,3 +293,41 @@ def test_no_pending_row_without_a_live_forecast(fc):
     assert sc.pending_row(_vol(rows), fin,
                           pd.Series({k: v + 20000.0 for k, v in fin.items()}),
                           fc["forecast_5area"], fc["forecast_national"]).empty
+
+def test_once_printed_the_live_forecast_is_not_the_call_we_made(fc):
+    """The reason the tiles need a settled state at all.
+
+    Once Friday's final lands forecast_5area reports done=True and returns the
+    week-to-date unchanged, so its "central" IS the actual. A headline tile
+    reading that field therefore prints the answer and calls it a forecast,
+    and the call we actually made disappears from the page — which is exactly
+    what happened on 2026-10-05: the tiles read 60,063 twice while the
+    scorecard below them reported we had called 61,167.
+
+    This pins the gap between the two numbers, so a tile wired back to the
+    live forecast fails here rather than looking plausible.
+    """
+    # history settles 3,000 above its Friday cut; the live week settles 5,000
+    # above, so the replayed call and the actual cannot coincide by luck.
+    rows, finals = _history(8)
+    cur = pd.Timestamp("2026-03-02")
+    rows += _week_rows(cur, [(None, None), (None, None), (None, 36000),
+                             (None, 36000), (40000, 45000)])
+    finals = pd.concat([finals, pd.Series({cur: 45000.0})]).sort_index()
+    vol = _vol(rows)
+    nat = finals * 1.5
+
+    live = fc["forecast_5area"](vol, finals)
+    assert live["done"] is True
+    assert live["central"] == live["wtd"] == 45000     # the actual, not a call
+
+    board = sc.build_scorecard(vol, finals, nat, fc["forecast_5area"],
+                               fc["forecast_national"], fc["CUT_ORDER"], weeks=5)
+    top = board.iloc[0]
+    assert pd.Timestamp(top["week"]) == cur           # the just-printed week
+    assert bool(top.get("pending", False)) is False   # genuinely scored
+    assert top["a5"] == 45000                         # USDA's figure
+    assert top["f5"] == 43000                         # what we actually called
+    assert top["f5"] != live["central"], (
+        "the replayed call and the live 'forecast' must differ once printed, "
+        "or this test cannot catch a tile wired to the wrong one")
