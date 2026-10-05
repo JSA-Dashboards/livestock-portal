@@ -150,3 +150,67 @@ def test_percentile_refuses_a_sample_too_short_to_mean_anything():
                       for i in range(1, 6)])
     m = lev._mix_frame(rows)
     assert lev.percentile(m, "negotiated_pct", 0.2) != lev.percentile(m, "negotiated_pct", 0.2)
+
+# ── the cash need ────────────────────────────────────────────────────────────
+
+def _run(weeks_of):
+    """weeks_of: list of (neg, grid) — formula fills the rest of a 350k kill."""
+    rows = []
+    for i, (n, g) in enumerate(weeks_of, start=1):
+        rows.append(("%02d/01/2026" % i, 350_000 - n - g - 20_000, 20_000, n, g, 0, 350_000))
+    return lev._mix_frame(_mix_rows(rows))
+
+
+def test_cash_need_averages_rather_than_quoting_last_week():
+    """One week is noise; the alternative to averaging is a worse estimate.
+
+    Four weeks of 60k, 80k, 70k, 90k is a 75k run rate. Quoting the last week
+    would say 90k — 20% high — and quoting the first would say 60k. Measured
+    on the real series a four-week mean lands within a median ~8% of the week
+    that follows, which is the number the page prints beside it.
+    """
+    m = _run([(60_000, 30_000), (80_000, 30_000), (70_000, 30_000), (90_000, 30_000)])
+    n = lev.cash_need(m, weeks=4)
+    assert n["cash"] == pytest.approx(75_000)
+    assert n["cash"] != m.iloc[-1]["negotiated"]
+    # the band is the real high and low, not a sigma: with four points a
+    # spread can be pointed at and a standard deviation is decoration.
+    assert n["cash_lo"] == 60_000 and n["cash_hi"] == 90_000
+    assert n["weeks"] == 4
+
+
+def test_cash_need_reports_both_readings_of_grid():
+    """Same rule as the headline: show both, substitute neither."""
+    m = _run([(70_000, 30_000)] * 4)
+    n = lev.cash_need(m, weeks=4)
+    assert n["cash"] == pytest.approx(70_000)
+    assert n["must"] == pytest.approx(100_000)
+
+
+def test_cash_need_window_shorter_than_asked_for_is_reported_honestly():
+    """Two weeks of history must not be presented as a four-week rate."""
+    m = _run([(70_000, 30_000), (80_000, 30_000)])
+    n = lev.cash_need(m, weeks=4)
+    assert n["weeks"] == 2
+    assert n["cash"] == pytest.approx(75_000)
+
+
+def test_need_accuracy_is_measured_not_asserted():
+    """The error claim on the page must come from the data, not a constant.
+
+    A perfectly flat series has to score ~0% and a wildly swinging one has to
+    score badly, or the figure beside the run rate is decoration.
+    """
+    flat = _run([(70_000, 30_000)] * 20)
+    a = lev.need_accuracy(flat, weeks=4)
+    assert a["cash"]["median"] == pytest.approx(0.0, abs=1e-9)
+
+    swing = _run([(40_000, 30_000) if i % 2 else (100_000, 30_000) for i in range(20)])
+    b = lev.need_accuracy(swing, weeks=4)
+    assert b["cash"]["median"] > 0.15
+
+
+def test_need_accuracy_declines_to_speak_on_a_short_series():
+    """Fewer weeks than the window plus a margin is no basis for a claim."""
+    assert lev.need_accuracy(_run([(70_000, 30_000)] * 5), weeks=4) == {}
+    assert lev.cash_need(lev._mix_frame([])) == {}
