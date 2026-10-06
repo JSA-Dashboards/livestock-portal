@@ -1208,14 +1208,20 @@ PRINTS the week ending from the data. Both YTD rates are read straight off
 USDA's own Change rows -- they are not our arithmetic -- and the typed pair had
 been carried over from the previous week's deck.
 
-**The Feeder Index is the one that is not a fix.** Its row is by definition the
-first business day after CME's last published file, which makes it the least
-complete row in the series, and it firms up as auctions report: 2026-10-05 read
-**337.79** mid-afternoon, **337.66** that evening and **337.22** the next
-morning. None of those is wrong. It is the same figure the index dashboard
-shows at the same moment, which is what matters, and the tab's caption says so
--- expect it to be the question Ross asks when the slide disagrees with what
-he typed an hour earlier.
+**The Feeder Index is the one that is not a fix, and the first explanation of
+it here was wrong.** This section said 337.79 was a mid-afternoon reading of
+the 10/05 row that firmed to 337.22 overnight. It was not. `fci_daily` has
+**09/25 at 337.794 and 10/05 at 337.218**: the 337.79 on the hand-typed slide
+is the PREVIOUS DECK'S figure, carried forward a week and a half, exactly like
+the two YTD rates above it.
+
+The firming-up effect is real and separate -- the 10/05 row read 337.66 in the
+morning of 10/06 and 337.22 that afternoon, because the headline index date is
+the first business day after CME's last published file and auctions are still
+reporting into it. Both things are true; attributing the stale figure to the
+live effect is what went wrong, and it went into a shipped caption before
+anyone checked the series. **Check `fci_daily` before explaining a difference
+in this number.**
 
 ### The 5-day average changed, and it changed the LETTER too
 

@@ -37,11 +37,13 @@ being wrong:
                       Both are read straight off USDA's own Change rows, so
                       they are not our arithmetic -- the hand-typed pair had
                       been carried over from the previous week's slide.
-    Feeder Index      337.79 against 337.66. Not an error either way: the
-                      headline index date is the first business day after
-                      CME's last file, so its row is still filling when the
-                      slide is built on Monday afternoon. It moves after you
-                      type it.
+    Feeder Index      337.79 against 337.22. NOT a firming-up of the same
+                      row -- 337.79 is the 2026-09-25 value, carried forward
+                      from the previous week's deck. fci_daily has 10/05 at
+                      337.218 and 09/25 at 337.794. The row DOES firm up
+                      separately (10/05 read 337.66 then 337.22 during
+                      2026-10-06), and conflating the two is the mistake
+                      this entry exists to stop repeating.
 
 The 5-day average is the five sessions BEFORE the one being reported. See
 `sources.fetch_cutout`, which carried the other convention until 2026-10-06.
@@ -208,10 +210,10 @@ def rows(ctx: dict) -> list:
     # "(est)" because this row is OUR reconstruction, not CME's published
     # index, and it is the least complete row in the series by definition --
     # the headline date is the first business day after CME's last file, so
-    # auctions are still reporting into it. It read 337.79 on the afternoon of
-    # 2026-10-05, 337.66 that evening and 337.22 the next morning. The tag is
+    # auctions are still reporting into it. The tag is
     # Ross's and it is the honest label for a figure that moves after you
-    # print it.
+    # print it: the 10/05 row read 337.66 in the morning and 337.22 in the
+    # afternoon of 10/06.
     out.append((0, f"Feeder Index: {money(fci.get('value'))} (est)"))
 
     weekly = slaughter.get("weekly") or {}

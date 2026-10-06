@@ -1295,8 +1295,8 @@ with tab_slide:
         "are USDA's own published Change rows rather than ours, and the "
         "**Feeder Index firms up through the day** — its row is the first "
         "business day after CME's last file, so it is the least complete one "
-        "and keeps moving as auctions report. On 2026-10-05 it read 337.79 "
-        "mid-afternoon and 337.22 the next morning. Rebuild late for the "
+        "and keeps moving as auctions report: on 2026-10-06 the 10/5 row went "
+        "337.66 to 337.22 between morning and afternoon. Rebuild late for the "
         "steadier number; it is the same figure the index dashboard shows at "
         "any given moment.")
 
