@@ -1062,7 +1062,8 @@ def _rundown_pptx(rows_tuple) -> bytes:
     """
     buf = io.BytesIO()
     rundown.build_pptx(list(rows_tuple), buf,
-                       logo=REPO / "assets" / "logo-full.png")
+                       logo=REPO / "assets" / "logo-full.png",
+                       agmarket=REPO / "assets" / "agmarket-net.png")
     return buf.getvalue()
 
 

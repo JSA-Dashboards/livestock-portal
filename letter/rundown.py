@@ -205,7 +205,14 @@ def rows(ctx: dict) -> list:
     out.append((0, f"Choice/Select spread: {money(_diff(choice.get('value'), select.get('value')))}"))
     out.append((1, f"Choice & Higher- {pct1(grading.get('pct'))}"))
 
-    out.append((0, f"Feeder Index: {money(fci.get('value'))}"))
+    # "(est)" because this row is OUR reconstruction, not CME's published
+    # index, and it is the least complete row in the series by definition --
+    # the headline date is the first business day after CME's last file, so
+    # auctions are still reporting into it. It read 337.79 on the afternoon of
+    # 2026-10-05, 337.66 that evening and 337.22 the next morning. The tag is
+    # Ross's and it is the honest label for a figure that moves after you
+    # print it.
+    out.append((0, f"Feeder Index: {money(fci.get('value'))} (est)"))
 
     weekly = slaughter.get("weekly") or {}
     beef = slaughter.get("beef_production") or {}
@@ -270,43 +277,63 @@ def freshness(ctx: dict, today: date = None) -> dict:
 SLIDE_W_IN = 13.333
 SLIDE_H_IN = 7.5
 
-# Point size per indent level, matching the hand-typed slide's taper.
+# ONE FONT, ONE SIZE, ONE SPACING -- Ross's house format, specified 2026-10-06.
 #
-# THESE ARE SET BY THE VERTICAL BUDGET, not by taste. The body box runs from
-# BODY_TOP to BODY_BOT and the logo sits below it; at 20/17/15/14 the 18 rows
-# came to about 6.1in, ran past the box and printed the last line THROUGH the
-# logo. A point off each level buys roughly 0.33in, which is one wrapped line
-# of headroom for a week whose carcass line runs long.
+# An earlier version tapered the size by indent level (19/16/14/13) and let
+# PowerPoint put extra space before a top-level bullet, which is what the deck
+# does by default. Both are wrong here: the slide is read at a glance on a
+# projector and an even grey block reads faster than a hierarchy of sizes.
+# Every run is Aptos 16 and every paragraph carries the same space_after, so
+# the gap between a sub-bullet and the next heading is identical to the gap
+# between two sub-bullets.
 #
 # Deliberately fixed rather than autofit: a placeholder that shrinks to fit
 # would give a different type size whenever the content grew by a line, and a
-# slide that is subtly smaller than last week's is the sort of thing nobody
-# reports and everybody notices.
-_SIZES = {0: 19, 1: 16, 2: 14, 3: 13}
-# Left margin per level, in inches. The bullet hangs back into _HANG.
-_MARGIN_IN = {0: 0.28, 1: 0.74, 2: 1.20, 3: 1.66}
-_HANG_IN = 0.26
+# slide subtly smaller than last week's is the sort of thing nobody reports
+# and everybody notices.
+FONT = "Aptos"
+BODY_PT = 16
+TITLE_PT = 36
+SPACE_AFTER_PT = 4
 
-# Where the body starts and where the logo sits. Kept as module constants so
-# the test can do the collision arithmetic without rendering anything.
-BODY_TOP_IN = 0.95
-LOGO_TOP_IN = 6.80
-LOGO_H_IN = 0.50
+# The one underlined row. There is exactly one heading on this slide, so
+# naming it beats inferring "looks like a heading" from the text.
+HEADING = "Last week's cash trade"
+# Left margin per level, in inches, measured off Ross's own slide: the bullets
+# sit at 0.42 / 0.92 / 1.43 / 1.93in from the sheet edge. The box starts at
+# BODY_LEFT_IN and these are relative to it; the bullet hangs back into _HANG.
+_MARGIN_IN = {0: 0.35, 1: 0.87, 2: 1.37, 3: 1.88}
+_HANG_IN = 0.23
+
+# Where things sit. Module constants so the test can do the collision
+# arithmetic without rendering anything -- see test_the_text_cannot_print
+# _through_the_logo, which exists because it once did.
+BODY_LEFT_IN = 0.30
+BODY_TOP_IN = 0.72
+LOGO_TOP_IN = 6.72
+LOGO_H_IN = 0.52
+AGMARKET_H_IN = 0.44        # wider mark, so matched by eye at a smaller height
 
 
 def text_height_in(rows_: list) -> float:
     """
     Estimated rendered height of the body, in inches.
 
-    An ESTIMATE on purpose -- the real height depends on the font metrics
-    PowerPoint uses, which nothing here can see. 1.22x the point size is the
-    usual single-line spacing for Calibri and is close enough to catch the
-    failure that actually happened (text running 0.05in into the logo). It is
-    used by the test, not by the layout, so a slightly wrong constant costs a
-    margin of safety rather than a wrong slide.
+    An ESTIMATE on purpose -- the real height depends on font metrics
+    PowerPoint resolves at open time, which nothing here can see. 1.22x the
+    point size is the usual single-line spacing and is close enough to catch
+    the failure that actually happened (text running 0.05in into the logo).
+    The test uses it; the layout does not, so a slightly wrong constant costs
+    a margin of safety rather than a wrong slide.
     """
-    pts = sum(_SIZES.get(lvl, 13) * 1.22 + 2 for lvl, _ in rows_)
-    return pts / 72.0
+    if not rows_:
+        return 0.0
+    # (n-1) gaps, not n -- the last paragraph's space_after hangs off the
+    # bottom of the text and is not part of its height. Counting it
+    # overstated the block by a row's worth of gap and made the clearance
+    # test stricter than the slide.
+    line = BODY_PT * 1.22
+    return ((len(rows_) - 1) * (line + SPACE_AFTER_PT) + line) / 72.0
 
 
 def _bullet(para, lvl: int):
@@ -327,7 +354,7 @@ def _bullet(para, lvl: int):
     from pptx.oxml.ns import qn
 
     pPr = para._p.get_or_add_pPr()
-    pPr.set("marL", str(Inches(_MARGIN_IN.get(lvl, 1.66)).emu))
+    pPr.set("marL", str(Inches(_MARGIN_IN.get(lvl, 1.88)).emu))
     pPr.set("indent", str(-Inches(_HANG_IN).emu))
     for tag in ("a:buNone", "a:buChar", "a:buAutoNum"):
         for el in pPr.findall(qn(tag)):
@@ -338,7 +365,7 @@ def _bullet(para, lvl: int):
     pPr.append(buChar)
 
 
-def build_pptx(rows_: list, out, title: str = TITLE, logo=None):
+def build_pptx(rows_: list, out, title: str = TITLE, logo=None, agmarket=None):
     """
     Write the slide to `out` -- a path, or any file-like object.
 
@@ -365,17 +392,17 @@ def build_pptx(rows_: list, out, title: str = TITLE, logo=None):
     prs.slide_height = Inches(SLIDE_H_IN)
     slide = prs.slides.add_slide(prs.slide_layouts[6])   # 6 == blank
 
-    tb = slide.shapes.add_textbox(Inches(0.45), Inches(0.22),
-                                  Inches(SLIDE_W_IN - 0.9), Inches(0.72))
-    p = tb.text_frame.paragraphs[0]
-    run = p.add_run()
+    tb = slide.shapes.add_textbox(Inches(BODY_LEFT_IN), Inches(0.10),
+                                  Inches(SLIDE_W_IN - 0.6), Inches(0.60))
+    run = tb.text_frame.paragraphs[0].add_run()
     run.text = title
-    run.font.size = Pt(36)
+    run.font.name = FONT
+    run.font.size = Pt(TITLE_PT)
     run.font.bold = True
     run.font.color.rgb = RGBColor(0x00, 0x00, 0x00)
 
-    body = slide.shapes.add_textbox(Inches(0.45), Inches(0.95),
-                                    Inches(SLIDE_W_IN - 0.9), Inches(5.9))
+    body = slide.shapes.add_textbox(Inches(BODY_LEFT_IN), Inches(BODY_TOP_IN),
+                                    Inches(SLIDE_W_IN - 0.6), Inches(5.9))
     tf = body.text_frame
     tf.word_wrap = True
     first = True
@@ -383,26 +410,37 @@ def build_pptx(rows_: list, out, title: str = TITLE, logo=None):
         para = tf.paragraphs[0] if first else tf.add_paragraph()
         first = False
         para.level = lvl
-        para.space_after = Pt(2)
+        # SAME GAP EVERYWHERE. space_before is left unset on purpose: the deck
+        # default puts extra space ahead of a top-level bullet, which made the
+        # gap before "Choice-" larger than the one before "5-day average-".
+        para.space_after = Pt(SPACE_AFTER_PT)
+        para.space_before = Pt(0)
         _bullet(para, lvl)
         r = para.add_run()
         r.text = text
-        r.font.size = Pt(_SIZES.get(lvl, 14))
+        r.font.name = FONT
+        r.font.size = Pt(BODY_PT)
+        r.font.underline = (text == HEADING)
         r.font.color.rgb = RGBColor(0x00, 0x00, 0x00)
 
-    if logo is not None:
+    # LOGO_TOP must clear the bottom of the text. At 0.62in high and 0.95in
+    # off the floor the logo sat at 6.55in while the rows ran to 6.60in, so
+    # the last line printed straight through the wordmark. It rendered without
+    # complaint and only a picture showed it; tests/test_rundown.py now does
+    # that arithmetic instead.
+    for art, left, height in (
+            (logo, BODY_LEFT_IN, LOGO_H_IN),
+            (agmarket, None, AGMARKET_H_IN)):      # None == flush right
+        if art is None:
+            continue
         try:
-            # LOGO_TOP must clear the bottom of the text. At 0.62in high and
-            # 0.95in off the floor the logo sat at 6.55in and the 18 rows ran
-            # to 6.60in, so the last line -- "Beef Production -5.2% YTD" --
-            # printed straight through the wordmark. It rendered without
-            # complaint and only a picture of the slide showed it.
-            # tests/test_rundown.py now asserts the clearance arithmetically
-            # so nobody has to take that picture again.
-            slide.shapes.add_picture(str(logo), Inches(0.45),
-                                     Inches(LOGO_TOP_IN), height=Inches(LOGO_H_IN))
+            pic = slide.shapes.add_picture(
+                str(art), Inches(left if left is not None else 0),
+                Inches(LOGO_TOP_IN), height=Inches(height))
+            if left is None:
+                pic.left = Inches(SLIDE_W_IN - BODY_LEFT_IN) - pic.width
         except Exception:
-            # A missing or unreadable logo must not cost Ross the deck.
+            # A missing or unreadable mark must not cost Ross the deck.
             pass
 
     # A str/Path goes to disk; anything else is a file-like (BytesIO on the

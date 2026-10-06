@@ -78,7 +78,7 @@ EXPECTED = [
     (1, "5-day average- 358.14."),
     (0, "Choice/Select spread: 19.69"),
     (1, "Choice & Higher- 87.3%"),
-    (0, "Feeder Index: 337.66"),
+    (0, "Feeder Index: 337.66 (est)"),
     (0, "Slaughter -7.5% YTD"),
     (0, "Beef Production -5.2% YTD"),
 ]
@@ -222,6 +222,77 @@ def test_every_paragraph_gets_a_real_bullet_glyph():
         assert pPr.get("marL") and pPr.get("indent")
 
 
+def _body_paragraphs(logo=None, agmarket=None):
+    from pptx import Presentation
+    buf = io.BytesIO()
+    rundown.build_pptx(rundown.rows(CTX), buf, logo=logo, agmarket=agmarket)
+    buf.seek(0)
+    prs = Presentation(buf)
+    shapes = prs.slides[0].shapes
+    body = [s for s in shapes if s.has_text_frame][1]
+    return prs, shapes, body.text_frame.paragraphs
+
+
+def test_every_run_is_aptos_sixteen():
+    """
+    ONE FONT, ONE SIZE -- Ross's house format, specified 2026-10-06. An
+    earlier version tapered 19/16/14/13 by indent level, which is what the
+    deck does by default and is not what this slide uses.
+    """
+    pytest.importorskip("pptx")
+    from pptx.util import Pt
+    _, _, paras = _body_paragraphs()
+    for p in paras:
+        for r in p.runs:
+            assert r.font.name == "Aptos", f"{r.text!r} is {r.font.name}"
+            assert r.font.size == Pt(16), f"{r.text!r} is {r.font.size}"
+
+
+def test_the_spacing_is_identical_on_every_paragraph():
+    """
+    "spacing- everything needs to be the same". PowerPoint's default puts
+    extra space BEFORE a top-level bullet, so the gap above "Choice-" came
+    out larger than the gap above "5-day average-". space_before is pinned
+    to zero as well as space_after, because leaving it unset is what let the
+    deck default back in.
+    """
+    pytest.importorskip("pptx")
+    from pptx.util import Pt
+    _, _, paras = _body_paragraphs()
+    assert {p.space_after for p in paras} == {Pt(rundown.SPACE_AFTER_PT)}
+    assert {p.space_before for p in paras} == {Pt(0)}
+
+
+def test_only_the_heading_is_underlined():
+    pytest.importorskip("pptx")
+    _, _, paras = _body_paragraphs()
+    underlined = [p.text for p in paras
+                  if any(r.font.underline for r in p.runs)]
+    assert underlined == [rundown.HEADING]
+
+
+def test_both_marks_sit_on_the_slide_without_overlapping():
+    """
+    John Stewart bottom-left, AgMarket.Net bottom-right. They are pulled from
+    the real deck rather than cropped from a screenshot, so they are the
+    full-resolution originals.
+    """
+    pytest.importorskip("pptx")
+    jsa = REPO / "assets" / "logo-full.png"
+    agm = REPO / "assets" / "agmarket-net.png"
+    assert jsa.exists() and agm.exists()
+    prs, shapes, _ = _body_paragraphs(logo=jsa, agmarket=agm)
+    pics = sorted((s for s in shapes if s.shape_type == 13),
+                  key=lambda s: s.left)
+    assert len(pics) == 2, "expected both marks"
+    left, right = pics
+    assert left.left < right.left
+    assert left.left + left.width < right.left, "the two marks overlap"
+    assert right.left + right.width <= prs.slide_width, "AgMarket runs off the sheet"
+    for pic in pics:
+        assert pic.top + pic.height <= prs.slide_height
+
+
 def test_the_deck_is_sixteen_by_nine():
     """python-pptx's default template is 4:3 and would letterbox inside the
     weekly deck."""
@@ -244,7 +315,7 @@ def test_the_slide_carries_every_figure_as_text():
     buf.seek(0)
     text = "\n".join(s.text_frame.text for s in Presentation(buf).slides[0].shapes
                      if s.has_text_frame)
-    for probe in ("88,019", "+33,747", "379.38", "19.69", "87.3%", "337.66",
+    for probe in ("88,019", "+33,747", "379.38", "19.69", "87.3%", "337.66 (est)",
                   "-7.5% YTD", "-5.2% YTD", "979#", "9/19/26"):
         assert probe in text, probe
 
