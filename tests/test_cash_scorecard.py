@@ -331,3 +331,61 @@ def test_once_printed_the_live_forecast_is_not_the_call_we_made(fc):
     assert top["f5"] != live["central"], (
         "the replayed call and the live 'forecast' must differ once printed, "
         "or this test cannot catch a tile wired to the wrong one")
+
+def test_an_empty_new_week_does_not_rescore_history_from_zero(fc):
+    """Every Tuesday the live checkpoint is a Monday where nothing has traded.
+
+    Scoring the last ten weeks at THAT point replays each from an empty base,
+    so every estimate collapses to the same figure — the median late trade
+    added to nothing — every row grades "weak", and the accuracy reads an
+    order of magnitude worse than the calls those weeks really produced.
+
+    Observed live on 2026-10-06: the tiles reported the settled Sep 28 week at
+    60,897 against USDA's 60,063, while the table underneath said 49,062 for
+    the same week. Same week, two "we called" figures, one screen — the exact
+    contradiction the settled tiles were added to remove.
+
+    A checkpoint nobody would ever forecast from is not one worth scoring at.
+    """
+    rows, finals = _history(10)
+    # a fresh week with a single Monday publication and nothing in it
+    newwk = pd.Timestamp("2026-03-16")
+    rows += [(newwk, "Nebraska", "afternoon", "wtd", 0.0)]
+    vol = _vol(rows)
+    nat = finals * 1.5
+
+    live = fc["forecast_5area"](vol, finals)
+    assert pd.Timestamp(live["week"]) == newwk and live["wtd"] == 0
+
+    board = sc.build_scorecard(vol, finals, nat, fc["forecast_5area"],
+                               fc["forecast_national"], fc["CUT_ORDER"], weeks=5)
+    assert not board.empty
+    # scored where the calls were MADE — the Friday cut, wtd 40,000 — not at
+    # the empty Monday, which would put every wtd at 0 and every call equal.
+    assert (board["wtd"] == 40000).all(), (
+        "history was rescored from the empty new week")
+    assert board["f5"].nunique() == 1 and board.iloc[0]["f5"] == 43000
+    assert (board["grade"] != "weak").all()
+
+
+def test_the_table_and_the_settled_tiles_quote_the_same_call(fc):
+    """They read the same row, so they cannot disagree — pin that they do.
+
+    This is the invariant both 2026-10-05 and 2026-10-06 broke from opposite
+    directions: first the tiles overwrote the call with the actual, then the
+    table rescored it at a checkpoint the call never stood at.
+    """
+    rows, finals = _history(10)
+    cur = pd.Timestamp("2026-03-16")
+    rows += _week_rows(cur, [(None, None), (None, None), (None, 36000),
+                             (None, 36000), (40000, 45000)])
+    finals = pd.concat([finals, pd.Series({cur: 45000.0})]).sort_index()
+    vol = _vol(rows)
+
+    board = sc.build_scorecard(vol, finals, finals * 1.5, fc["forecast_5area"],
+                               fc["forecast_national"], fc["CUT_ORDER"], weeks=5)
+    top = board.iloc[0]
+    assert pd.Timestamp(top["week"]) == cur
+    # what the tiles show IS this row — one object, so one number
+    assert top["f5"] == 43000 and top["a5"] == 45000
+    assert top["wtd"] == 40000

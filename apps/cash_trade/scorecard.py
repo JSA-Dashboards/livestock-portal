@@ -88,6 +88,47 @@ def _checkpoints_before(vol: pd.DataFrame, week: pd.Timestamp, weekday: int,
     return before[-1] if before else None
 
 
+def _previous_week_checkpoint(vol: pd.DataFrame, week: pd.Timestamp,
+                              cut_order: dict):
+    """
+    The last checkpoint of the most recent week before `week` that traded.
+
+    Used when the live week is still empty. Returns the final pre-print
+    publication of that earlier week — Friday's 1:30 pm cut where a Friday
+    final exists, because the final IS the answer and scoring against it
+    measures nothing (the same reason build_scorecard steps back when done).
+    """
+    # Derived from `vol` directly rather than through the page's
+    # wtd_checkpoints: this module is handed the forecast functions, not the
+    # app's helpers, and importing them would be the circular dependency the
+    # whole pass-them-in design exists to avoid.
+    if vol.empty:
+        return None
+    v = vol[vol["period"] == "wtd"].copy()
+    if v.empty:
+        return None
+    v["wk"] = v["trade_date"] - pd.to_timedelta(v["trade_date"].dt.weekday, unit="D")
+    v = v[v["wk"] < week]
+    if v.empty:
+        return None
+    v["head"] = pd.to_numeric(v["head"], errors="coerce").fillna(0.0)
+    traded = v.groupby("wk")["head"].sum()
+    traded = traded[traded > 0]
+    if traded.empty:
+        return None
+    last_week = traded.index.max()
+    w = v[v["wk"] == last_week]
+    pairs = sorted({(int(d.weekday()), int(cut_order.get(c, 0)))
+                    for d, c in zip(w["trade_date"], w["cut"])})
+    if not pairs:
+        return None
+    # Friday's FINAL is the answer, not a forecast of it — step back one, the
+    # same rule the `done` branch above applies.
+    if pairs[-1] == (4, cut_order.get("morning", 1)) and len(pairs) > 1:
+        return pairs[-2]
+    return pairs[-1]
+
+
 def build_scorecard(vol: pd.DataFrame, published5: pd.Series, national: pd.Series,
                     forecast_5area, forecast_national, cut_order: dict,
                     weeks: int = 10) -> pd.DataFrame:
@@ -118,6 +159,30 @@ def build_scorecard(vol: pd.DataFrame, published5: pd.Series, national: pd.Serie
         if earlier is None:
             return pd.DataFrame()
         weekday, order = earlier
+
+    # ...AND THE SAME PROBLEM ARRIVES FROM THE OTHER END EVERY TUESDAY.
+    #
+    # Once a new trading week opens, the live checkpoint is Monday with a
+    # week-to-date of 0 — nothing has traded yet. Scoring the last ten weeks
+    # at THAT point replays every one of them from an empty base, so each
+    # estimate collapses to the same number (the median late trade added to
+    # nothing), every row grades "weak", and the accuracy reads 23% when the
+    # calls those weeks actually produced were a median 1.5% out.
+    #
+    # Worse, it contradicts the tiles. On 2026-10-06 the tiles reported the
+    # settled Sep 28 week — called 60,897 against USDA's 60,063, scored where
+    # the call was really made — while the table underneath said 49,062 for
+    # that same week, scored at a Monday that had not happened when we called
+    # it. Same week, two "we called" figures, one screen.
+    #
+    # So a checkpoint nobody would ever forecast from is not a checkpoint worth
+    # scoring at. When the live week has not started, step back to the last one
+    # that produced a real call, which is also the one the tiles are showing.
+    if not live.get("done") and not live.get("wtd"):
+        prior = _previous_week_checkpoint(vol, cur_week, cut_order)
+        if prior is None:
+            return pd.DataFrame()
+        weekday, order = prior
 
     # Only weeks USDA has printed can be scored, and published5 holds exactly
     # those -- so the live week belongs in the list once its figure lands,
