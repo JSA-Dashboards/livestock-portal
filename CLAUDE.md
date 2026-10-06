@@ -758,6 +758,43 @@ for MARS. The bare slug answers 200 with a near-empty row rather than an error.
 The datamart catalog lists them under **`sectionNames`** — `GET /reports` and
 read that key, rather than guessing at a name.
 
+### Currentness, and why there is no days-on-feed number
+
+Added 2026-10-06, the third leg of the tab. **There is no published
+days-on-feed series.** NASS carries on-feed inventory, placements and
+marketings and nothing by days fed — the "120+ days" figure analysts quote is
+derived from the placement flow, not reported. Nor does AMS publish a
+showlist: zero of its 151 reports is showlist-adjacent, because a showlist is
+a private communication between a feedyard and the buyers it invites and never
+enters mandatory reporting.
+
+So the weekly stand-in is **carcass weight**, which arrives every Monday
+rather than once a month. Cattle held past their window put on weight, so
+weights above trend mean feedyards are behind and the showlist is bigger than
+a head count suggests.
+
+**It costs no new request.** `price_df` is already pulled for the Weekly tab
+and `weight_range_avg` rides along on LM_CT150 back to 2004.
+
+**AGAINST TREND, NOT AGAINST LAST YEAR, and that is the whole correctness of
+it.** Fed cattle have got heavier for two decades — genetics, feeding
+efficiency, cheap corn — so a raw year-ago delta counts ordinary drift as
+market signal. On 2026-10-05 live weight was +67 lb on the year, of which
+about +7 is drift; against a trend fitted on the SAME ISO WEEK of the prior
+eight years it is **+86 lb**, which is the number worth acting on. Fitting on
+the same week also removes the season without a separate adjustment.
+
+Eight years, because the drift is secular and slow and a short fit mistakes a
+run of heavy years for the baseline — exactly the error the measure exists to
+avoid. Too little history and `weight_context` returns no trend at all rather
+than a fitted line through four points.
+
+**It currently disagrees with the forward book, and that is the market, not a
+bug.** Weights +86 lb above trend say cattle are backing up and the packer can
+wait; the book down 31% on the year says he is short of committed supply and
+cannot. Both are true. The tab shows both rather than averaging them into a
+score that would hide the tension.
+
 ### Cash need is a RUN RATE and the page has to keep saying so
 
 Added 2026-10-05 under the headline: how many head packers have to transact

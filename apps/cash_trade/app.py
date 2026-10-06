@@ -2848,6 +2848,101 @@ with tab_lev:
                 'and is not a measure of supply on hand; the standing inventory is the '
                 'forward book above.</div>', unsafe_allow_html=True)
 
+        # ── how current the cattle are ──────────────────────────────────────
+        # The third leg of leverage, and the one with no published series
+        # behind it. NASS carries on-feed inventory, placements and
+        # marketings but NOTHING by days fed — the "120+ days" figure analysts
+        # quote is derived, not published. The weekly tell is carcass weight:
+        # cattle held past their window get heavier, so weights running above
+        # trend mean feedyards are not current and showlists are bigger than
+        # the head count alone suggests.
+        #
+        # NO NEW REQUEST. price_df is already fetched for the Weekly tab and
+        # `weight_range_avg` rides along on it, back to 2004.
+        _wts = leverage.weight_frame(price_df)
+        _wl = leverage.weight_context(_wts, "Live")
+        _wd = leverage.weight_context(_wts, "Dressed")
+        if _wl.get("vs_trend") is not None:
+            st.markdown(
+                f'<div class="sec-header" style="border-left-color:{D14_COLOR};">'
+                f'How current the cattle are &mdash; weight against its own trend</div>',
+                unsafe_allow_html=True)
+
+            w1, w2, w3 = st.columns(3)
+            with w1:
+                st.markdown(tile("Live weight",
+                                 f"{_wl['weight']:,.0f} lb",
+                                 hd_delta_html(_wl["weight"], _wl["year_ago"]).replace(" hd", " lb"),
+                                 "tile-d14"), unsafe_allow_html=True)
+            with w2:
+                _d = _wl["vs_trend"]
+                st.markdown(tile("Live vs trend",
+                                 f"{_d:+,.0f} lb",
+                                 f'<div class="tile-delta-neu">trend says '
+                                 f'{_wl["expected"]:,.0f} lb</div>',
+                                 "tile-conf"), unsafe_allow_html=True)
+            with w3:
+                st.markdown(tile("Dressed vs trend",
+                                 f"{_wd['vs_trend']:+,.0f} lb" if _wd.get("vs_trend") is not None else "—",
+                                 (f'<div class="tile-delta-neu">{_wd["weight"]:,.0f} lb, trend '
+                                  f'{_wd["expected"]:,.0f}</div>') if _wd.get("expected") else "",
+                                 "tile-del"), unsafe_allow_html=True)
+
+            _heavy = _wl["vs_trend"] > 0
+            _col = NEG if _heavy else POS
+            st.markdown(
+                f'<div style="border-left:3px solid {_col};background:#fafbfc;padding:8px 12px;'
+                f'margin:4px 0 12px;font-size:0.8rem;line-height:1.55;color:{JPSI_DARK};">'
+                f'<b style="color:{_col};">Cattle are '
+                f'{"heavier" if _heavy else "lighter"} than trend by '
+                f'{abs(_wl["vs_trend"]):,.0f} lb.</b> '
+                + ('Cattle held past their window put on weight, so this is feedyards '
+                   'running behind — the showlist is bigger than a head count says and '
+                   'the packer can afford to wait.'
+                   if _heavy else
+                   'Feedyards are current, so there is less standing inventory behind the '
+                   'showlist than usual and the packer has less room to wait.')
+                + f'<br><span style="color:{MUTED};">Up {_wl["vs_year_ago"]:+,.0f} lb on the '
+                f'year, of which about {_wl["slope"]:+,.0f} lb is the ordinary drift that '
+                f'happens every year &mdash; fitted on the same week of the last '
+                f'{_wl["n"]} years, so the season is not in it.</span></div>',
+                unsafe_allow_html=True)
+
+            _hist = _wts[_wts["report_date"] >= _wts["report_date"].max()
+                         - pd.Timedelta(weeks=156)]
+            if not _hist.empty and "Live" in _hist:
+                fig3 = go.Figure()
+                fig3.add_trace(go.Scatter(
+                    x=_hist["report_date"], y=_hist["Live"], name="Live weight",
+                    mode="lines", line=dict(color=JPSI_BLUE, width=2),
+                    hovertemplate="%{x|%b %d, %Y}<br>%{y:,.0f} lb<extra></extra>"))
+                fig3.update_layout(
+                    height=280, margin=dict(l=10, r=10, t=10, b=10),
+                    plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
+                    font=dict(family="Source Sans Pro, sans-serif", color=JPSI_DARK, size=12),
+                    hovermode="x unified", showlegend=False,
+                    xaxis=dict(showgrid=False, linecolor=BORDER),
+                    yaxis=dict(title="lb, live", gridcolor="#f0f2f4", linecolor=BORDER,
+                               zeroline=False, tickformat=","))
+                fig3.add_hline(y=_wl["expected"], line_dash="dot", line_color=MUTED,
+                               annotation_text="trend for this week",
+                               annotation_position="top left")
+                st.plotly_chart(fig3, use_container_width=True,
+                                config={"displayModeBar": False})
+
+            st.markdown(
+                '<div class="note" style="margin-top:-6px;margin-bottom:14px;">'
+                '<b>There is no published days-on-feed series.</b> NASS carries on-feed '
+                'inventory, placements and marketings, and nothing by days fed — the '
+                '"120+ days" figure analysts quote is derived from the placement flow, '
+                'not reported. Weight is the weekly stand-in and it has the advantage of '
+                'arriving every Monday rather than once a month.<br><br>'
+                '<b>Against trend, not against last year.</b> Fed cattle have got heavier '
+                'for two decades, so a raw year-ago comparison counts ordinary drift as '
+                'market signal. The trend here is fitted on the same ISO week of prior '
+                'years, which removes the season as well.</div>',
+                unsafe_allow_html=True)
+
         _tbl = _mix.tail(12).sort_values("week", ascending=False).copy()
         _tbl["Week ending"] = _tbl["week"].dt.strftime("%b %d")
         _tbl["Negotiated %"] = _tbl["negotiated_pct"].map(lambda v: f"{v:.1%}")
