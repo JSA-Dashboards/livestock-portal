@@ -2797,26 +2797,45 @@ with tab_lev:
                 + '</div>', unsafe_allow_html=True)
 
             _s = _sch.head(12).copy()
+            _lbl = [f"{m} '{str(y)[2:]}" for m, y in zip(_s["month"], _s["year"])]
             fig2 = go.Figure()
+            # THE YEAR-AGO BARS WERE DRAWN IN `BORDER` AND WERE EFFECTIVELY
+            # INVISIBLE — the same near-white used for table rules and axis
+            # lines. The series was plotted and nobody could see it, which is
+            # the same thing as not plotting it: Ross asked for a year-ago
+            # comparison on a chart that already had one. A data series needs
+            # a data colour; chrome colours are for chrome.
             fig2.add_trace(go.Bar(
-                x=[f"{m} '{str(y)[2:]}" for m, y in zip(_s["month"], _s["year"])],
-                y=_s["last_year"], name="A year ago",
-                marker_color=BORDER,
-                hovertemplate="%{x}<br>a year ago %{y:,.0f} hd<extra></extra>"))
+                x=_lbl, y=_s["last_year"], name="A year ago",
+                marker=dict(color="#aeb6c0",
+                            line=dict(color="#8d95a0", width=1)),
+                hovertemplate="a year ago %{y:,.0f} hd<extra></extra>"))
             fig2.add_trace(go.Bar(
-                x=[f"{m} '{str(y)[2:]}" for m, y in zip(_s["month"], _s["year"])],
-                y=_s["committed"], name="Committed now",
+                x=_lbl, y=_s["committed"], name="Committed now",
                 marker_color=DEL_COLOR,
-                hovertemplate="%{x}<br>committed %{y:,.0f} hd<extra></extra>"))
+                customdata=_s["vs_last_year"],
+                hovertemplate="committed %{y:,.0f} hd"
+                              "<br>%{customdata:+.1%} vs a year ago<extra></extra>"))
+            # The shortfall is the story, so it gets its own readable row under
+            # the axis rather than being left for the reader to subtract.
+            # Above the taller (year-ago) bar, not at y=0 — at the zero line
+            # they sit on top of the month labels and neither can be read.
+            fig2.add_trace(go.Scatter(
+                x=_lbl, y=_s["last_year"], mode="text",
+                text=[f"{v:+.0%}" if v == v else "" for v in _s["vs_last_year"]],
+                textposition="top center",
+                textfont=dict(size=10, color=NEG),
+                showlegend=False, hoverinfo="skip"))
             fig2.update_layout(
-                height=300, margin=dict(l=10, r=10, t=10, b=10), barmode="overlay",
+                height=330, margin=dict(l=10, r=10, t=26, b=10), barmode="overlay",
                 plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
                 font=dict(family="Source Sans Pro, sans-serif", color=JPSI_DARK, size=12),
                 hovermode="x unified",
                 legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
                 xaxis=dict(title="delivery month", showgrid=False, linecolor=BORDER),
                 yaxis=dict(title="head", gridcolor="#f0f2f4", linecolor=BORDER,
-                           zeroline=False, tickformat=","))
+                           zeroline=False, tickformat=",",
+                           rangemode="tozero"))
             st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
 
             st.markdown(
