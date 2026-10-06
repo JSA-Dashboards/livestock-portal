@@ -625,6 +625,32 @@ and it is the part with no observable running total.
   earns its keep here, where it beats front-loading outright, which is why it
   is computed but never used to select.
 
+### The scorecard's checkpoint must follow the page, not the clock
+
+**Broken twice in two days, from opposite directions, and both times the tell
+was the tiles and the table disagreeing about the same week.**
+
+The scorecard replays each past week at the SAME point in the week the page is
+standing at, so the accuracy figure describes the number above it. On a
+Wednesday that is right. On a Tuesday it is not: the live week has opened, the
+only publication is a Monday cut with a week-to-date of **0**, and replaying
+ten weeks from an empty base collapses every estimate to one figure — the
+median late trade added to nothing — grades every row "weak", and reports a
+23% median miss for calls that were really 1.5% out.
+
+Seen live 2026-10-06. The tiles showed the settled Sep 28 week, called 60,897
+against USDA's 60,063. The table underneath showed **49,062** for that same
+week. Both were honestly computed; together they were nonsense.
+
+`_previous_week_checkpoint` now steps back to the last week that actually
+traded whenever the live week is still empty, which is also the checkpoint the
+settled tiles are using — so the two cannot drift apart. **A checkpoint nobody
+would ever forecast from is not a checkpoint worth scoring at.**
+
+The pair of failures is worth keeping together: 10-05 had the tiles overwrite
+the call with the actual, 10-06 had the table rescore it at a point the call
+never stood at. Same invariant, opposite ends. Two tests pin it.
+
 ### The suppression interaction is what moves it most
 
 When USDA withholds a region's daily volume for confidentiality it publishes
