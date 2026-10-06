@@ -82,7 +82,8 @@ for _name in _ALLOWED_SECRETS:
 
 from letter import build as letter_build  # noqa: E402
 from letter import (archive, commentary, config, draft_store, headlines,  # noqa: E402
-                    mailbox, onthisday, render, rundown, settle_log, topdf)
+                    mailbox, onthisday, render, rundown, settle_log,
+                    sterling, topdf)
 
 # ...then .env, for anything the secrets did not supply.
 #
@@ -1310,5 +1311,73 @@ with tab_slide:
         type="primary",
     )
     st.caption(
-        "One 16:9 slide, black text on white, John Stewart mark bottom-left — "
-        "drop it straight into the weekly deck.")
+        "One 16:9 slide, black text on white, both marks along the bottom — "
+        "drop it straight into the weekly deck as slide 3.")
+
+    # -- slide 7: Sterling ----------------------------------------------------
+    #
+    # A NETWORK CALL IN A TAB THAT RUNS WHETHER OR NOT IT IS ON SCREEN, so it
+    # is cached for an hour. Sterling publishes roughly weekly; an hour is the
+    # same deal the Saturday Slaughter view already takes for its MARS fetch.
+    st.divider()
+    st.markdown("#### Sterling slide (deck slide 7)")
+
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def _sterling_data():
+        return sterling.fetch()
+
+    @st.cache_data(show_spinner=False)
+    def _sterling_pptx(payload) -> bytes:
+        buf = io.BytesIO()
+        rundown.build_sterling_pptx(payload, buf,
+                                    logo=REPO / "assets" / "logo-full.png",
+                                    agmarket=REPO / "assets" / "agmarket-net.png")
+        return buf.getvalue()
+
+    _st_data = _sterling_data()
+    if _st_data.get("error"):
+        st.warning(f"Sterling tracker unavailable — {_st_data['error']}")
+    else:
+        _we = _st_data.get("week_ending")
+        st.caption(
+            f"From **{_st_data.get('subject', 'the Profit Tracker')}**, received "
+            f"{_st_data.get('received')}. Week ending "
+            f"{rundown.short_date(_we) if _we else rundown.MISSING}.")
+
+        # Sterling's figures are REPRODUCED, never recomputed or reconciled
+        # against AMS -- see letter/sterling.py. Where their own rows
+        # disagree, say so rather than quietly repairing their data.
+        for _note in sterling.anomalies(_st_data):
+            st.warning(f"Sterling's own figures: {_note}")
+
+        _mrows = rundown.sterling_rows(_st_data)
+        st.markdown(rundown.as_markdown(_mrows))
+
+        _w = _st_data.get("weekly", {})
+        if _w:
+            _hdr = rundown._col_header(_st_data)
+            st.table({
+                "": ["Cattle Slaughter", "Steer & Heifer",
+                     "Fed Plant Capacity Utilization", "Cows",
+                     "Cow Plant Capacity Utilization"],
+                **{_hdr[i + 1]: [
+                    f"{_w.get(k, [None]*4)[i]:,.0f}" if _w.get(k) and k in
+                    ("cattle_slaughter", "steer_heifer", "cows")
+                    else (f"{_w.get(k, [None]*4)[i]:.1f}%" if _w.get(k) else "—")
+                    for k in ("cattle_slaughter", "steer_heifer", "fed_capacity",
+                              "cows", "cow_capacity")]
+                   for i in range(4)},
+            })
+
+        st.download_button(
+            "Download Sterling slide",
+            data=_sterling_pptx(_st_data),
+            file_name=f"Cattle Market Rundown — Sterling {_rd_stamp}.pptx",
+            mime=("application/vnd.openxmlformats-officedocument"
+                  ".presentationml.presentation"),
+        )
+        st.caption(
+            f"Margins, both tables and the *{sterling.ATTRIBUTION}* line, at "
+            "the deck's own coordinates. The tables are **real PowerPoint "
+            "tables**, not the pasted screenshots the hand-built slide uses, "
+            "so they stay sharp and the figures stay selectable.")

@@ -307,14 +307,20 @@ HEADING = "Last week's cash trade"
 _MARGIN_IN = {0: 0.35, 1: 0.87, 2: 1.37, 3: 1.88}
 _HANG_IN = 0.23
 
-# Where things sit. Module constants so the test can do the collision
-# arithmetic without rendering anything -- see test_the_text_cannot_print
-# _through_the_logo, which exists because it once did.
-BODY_LEFT_IN = 0.30
-BODY_TOP_IN = 0.72
-LOGO_TOP_IN = 6.72
-LOGO_H_IN = 0.52
-AGMARKET_H_IN = 0.44        # wider mark, so matched by eye at a smaller height
+# Where things sit. MEASURED OFF THE REAL DECK (slide 3 of JSA Weekly Cattle
+# Slides 9.28.26.pptx) rather than chosen, so a generated slide drops into the
+# deck without nudging. Module constants so the test can do the collision
+# arithmetic without rendering anything -- see
+# test_the_text_cannot_print_through_the_logo, which exists because it once did.
+TITLE_LEFT_IN = 0.18
+TITLE_TOP_IN = -0.05        # the deck really does hang the title box off the top
+BODY_LEFT_IN = 0.32
+BODY_TOP_IN = 0.59
+# Both marks are 2.67in wide in the deck; heights differ because the artwork
+# does. Positioned by their own left edges, not mirrored, for the same reason.
+LOGO_LEFT_IN, LOGO_TOP_IN, LOGO_W_IN = 0.07, 6.72, 2.67
+AGMARKET_LEFT_IN, AGMARKET_TOP_IN, AGMARKET_W_IN = 10.49, 6.89, 2.67
+LOGO_H_IN = 0.73            # kept for the clearance test; the deck's own height
 
 
 def text_height_in(rows_: list) -> float:
@@ -367,44 +373,65 @@ def _bullet(para, lvl: int):
     pPr.append(buChar)
 
 
-def build_pptx(rows_: list, out, title: str = TITLE, logo=None, agmarket=None):
-    """
-    Write the slide to `out` -- a path, or any file-like object.
+# -- slide chrome, shared by both builders ------------------------------------
 
-    Takes ROWS, not ctx, so the writer knows nothing about where the figures
-    came from and the page can memoise on the rows alone. A hidden Streamlit
-    tab still executes every rerun, so without that the letter page would
-    rebuild a PowerPoint file on every keystroke in the commentary boxes.
-
-    A BLANK LAYOUT WITH EXPLICIT TEXT BOXES, not a title+content placeholder.
-    The placeholder layout autofits text by shrinking it, so a week with a long
-    carcass line would silently come out in a different size from last week's
-    slide -- the sort of difference nobody reports and everybody notices. Fixed
-    boxes and fixed sizes mean every week's slide is the same slide.
-
-    Imported lazily so that a missing python-pptx breaks the download button
-    and nothing else on the page.
-    """
+def _deck():
     from pptx import Presentation
-    from pptx.dml.color import RGBColor
-    from pptx.util import Inches, Pt
-
+    from pptx.util import Inches
     prs = Presentation()
     prs.slide_width = Inches(SLIDE_W_IN)
     prs.slide_height = Inches(SLIDE_H_IN)
-    slide = prs.slides.add_slide(prs.slide_layouts[6])   # 6 == blank
+    return prs
 
-    tb = slide.shapes.add_textbox(Inches(BODY_LEFT_IN), Inches(0.10),
-                                  Inches(SLIDE_W_IN - 0.6), Inches(0.60))
+
+def _titled_slide(prs, title: str):
+    """A blank slide with the deck's title box on it.
+
+    A BLANK LAYOUT, not a title+content placeholder. The placeholder layout
+    autofits by shrinking text, so a week with one extra line would come out
+    in a different size from last week's -- the sort of difference nobody
+    reports and everybody notices.
+    """
+    from pptx.dml.color import RGBColor
+    from pptx.util import Inches, Pt
+
+    slide = prs.slides.add_slide(prs.slide_layouts[6])   # 6 == blank
+    tb = slide.shapes.add_textbox(Inches(TITLE_LEFT_IN), Inches(TITLE_TOP_IN),
+                                  Inches(SLIDE_W_IN - 1.2), Inches(0.83))
     run = tb.text_frame.paragraphs[0].add_run()
     run.text = title
     run.font.name = FONT
     run.font.size = Pt(TITLE_PT)
     run.font.bold = True
     run.font.color.rgb = RGBColor(0x00, 0x00, 0x00)
+    return slide
 
-    body = slide.shapes.add_textbox(Inches(BODY_LEFT_IN), Inches(BODY_TOP_IN),
-                                    Inches(SLIDE_W_IN - 0.6), Inches(5.9))
+
+def _marks(slide, logo=None, agmarket=None):
+    """Both wordmarks at the deck's own coordinates. A missing file is skipped
+    rather than allowed to cost the whole deck."""
+    from pptx.util import Inches
+    for art, left, top, width in (
+            (logo, LOGO_LEFT_IN, LOGO_TOP_IN, LOGO_W_IN),
+            (agmarket, AGMARKET_LEFT_IN, AGMARKET_TOP_IN, AGMARKET_W_IN)):
+        if art is None:
+            continue
+        try:
+            slide.shapes.add_picture(str(art), Inches(left), Inches(top),
+                                     width=Inches(width))
+        except Exception:
+            pass
+
+
+def _bullets(slide, rows_, left=None, top=None, underline=None):
+    """The bulleted body, one font and one gap throughout."""
+    from pptx.dml.color import RGBColor
+    from pptx.util import Inches, Pt
+
+    body = slide.shapes.add_textbox(
+        Inches(BODY_LEFT_IN if left is None else left),
+        Inches(BODY_TOP_IN if top is None else top),
+        Inches(SLIDE_W_IN - 0.6), Inches(5.9))
     tf = body.text_frame
     tf.word_wrap = True
     first = True
@@ -412,9 +439,9 @@ def build_pptx(rows_: list, out, title: str = TITLE, logo=None, agmarket=None):
         para = tf.paragraphs[0] if first else tf.add_paragraph()
         first = False
         para.level = lvl
-        # SAME GAP EVERYWHERE. space_before is left unset on purpose: the deck
-        # default puts extra space ahead of a top-level bullet, which made the
-        # gap before "Choice-" larger than the one before "5-day average-".
+        # SAME GAP EVERYWHERE. space_before is pinned as well as space_after:
+        # the deck default puts extra space ahead of a top-level bullet, which
+        # made the gap before "Choice-" larger than before "5-day average-".
         para.space_after = Pt(SPACE_AFTER_PT)
         para.space_before = Pt(0)
         _bullet(para, lvl)
@@ -422,30 +449,195 @@ def build_pptx(rows_: list, out, title: str = TITLE, logo=None, agmarket=None):
         r.text = text
         r.font.name = FONT
         r.font.size = Pt(BODY_PT)
-        r.font.underline = (text == HEADING)
+        r.font.underline = (text == (HEADING if underline is None else underline))
         r.font.color.rgb = RGBColor(0x00, 0x00, 0x00)
+    return body
 
-    # LOGO_TOP must clear the bottom of the text. At 0.62in high and 0.95in
-    # off the floor the logo sat at 6.55in while the rows ran to 6.60in, so
-    # the last line printed straight through the wordmark. It rendered without
-    # complaint and only a picture showed it; tests/test_rundown.py now does
-    # that arithmetic instead.
-    for art, left, height in (
-            (logo, BODY_LEFT_IN, LOGO_H_IN),
-            (agmarket, None, AGMARKET_H_IN)):      # None == flush right
-        if art is None:
-            continue
-        try:
-            pic = slide.shapes.add_picture(
-                str(art), Inches(left if left is not None else 0),
-                Inches(LOGO_TOP_IN), height=Inches(height))
-            if left is None:
-                pic.left = Inches(SLIDE_W_IN - BODY_LEFT_IN) - pic.width
-        except Exception:
-            # A missing or unreadable mark must not cost Ross the deck.
-            pass
 
+def _save(prs, out):
     # A str/Path goes to disk; anything else is a file-like (BytesIO on the
     # page, which never touches the container's filesystem).
     prs.save(str(out) if isinstance(out, (str, pathlib.Path)) else out)
     return out
+
+
+def build_pptx(rows_: list, out, title: str = TITLE, logo=None, agmarket=None):
+    """
+    The bulleted rundown (deck slide 3), written to `out`.
+
+    Takes ROWS, not ctx, so the writer knows nothing about where the figures
+    came from and the page can memoise on the rows alone. A hidden Streamlit
+    tab still executes every rerun, so without that the letter page would
+    rebuild a PowerPoint file on every keystroke in the commentary boxes.
+
+    python-pptx is imported lazily so a missing wheel breaks the download
+    button and nothing else on the page.
+    """
+    prs = _deck()
+    slide = _titled_slide(prs, title)
+    _bullets(slide, rows_)
+    # LOGO_TOP must clear the bottom of the text. At 0.62in high and 0.95in
+    # off the floor the logo sat at 6.55in while the rows ran to 6.60in, so
+    # the last line printed straight through the wordmark. It rendered
+    # without complaint and only a picture showed it; tests/test_rundown.py
+    # now does that arithmetic instead.
+    _marks(slide, logo, agmarket)
+    return _save(prs, out)
+
+
+# -- slide 7: the Sterling Profit Tracker -------------------------------------
+#
+# Same title as the bulleted rundown -- "Cattle Market Rundown" is the section
+# name in the weekly deck and sits on five of its thirteen slides, not one.
+# This is the one carrying the margins and the two Sterling tables.
+#
+# THE TABLES ARE NATIVE, NOT PASTED IMAGES. The hand-built slide carries them
+# as screenshots: ppt/media/image9.png is 603x102 stretched to 6.28in, which
+# is why it looks soft on a projector. Real table shapes stay sharp at any
+# size, and the numbers stay selectable so a reader can check one.
+
+STERLING_TABLE_1 = (0.32, 3.92, 6.28, 1.06)     # left, top, width, height (in)
+STERLING_TABLE_2 = (0.32, 5.19, 6.26, 0.96)
+ATTRIB_POS = (0.24, 6.41, 6.27, 0.30)
+TABLE_PT = 9
+ATTRIB_PT = 12
+
+
+def _money_acct(v) -> str:
+    """Sterling's own convention: a loss is (335.15), never -335.15."""
+    v = _f(v)
+    if v is None:
+        return MISSING
+    return f"({abs(v):,.2f})" if v < 0 else f"{v:,.2f}"
+
+
+def sterling_rows(data: dict) -> list:
+    """
+    The margins block, as (level, text) pairs.
+
+    Mirrors the hand-built slide, with one deliberate difference: that slide
+    writes "Last year-" under Feedlot and "Last Year-" under Packer. The
+    capital is a slip, not a distinction, so both read "Last year-" here.
+    """
+    w = (data or {}).get("weekly", {})
+    out = []
+    for key, label, suffix in (("feedlot_margin", "Feedlot Margins-", " (Unhedged)"),
+                               ("packer_margin", "Packer Margins-", "")):
+        vals = w.get(key) or [None] * 4
+        out.append((0, label))
+        for col, v in zip(("Current", "Last week", "Last month", "Last year"), vals):
+            tail = suffix if col == "Current" else ""
+            out.append((1, f"{col}- {_money_acct(v)}{tail}"))
+    return out
+
+
+def _table(slide, pos, header, body_rows):
+    from pptx.dml.color import RGBColor
+    from pptx.util import Inches, Pt
+
+    left, top, width, height = pos
+    shape = slide.shapes.add_table(len(body_rows) + 1, len(header),
+                                   Inches(left), Inches(top),
+                                   Inches(width), Inches(height))
+    tbl = shape.table
+    # First column carries the labels and needs most of the width.
+    tbl.columns[0].width = Inches(width * 0.40)
+    for i in range(1, len(header)):
+        tbl.columns[i].width = Inches(width * 0.60 / (len(header) - 1))
+
+    def put(cell, text, bold=False, right=False):
+        from pptx.enum.text import PP_ALIGN
+        cell.margin_left = cell.margin_right = Inches(0.03)
+        cell.margin_top = cell.margin_bottom = 0
+        p = cell.text_frame.paragraphs[0]
+        if right:
+            p.alignment = PP_ALIGN.RIGHT
+        r = p.add_run()
+        r.text = text
+        r.font.name = FONT
+        r.font.size = Pt(TABLE_PT)
+        r.font.bold = bold
+        r.font.color.rgb = RGBColor(0x00, 0x00, 0x00)
+
+    for c, text in enumerate(header):
+        put(tbl.cell(0, c), text, bold=True, right=c > 0)
+    for r_i, row in enumerate(body_rows, start=1):
+        for c, (text, bold) in enumerate(row):
+            put(tbl.cell(r_i, c), text, bold=bold, right=c > 0)
+    return shape
+
+
+def _col_header(data: dict) -> list:
+    """
+    ['September 26, 2026', 'Week Ago', 'Month Ago', 'Year Ago'].
+
+    Built by hand rather than with strftime: the no-pad day directive is %-d
+    on Linux and %#d on Windows, and this runs on both.
+    """
+    we = (data or {}).get("week_ending")
+    first = f"{we.strftime('%B')} {we.day}, {we.year}" if we is not None else MISSING
+    # Leading blank: column 0 carries the row labels, as it does in Sterling's
+    # own table, so the header has FIVE cells for four columns of figures.
+    return ["", first, "Week Ago", "Month Ago", "Year Ago"]
+
+
+def build_sterling_pptx(data: dict, out, title: str = TITLE,
+                        logo=None, agmarket=None):
+    """
+    Slide 7 of the weekly deck, from one parsed Profit Tracker.
+
+    Every figure is Sterling's and is reproduced, not recomputed -- see
+    letter/sterling.py for why that rule is absolute here. The attribution
+    line is written unconditionally for the same reason.
+    """
+    from pptx.dml.color import RGBColor
+    from pptx.util import Inches, Pt
+
+    from . import sterling
+
+    prs = _deck()
+    slide = _titled_slide(prs, title)
+    _bullets(slide, sterling_rows(data), underline="\x00")   # nothing underlined
+
+    w = (data or {}).get("weekly", {})
+    a = (data or {}).get("annual", {})
+
+    def cells(key, fmt):
+        vals = w.get(key) or [None] * 4
+        return [(fmt(v), False) for v in vals]
+
+    head = lambda v: MISSING if _f(v) is None else f"{_f(v):,.0f}"
+    pct = lambda v: MISSING if _f(v) is None else f"{_f(v):.1f}%"
+
+    _table(slide, STERLING_TABLE_1, _col_header(data), [
+        [("Cattle Slaughter", True)] + cells("cattle_slaughter", head),
+        [("     Steer & Heifer", False)] + cells("steer_heifer", head),
+        [("          Fed Plant Capacity Utilization", False)] + cells("fed_capacity", pct),
+        [("     Cows", False)] + cells("cows", head),
+        [("          Cow Plant Capacity Utilization", False)] + cells("cow_capacity", pct),
+    ])
+
+    years = (data or {}).get("annual_years") or []
+    as_of = (data or {}).get("annual_as_of")
+    # Sterling's own header string where we have it -- they write "Sept."
+    label = (data or {}).get("annual_label") or "Annual Projections"
+    ahead = [label] + ([f"{years[0]}*"] + years[1:] if years else [MISSING] * 4)
+    arow = lambda key, name: [(name, False)] + [
+        (_money_acct(v), False) for v in (a.get(key) or [None] * 4)]
+    _table(slide, STERLING_TABLE_2, ahead, [
+        arow("cow_calf_margin", "   Cow-Calf Margin ($ / cow)"),
+        arow("feedlot_margin", "   Feedlot Margin ($ / head)"),
+        arow("packer_margin", "   Packer Margin ($ / head)"),
+    ])
+
+    left, top, width, height = ATTRIB_POS
+    tb = slide.shapes.add_textbox(Inches(left), Inches(top),
+                                  Inches(width), Inches(height))
+    r = tb.text_frame.paragraphs[0].add_run()
+    r.text = sterling.ATTRIBUTION
+    r.font.name = FONT
+    r.font.size = Pt(ATTRIB_PT)
+    r.font.color.rgb = RGBColor(0x00, 0x00, 0x00)
+
+    _marks(slide, logo, agmarket)
+    return _save(prs, out)

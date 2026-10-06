@@ -1190,6 +1190,92 @@ the split.
 slide's own rows (`_rundown_pptx`). Without it the page writes a PowerPoint
 file on every keystroke in the commentary boxes.
 
+### Slide 7, and the Sterling Profit Tracker
+
+Added 2026-10-06. `letter/sterling.py` fetches John Nalivka's weekly PDF from
+the mailbox and parses it; `rundown.build_sterling_pptx` renders deck slide 7
+from it. One PDF carries everything on that slide: the feedlot and packer
+margins, the weekly slaughter table with Sterling's own plant capacity
+utilisation, and the annual projections.
+
+**"Cattle Market Rundown" IS A SECTION NAME, NOT A SLIDE.** It titles five of
+the thirteen slides in the weekly deck -- 3, 4, 7, 11 and 12. Slide 3 is the
+bulleted rundown; slide 7 is this one. An earlier pass here conflated them and
+criticised figures on slide 7 as hand-typed when they were a pasted screenshot
+(`ppt/media/image9.png`). Check the slide number before attributing anything.
+
+**THE DATA IS SOMEONE ELSE'S AND THAT CHANGES THE RULES.** Sterling is a paid
+subscription and the PDF says "considered proprietary material".
+
+- **Reproduce, never recompute.** AMS publishes its own weekly split and it
+  disagrees -- for w/e 2026-09-26, Steers/Heifers 382,000 and Cows/Bulls
+  102,000 against Sterling's 395,428 and 82,280. Sterling's figures do not
+  always reconcile against each other either, and they are still printed
+  exactly. Substituting AMS would produce a table that is neither source's.
+  A test asserts `sterling.py` never imports the USDA fetchers.
+- **The attribution is part of the slide.** "Margins compiled by Sterling
+  Marketing, Inc." is written unconditionally.
+- **The test fixture is SYNTHETIC.** This repo is public. The fixture copies
+  the tracker's layout and none of its numbers; committing a real one would
+  publish Sterling's product.
+
+**AMS DOES NOT HAVE THESE FIGURES AT ALL**, which is worth not re-deriving:
+201 weeks of *Actual Slaughter Under Federal Inspection* (3658, section
+`Report FIS Cattle`, back to 2022-11-19) contain none of the slide's class
+figures -- not 395,428, 82,280, 447,720, 451,300, 84,422 or 76,518. The AMS
+estimates in 3208 `/Report Livestock Class` are rounded to thousands and sum
+to the SJ_LS712 total exactly; Sterling's do not sum to their own total,
+being 6,292 head short. Different methodology, not a defect.
+
+**What it fixes.** The hand-typed slide for 2026-09-28 read "Packer Margins -
+Last week- 117.37" where the tracker says **137.37** -- one digit, in a client
+deck, in the row directly above Sterling's own attribution line.
+
+Four parsing traps, each with a test:
+
+- **Take the LAST FOUR numeric tokens on a row, never the first.** Labels
+  carry footnote markers and ranges -- "Beef Cutout 1 ($ / cwt)", "Cow-Calf
+  Margin 3($ / cow)", "Feeder Steer (Ok City 750-800 lb...)" -- and a
+  leading-token rule reads a footnote as a price.
+- **A row yielding fewer than four values returns None, not a padded list.**
+  Padding still renders and shifts every column silently.
+- **Parentheses are negative.** ($335.15) is a loss. Reading it as positive
+  turns the worst feedlot margin in two years into a profit.
+- **The annual block repeats two labels** ("Feedlot Margin", "Packer Margin")
+  and its header line carries FIVE four-digit years, because the as-of date
+  contains one. Both are parsed from the block's own section.
+
+Sterling's abbreviations are kept verbatim -- they write "Sept.", which no
+locale's strptime accepts and which `strftime('%b')` would render "Sep".
+Reformatting their header is the same class of mistake as recomputing their
+figures.
+
+**The tables are generated as real PowerPoint tables**, not the pasted
+screenshots the hand-built slide uses. `image9.png` is 603x102 stretched to
+6.28in, which is why it is soft on a projector; a native table stays sharp and
+keeps the figures selectable. Geometry is measured off the real deck, so a
+generated slide drops in without nudging.
+
+**The mailbox fetch is cached for an hour**, because the tab it lives in runs
+whether or not it is on screen. Sterling publishes roughly weekly, so an hour
+is generous -- the same deal the Saturday Slaughter view takes for its MARS
+fetch.
+
+### The mailbox is connected — that entry was stale
+
+The "In flight" note below says Azure admin consent is pending for "JSA Letter
+- email read", blocking the four subscription digests. **It was granted at
+some point before 2026-10-06**: `mailbox.token(interactive=False)` returns a
+token silently and a Graph search against `jnalivka@fmtc.com` returns a
+hundred messages. Nothing needed changing in the code. Two consequences: the
+headline candidate panel has the digests it was documented as lacking, and the
+Sterling fetch above is possible at all.
+
+One Graph quirk, since it costs a round trip to rediscover: `$filter` on
+`from/emailAddress/address` returns **400 InefficientFilter**. Use
+`$search: "from:<addr> <subject words>"` instead. `$skip` is not supported
+alongside `$search` either -- it returns zero rows rather than an error.
+
 ### What the slide fixed, and the one number that keeps moving
 
 Four figures on the hand-typed 2026-10-05 deck were wrong, and all four were
@@ -1627,12 +1713,14 @@ number is the error this whole section is about.
   every build, so the weekly change stops depending on their history once a
   letter has been built on a Friday. Deleting `letter/data/` no longer restarts
   it — the log is mirrored to Snowflake and `settle_log.sync()` pulls it back.
-- **Azure admin consent is pending** for the app registration "JSA Letter -
-  email read" (delegated `Mail.Read`). Until it is granted, the headline
-  candidate panel runs without the four subscription digests, which show one
-  line saying the mailbox is not connected. It now also blocks the one thing
-  that would back-fill the letters published before 2026-09-24 — Sent Items is
-  the only record of those. No code change is needed when it lands.
+- **Azure admin consent LANDED** for "JSA Letter - email read" (delegated
+  `Mail.Read`), some time before 2026-10-06. This bullet said it was pending
+  for a fortnight after it was not. `mailbox.token(interactive=False)` returns
+  a token silently and Graph answers for `jnalivka@fmtc.com`; no code change
+  was needed, exactly as predicted. The headline candidate panel therefore has
+  its four subscription digests, and the Sterling slide 7 work above depends
+  on it. Back-filling the letters published before 2026-09-24 from Sent Items
+  is now possible and has not been done.
 - **One open call left with Ross.** Whether Friday should print a region that
   never established a test all week — the shared cash block omits it, where
   Friday's old block said "South: Undefined", and on a weekly letter that
