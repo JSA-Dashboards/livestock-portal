@@ -1142,6 +1142,30 @@ picked from the letter's own text, then the day's candidate headlines, then the
 biggest mover, then a rotation — deterministic per date, never random, because
 the letter is built twice and the PDF must match the preview.
 
+### Two image buttons, because texting and HubSpot want opposite things
+
+Added 2026-10-06. The preview toolbar has **Save pages (texting)** and **Save
+one image (HubSpot)** beside Print.
+
+- **Texting** needs one PNG per page. A phone fits an image to the message
+  bubble width, so the 2026-10-02 afternoon letter at 1632x6336 — about 1:3.9
+  — squeezed 8.5pt body text to roughly ONE PIXEL tall, and MMS re-compressed
+  on top of that. Each page is stamped *Page N of M* in the frame's sage,
+  in a reserved strip, because the client sees pixels and never the filename
+  and MMS guarantees no ordering.
+- **HubSpot** needs exactly one image. Dragging a set of page images into the
+  email editor does not work; it takes a single asset. That export returns
+  before any of the splitting work — no stamp, no cut-finding, no page suffix
+  on the filename.
+
+**ONE CAPTURE, TWO SAVE PATHS**, and a test asserts `html2canvas(el, {`
+appears once. Capturing separately would let the two exports drift into
+different margins or line breaks, which nobody would notice until a client
+had both.
+
+Verified in a browser on a real three-page letter: the HubSpot button gives
+one 1632x6336 PNG, the texting button three stamped pages.
+
 **All three formats now open on headlines.** The standard PM letter gained a
 Headlines section on 2026-09-23, ahead of Market Action, the way Friday leads
 with Key Headlines and the morning brief leads with Headlines. It shares the

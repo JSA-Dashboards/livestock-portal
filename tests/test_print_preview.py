@@ -394,6 +394,49 @@ def test_the_label_fits_inside_its_strip():
     assert baseline - size * 0.25 > 0, "the descender falls off the bottom edge"
 
 
+def test_there_are_two_image_buttons_for_two_destinations():
+    """
+    TEXTING AND HUBSPOT WANT OPPOSITE THINGS. A phone fits an image to the
+    bubble width, so a multi-page letter has to be split or 8.5pt body text
+    lands near one pixel tall. HubSpot's email editor takes a SINGLE asset
+    and will not accept a set of page images -- dragging them in does not
+    work. One capture, two save paths.
+    """
+    out = _compose()(LETTER)
+    assert 'id="jsa-png"' in out and 'id="jsa-png-one"' in out
+    assert "Save pages (texting)" in out
+    assert "Save one image (HubSpot)" in out
+
+
+def test_both_buttons_share_one_capture_path():
+    """
+    If the two exports captured separately they could drift into producing
+    different-looking letters -- different margins, different line breaks --
+    and nobody would notice until a client had both.
+    """
+    out = _compose()(LETTER)
+    assert out.count("html2canvas(el, {") == 1
+    assert "function wire(btn, split)" in out
+    assert "wire(document.getElementById('jsa-png'), true)" in out
+    assert "wire(document.getElementById('jsa-png-one'), false)" in out
+
+
+def test_the_single_image_skips_the_page_stamp_and_the_cutting():
+    """
+    The one-image export returns before any of the splitting work: no
+    "Page N of M", no cut-finding, and a filename with no page suffix.
+    Verified in a browser on a real 3-page letter: one 1632x6336 PNG from
+    the HubSpot button, three stamped pages from the texting one.
+    """
+    out = _compose()(LETTER)
+    i = out.index("if (!split) {")
+    j = out.index("ONE IMAGE PER PAGE")
+    single = out[i:j]
+    assert "one.download = base + '.png';" in single
+    assert "Page ' + (idx + 1)" not in single
+    assert "cutNear" not in single
+
+
 def test_multiple_downloads_are_staggered():
     """
     Chrome drops some downloads fired in a tight loop from one gesture, and

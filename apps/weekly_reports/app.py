@@ -773,7 +773,8 @@ _PRINT_BUTTON = """<div id="jsa-bar">
 <button id="jsa-print" onclick="window.focus();window.print();">
   Print / Save as PDF
 </button>
-<button id="jsa-png">Save as image</button>
+<button id="jsa-png">Save pages (texting)</button>
+<button id="jsa-png-one">Save one image (HubSpot)</button>
 </div>"""
 
 # html2canvas, and the failure mode is handled rather than hoped away: a CDN
@@ -785,7 +786,19 @@ _IMAGE_SCRIPT = """<script
   crossorigin="anonymous"></script>
 <script>
 (function () {
-  var btn = document.getElementById('jsa-png');
+  // TWO DESTINATIONS, ONE CAPTURE, AND THEY WANT OPPOSITE THINGS.
+  //
+  //   texting   one image per page. A phone fits an image to the bubble
+  //             width, so a 1632x6336 letter is squeezed until 8.5pt body
+  //             text is about one pixel tall. Splitting is what made it
+  //             readable -- see the per-page comment below.
+  //   HubSpot   ONE image. Dragging a set of page images into the email
+  //             editor does not work; it takes a single asset.
+  //
+  // Everything up to the finished canvas is identical, so `split` branches
+  // only at the point of saving. Keeping one capture path means the two
+  // exports cannot drift into producing different-looking letters.
+  function wire(btn, split) {
   if (!btn) return;
   btn.addEventListener('click', function () {
     if (typeof html2canvas !== 'function') {
@@ -847,6 +860,21 @@ _IMAGE_SCRIPT = """<script
       width: PAGE_W, height: h, windowWidth: PAGE_W, windowHeight: h,
       scrollX: 0, scrollY: 0
     }).then(function (canvas) {
+      var base = (document.title || 'letter').replace(/[\\\\/:*?"<>|]/g, '-');
+
+      if (!split) {
+        // THE WHOLE LETTER AS ONE IMAGE. No page splitting, no "Page N of M"
+        // stamp, no cut-finding: HubSpot takes a single asset and the height
+        // does not matter there the way it does in a message bubble.
+        var one = document.createElement('a');
+        one.download = base + '.png';
+        one.href = canvas.toDataURL('image/png');
+        one.click();
+        btn.textContent = 'Saved';
+        setTimeout(function () { btn.textContent = label; }, 3000);
+        return;
+      }
+
       // ONE IMAGE PER PAGE, because a tall one is unreadable in a text.
       //
       // Ross texts these to clients through RingCentral. A one-page brief is
@@ -862,7 +890,6 @@ _IMAGE_SCRIPT = """<script
       // side-by-side layout is worse.
       var pageH = PAGE_H * 2;                       // scale: 2
       var pages = Math.max(1, Math.round(canvas.height / pageH));
-      var base = (document.title || 'letter').replace(/[\\\\/:*?"<>|]/g, '-');
 
       // CUT THROUGH WHITESPACE, NOT THROUGH A LINE OF TEXT.
       //
@@ -992,6 +1019,9 @@ _IMAGE_SCRIPT = """<script
       btn.disabled = false;
     });
   });
+  }
+  wire(document.getElementById('jsa-png'), true);
+  wire(document.getElementById('jsa-png-one'), false);
 })();
 </script>"""
 
