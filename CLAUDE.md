@@ -444,11 +444,18 @@ Domain decisions in these that look like oversights and are not:
 
 ## Tabs, and the hidden-tab rule
 
-The index, fed crush and backgrounding pages use `st.tabs`. A hidden Streamlit
-tab is hidden, not skipped: its widgets still execute every rerun, so a value
-computed in one tab is available in another. What decides correctness is SCRIPT
-order, not tab order — the fed crush's cost-of-gain build-up must still be
-written after the widgets it divides by, even though it displays elsewhere.
+The index, fed crush, backgrounding and daily letter pages use `st.tabs`. A
+hidden Streamlit tab is hidden, not skipped: its widgets still execute every
+rerun, so a value computed in one tab is available in another. What decides
+correctness is SCRIPT order, not tab order — the fed crush's cost-of-gain
+build-up must still be written after the widgets it divides by, even though it
+displays elsewhere.
+
+The corollary on the letter page is cost rather than ordering: the Cattle
+Market Rundown tab would write a PowerPoint file on every rerun, so the write
+is memoised. See that section for the rule — a tab is the right shape when the
+hidden body is cheap, and `st.segmented_control` is the answer when it is not
+(Cold Storage).
 
 ## The index page's headline date
 
@@ -1152,6 +1159,112 @@ is connected — four paid digests. Nothing auto-inserts, on any format.
 The AM brief has **no intro line**: `config.INTRO_AM` is empty because the
 masthead already says "JSA AM Daily Cattle Report 9/24/26". The evening intros
 stay — they name the period the letter covers, which a masthead does not.
+
+### The Cattle Market Rundown Slide tab
+
+Added 2026-10-06. The letter page is now TWO TABS -- `Letter` and `Cattle
+Market Rundown Slide` -- and the second builds the one-pager Ross had been
+typing into PowerPoint by hand each week, downloadable as a 16:9 `.pptx`.
+`letter/rundown.py` formats and writes it; the tab body is in
+`apps/weekly_reports/app.py`.
+
+**IT BUILDS FROM `ctx`, NEVER FROM ITS OWN FETCHES.** `rundown.rows()` takes
+the ctx `gather()` already assembled. The module has no `requests`, no
+`sources` import and no database handle, and a test asserts it **by AST**
+rather than by grep -- the first version of that test failed on the module's
+own docstring explaining the rule. The reason is the failure recorded twice
+above: the letter and a dashboard quoting the same figure and disagreeing,
+each defensible, neither raising. A slide with its own fetches would be a
+third number in that argument.
+
+**The tab split meant hoisting four statements.** `_PRINT_STYLE`,
+`_PRINT_BUTTON`, `_IMAGE_SCRIPT` and `_with_print_button` sat in the middle of
+the region that moved under `with tab_letter:`, and
+`tests/test_print_preview.py` pulls them off the MODULE by AST -- indenting
+them would have broken 28 tests. They are lifted above the split and stay at
+top level. Every multi-line string in the file lives inside that block, which
+is the only reason indenting the rest was safe; check that again before moving
+the split.
+
+**A hidden tab still executes**, so writing the `.pptx` is memoised on the
+slide's own rows (`_rundown_pptx`). Without it the page writes a PowerPoint
+file on every keystroke in the commentary boxes.
+
+### What the slide fixed, and the one number that keeps moving
+
+Four figures on the hand-typed 2026-10-05 deck were wrong, and all four were
+wrong in ways nothing would ever have flagged:
+
+| | typed | actual |
+|---|---|---|
+| carcass weights | "as of **8/19/26**" | week ending **9/19/26** |
+| Select 5-day | 358.13 | 358.14 (358.136, truncated not rounded) |
+| Slaughter YTD | -7.7% | **-7.5%** |
+| Beef Production YTD | -5.3% | **-5.2%** |
+
+The month typo survived because AMS 3658 runs about a fortnight behind, so a
+four-week-old weight looks no different from a two-week-old one; the slide now
+PRINTS the week ending from the data. Both YTD rates are read straight off
+USDA's own Change rows -- they are not our arithmetic -- and the typed pair had
+been carried over from the previous week's deck.
+
+**The Feeder Index is the one that is not a fix.** Its row is by definition the
+first business day after CME's last published file, which makes it the least
+complete row in the series, and it firms up as auctions report: 2026-10-05 read
+**337.79** mid-afternoon, **337.66** that evening and **337.22** the next
+morning. None of those is wrong. It is the same figure the index dashboard
+shows at the same moment, which is what matters, and the tab's caption says so
+-- expect it to be the question Ross asks when the slide disagrees with what
+he typed an hour earlier.
+
+### The 5-day average changed, and it changed the LETTER too
+
+`sources.fetch_cutout` computed `avg5` as `tail(5)` -- the trailing five
+sessions INCLUDING the one being reported. The slide has always used the five
+sessions BEFORE it. For 2026-10-05 that is Choice **378.94** against
+**379.38**, and Select 358.20 against 358.14.
+
+Ross's convention won and `sources.py` now uses `iloc[-6:-1]`, so **the
+letter's own 5-day average line moved** -- it prints in two places in
+`render.py`. Neither convention is wrong in isolation, which is exactly why the
+disagreement went unnoticed; the excluding one is the better of the two because
+it is a fixed benchmark the new print is read against rather than a window that
+chases it. It needs SIX rows now, not five. `tests/test_rundown.py` pins the
+window so it cannot drift back.
+
+### Two things in the slide writer that looked fine and were not
+
+Both rendered without complaint and both were only visible in a picture of the
+slide, which is the argument for the arithmetic assertions now in
+`tests/test_rundown.py`.
+
+- **`para.level` alone produces no bullet and no indent.** A level selects a
+  style from the layout's list styles and a blank-layout text box has none, so
+  the first build was flat, unbulleted text that still reported the right
+  `level` back through python-pptx. `_bullet()` writes `buChar` and the margins
+  explicitly, which also makes it render the same in Google Slides.
+- **The text printed through the logo.** At 20/17/15/14pt the eighteen rows ran
+  to 6.60in and the logo sat at 6.55in, so the last line crossed the wordmark.
+  Sizes are now 19/16/14/13 with the logo at 6.80in, and the test does the
+  collision arithmetic from `text_height_in()` rather than rendering anything.
+
+**DO NOT VERIFY A GENERATED DECK BY DRIVING POWERPOINT.** `win32com`'s
+`Dispatch("PowerPoint.Application")` attaches to the instance Ross already has
+open -- `WithWindow=False` does not isolate it -- and `app.Quit()` closed an
+unsaved presentation he was working in on 2026-10-06. It was not recoverable:
+no AutoRecover entry, nothing in `UnsavedFiles`, no temp artefact. Read the
+file's XML instead, which is what caught the missing `buChar` anyway.
+
+**The slide needs no new secret** and costs no HTTP. `python-pptx` is the one
+new dependency, added to `requirements.txt`; it is pip-installable on Community
+Cloud, which is not subject to the Snowflake Anaconda channel constraint.
+
+**Nothing rebuilds it at 3pm.** Community Cloud has no scheduler, so the tab is
+built when it is opened and `rundown.freshness()` says out loud which session's
+cutout it is holding -- a previous session's is a perfectly good number and
+looks exactly like today's. It deliberately does NOT cry stale at a weekend
+or before the PM release, because a banner that fires every Saturday is one
+nobody reads on the Monday it matters.
 
 ### Numbers that are right in a way that looks wrong
 

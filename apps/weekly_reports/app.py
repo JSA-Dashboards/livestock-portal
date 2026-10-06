@@ -30,6 +30,7 @@ other thing on this page typed in by hand, they lived in the same doomed out/,
 and they cost the same six numbers off last week's letter to re-enter. Same
 table, KIND = "weekbase", keyed by the Friday rather than by the letter.
 """
+import io
 import os
 import re
 import sys
@@ -81,7 +82,7 @@ for _name in _ALLOWED_SECRETS:
 
 from letter import build as letter_build  # noqa: E402
 from letter import (archive, commentary, config, draft_store, headlines,  # noqa: E402
-                    mailbox, onthisday, render, settle_log, topdf)
+                    mailbox, onthisday, render, rundown, settle_log, topdf)
 
 # ...then .env, for anything the secrets did not supply.
 #
@@ -751,105 +752,6 @@ with s2:
 
 # -- Build --------------------------------------------------------------------
 
-st.subheader("Letter")
-
-ctx_for_render = dict(ctx)
-ctx_for_render["issue_date"] = issue
-ctx_for_render["kind"] = kind
-ctx_for_render["session"] = session
-# Follows the FORMAT, so switching the Letter radio re-bases the change column
-# without a refetch -- and a cache written before 2026-09-24 cannot impose the
-# old week-over-week basis on a Monday letter.
-ctx_for_render["change_basis"] = config.change_basis_for(kind)
-ctx_for_render["commentary"] = sections
-
-# -- Chart of the day (morning brief only) ------------------------------------
-# Picked from what you just typed, then from what moved, then a rotation. Chosen
-# HERE rather than in the fetch, because `sections` is the live text in the
-# boxes -- edit a headline and the chart re-aims on the next rerun.
-if kind == "am":
-    _choices = ["Auto"] + [e["key"] for e in config.CHART_POOL]
-    k1, k2 = st.columns([1, 3])
-    with k1:
-        _forced = st.selectbox("Chart of the day", _choices, index=0,
-                               help="Auto reads your headlines first, then the "
-                                    "biggest mover, then a rotation.")
-    # Whatever "Fetch headlines" already pulled, if anything. Never fetched for
-    # the chart's sake -- press the button and the chart aims itself at the
-    # day's news; do not and it falls through to the biggest mover.
-    _cands = (st.session_state.get("wcr_heads") or {}).get("items") or None
-    ctx_for_render["chart"] = letter_build.build_chart(
-        ctx_for_render, issue, os.environ.get("MASSIVE_API_KEY", "").strip(), [],
-        forced="" if _forced == "Auto" else _forced, candidates=_cands)
-    with k2:
-        _c = ctx_for_render.get("chart") or {}
-        st.caption(f"**{_c.get('title', 'no chart')}** — {_c.get('reason', 'unavailable')}"
-                   if _c else "No chart: no series came back for any market in the pool.")
-
-    # A LINE INSTEAD, IF YOU WANT ONE. Anything in this box takes the chart's
-    # place in the letter; clear it and the chart comes back. One slot, one
-    # rule, nothing to toggle. "Use this" in the On This Day panel above
-    # seeds it -- edit it into your own words before sending.
-    _fact = st.text_area(
-        "Or a line instead of the chart", key="wcr_dayfact", height=110,
-        placeholder="1962 — Cesar Chavez and Dolores Huerta establish the "
-                    "National Farm Workers Association",
-        help="Takes the chart's place in the bottom right. Leave empty for the chart.")
-    ctx_for_render["dayfact"] = _fact
-    if _fact.strip():
-        _lines = len([ln for ln in _fact.splitlines() if ln.strip()])
-        st.caption(f"The letter will print {_lines} line(s) instead of the chart.")
-        # THE BAND IS 1.89in AND THE BRIEF IS ONE PAGE. Each wrapped line is
-        # roughly 0.16in at 8.5pt across 3.1in, so about eleven fit before the
-        # float outgrows the whitespace it was chosen to sit in and the letter
-        # runs to two. Warned rather than truncated -- silently dropping a
-        # line he picked would be worse than a long letter he can see.
-        if _lines > 6:
-            st.warning(f"{_lines} lines is a lot for the corner slot. Over about "
-                       "eight the float outgrows the band beside the signature "
-                       "and the brief runs to a second page — check the preview.")
-
-# ── Which copy: with the disclaimer, or without ──────────────────────────────
-# TWO COPIES GO OUT AND ONLY ONE NEEDS THE DISCLAIMER. Ross emails the letter
-# in a message that already carries the firm's risk disclaimer, so the PDF and
-# the image attached to that message print it a second time. This drops it
-# from the attachment and nothing else.
-#
-# IT RESETS TO ON EVERY RUN and is never remembered. A disclaimer that goes
-# missing quietly is the only failure mode here that matters, so the switch
-# has to be deliberate each time rather than a setting that can be left off
-# and forgotten. `letter.build` does not pass the flag at all, so the CLI,
-# a --no-fetch re-render and --archive always keep the full letter.
-_no_disc = st.checkbox(
-    "Leave the risk disclaimer off this copy",
-    value=False, key="wcr_no_disclaimer",
-    help="For the PDF or image you attach to an email that already carries "
-         "the disclaimer. Resets to off on every run; the archived copy and "
-         "the command line always keep it.")
-
-html = render.build_html(ctx_for_render, disclaimer=not _no_disc)
-
-if _no_disc:
-    st.warning(
-        "**This copy has no risk disclaimer.** The preview, Print / Save as "
-        "PDF, Save as image and Download HTML below all now omit it — send it "
-        "only inside an email that carries the disclaimer itself. Untick to "
-        "get the full letter back.")
-
-missing = html.count(render.MISSING)
-if missing:
-    st.warning(f"{missing} value(s) could not be filled. They are marked in the letter "
-               "so they cannot be missed — fill them in or fix the source before sending.")
-
-# PRINT FROM THE READER'S OWN BROWSER, which is the one machine in this picture
-# that definitely has one. letter.topdf drives headless Edge on the HOST, so on
-# Streamlit Cloud -- a bare Linux container -- there is nothing to drive and the
-# Build PDF button is disabled. This sidesteps that entirely: the preview below
-# is already an iframe holding the complete letter with its own @page rules, so
-# window.print() inside it prints exactly that document. Same print CSS, same
-# result as Build PDF, and it works on the deployed app.
-#
-# The button hides itself in the print output -- it is chrome, not letter.
 _PRINT_STYLE = """<style>
   #jsa-bar { position: sticky; top: 0; z-index: 99; display: flex; gap: 8px;
     margin: 0 0 10px; }
@@ -1140,97 +1042,272 @@ def _with_print_button(doc: str) -> str:
     return _PRINT_BUTTON + _IMAGE_SCRIPT + doc
 
 
-st.components.v1.html(_with_print_button(html), height=720, scrolling=True)
-st.caption("**Print / Save as PDF** prints the preview above from your own browser — "
-           "same print CSS as Build PDF, and it works on the deployed app where "
-           "Build PDF cannot. Choose *Save as PDF* as the destination. "
-           "**Save as image** downloads the letter as PNGs laid out as printed "
-           "8.5×11 sheets — same margins, same frame, same line breaks as the "
-           "PDF — at twice print size. A multi-page letter saves as **one file "
-           "per page**, each stamped *Page N of M* along the bottom, because a "
-           "single tall image is unreadable once a phone fits it to a message "
-           "bubble and a client never sees the filename. Cuts land in "
-           "whitespace, not through a line. Your browser may ask once to "
-           "allow several downloads.")
 
-# THE FILENAME SAYS WHICH COPY IT IS. Two near-identical PDFs of the same
-# letter land in the same folder every day, and the only difference is six
-# lines of small print at the foot. Naming them apart is the cheap half of
-# not attaching the wrong one.
+# -- Output -------------------------------------------------------------------
 #
-# The IMAGE filename is not marked, deliberately: it comes from the document's
-# <title>, and appending to that would put "(no disclaimer)" in the browser's
-# print header on a client letter. The on-screen warning covers that case.
-_stem = f"{config.title_for(session)} {day.title()} {issue}"
-if _no_disc:
-    _stem += " (no disclaimer)"
+# TWO TABS, and the hidden one still runs. Streamlit executes a hidden tab's
+# body on every rerun, so the rundown is built from `ctx` -- which is already
+# in memory -- and never fetches. The only real cost is writing the .pptx, and
+# that is memoised on the slide's own rows below.
 
-d1, d2 = st.columns(2)
-with d1:
-    st.download_button("Download HTML", data=html.encode("utf-8"),
-                       file_name=f"{_stem}.html",
-                       mime="text/html", use_container_width=True)
-with d2:
-    browser = topdf.find_browser()
-    if browser:
-        if st.button("Build PDF", type="primary", use_container_width=True):
-            OUT.mkdir(parents=True, exist_ok=True)
-            html_path = OUT / f"{_stem}.html"
-            pdf_path = OUT / f"{_stem}.pdf"
-            html_path.write_text(html, encoding="utf-8")
-            ok, msg = topdf.html_to_pdf(html_path, pdf_path)
-            if ok:
-                st.session_state["wcr_pdf"] = pdf_path.read_bytes()
-                st.success(f"Built {pdf_path.name}")
-            else:
-                st.error(f"PDF failed — {msg}")
+
+@st.cache_data(show_spinner=False)
+def _rundown_pptx(rows_tuple) -> bytes:
+    """
+    The slide as bytes, memoised on its content.
+
+    Without the cache this writes a PowerPoint file on every rerun of the
+    page, including every keystroke in the commentary boxes, because the tab
+    it lives in executes whether or not it is the one on screen.
+    """
+    buf = io.BytesIO()
+    rundown.build_pptx(list(rows_tuple), buf,
+                       logo=REPO / "assets" / "logo-full.png")
+    return buf.getvalue()
+
+
+tab_letter, tab_slide = st.tabs(["Letter", "Cattle Market Rundown Slide"])
+
+with tab_letter:
+
+    ctx_for_render = dict(ctx)
+    ctx_for_render["issue_date"] = issue
+    ctx_for_render["kind"] = kind
+    ctx_for_render["session"] = session
+    # Follows the FORMAT, so switching the Letter radio re-bases the change column
+    # without a refetch -- and a cache written before 2026-09-24 cannot impose the
+    # old week-over-week basis on a Monday letter.
+    ctx_for_render["change_basis"] = config.change_basis_for(kind)
+    ctx_for_render["commentary"] = sections
+
+    # -- Chart of the day (morning brief only) ------------------------------------
+    # Picked from what you just typed, then from what moved, then a rotation. Chosen
+    # HERE rather than in the fetch, because `sections` is the live text in the
+    # boxes -- edit a headline and the chart re-aims on the next rerun.
+    if kind == "am":
+        _choices = ["Auto"] + [e["key"] for e in config.CHART_POOL]
+        k1, k2 = st.columns([1, 3])
+        with k1:
+            _forced = st.selectbox("Chart of the day", _choices, index=0,
+                                   help="Auto reads your headlines first, then the "
+                                        "biggest mover, then a rotation.")
+        # Whatever "Fetch headlines" already pulled, if anything. Never fetched for
+        # the chart's sake -- press the button and the chart aims itself at the
+        # day's news; do not and it falls through to the biggest mover.
+        _cands = (st.session_state.get("wcr_heads") or {}).get("items") or None
+        ctx_for_render["chart"] = letter_build.build_chart(
+            ctx_for_render, issue, os.environ.get("MASSIVE_API_KEY", "").strip(), [],
+            forced="" if _forced == "Auto" else _forced, candidates=_cands)
+        with k2:
+            _c = ctx_for_render.get("chart") or {}
+            st.caption(f"**{_c.get('title', 'no chart')}** — {_c.get('reason', 'unavailable')}"
+                       if _c else "No chart: no series came back for any market in the pool.")
+
+        # A LINE INSTEAD, IF YOU WANT ONE. Anything in this box takes the chart's
+        # place in the letter; clear it and the chart comes back. One slot, one
+        # rule, nothing to toggle. "Use this" in the On This Day panel above
+        # seeds it -- edit it into your own words before sending.
+        _fact = st.text_area(
+            "Or a line instead of the chart", key="wcr_dayfact", height=110,
+            placeholder="1962 — Cesar Chavez and Dolores Huerta establish the "
+                        "National Farm Workers Association",
+            help="Takes the chart's place in the bottom right. Leave empty for the chart.")
+        ctx_for_render["dayfact"] = _fact
+        if _fact.strip():
+            _lines = len([ln for ln in _fact.splitlines() if ln.strip()])
+            st.caption(f"The letter will print {_lines} line(s) instead of the chart.")
+            # THE BAND IS 1.89in AND THE BRIEF IS ONE PAGE. Each wrapped line is
+            # roughly 0.16in at 8.5pt across 3.1in, so about eleven fit before the
+            # float outgrows the whitespace it was chosen to sit in and the letter
+            # runs to two. Warned rather than truncated -- silently dropping a
+            # line he picked would be worse than a long letter he can see.
+            if _lines > 6:
+                st.warning(f"{_lines} lines is a lot for the corner slot. Over about "
+                           "eight the float outgrows the band beside the signature "
+                           "and the brief runs to a second page — check the preview.")
+
+    # ── Which copy: with the disclaimer, or without ──────────────────────────────
+    # TWO COPIES GO OUT AND ONLY ONE NEEDS THE DISCLAIMER. Ross emails the letter
+    # in a message that already carries the firm's risk disclaimer, so the PDF and
+    # the image attached to that message print it a second time. This drops it
+    # from the attachment and nothing else.
+    #
+    # IT RESETS TO ON EVERY RUN and is never remembered. A disclaimer that goes
+    # missing quietly is the only failure mode here that matters, so the switch
+    # has to be deliberate each time rather than a setting that can be left off
+    # and forgotten. `letter.build` does not pass the flag at all, so the CLI,
+    # a --no-fetch re-render and --archive always keep the full letter.
+    _no_disc = st.checkbox(
+        "Leave the risk disclaimer off this copy",
+        value=False, key="wcr_no_disclaimer",
+        help="For the PDF or image you attach to an email that already carries "
+             "the disclaimer. Resets to off on every run; the archived copy and "
+             "the command line always keep it.")
+
+    html = render.build_html(ctx_for_render, disclaimer=not _no_disc)
+
+    if _no_disc:
+        st.warning(
+            "**This copy has no risk disclaimer.** The preview, Print / Save as "
+            "PDF, Save as image and Download HTML below all now omit it — send it "
+            "only inside an email that carries the disclaimer itself. Untick to "
+            "get the full letter back.")
+
+    missing = html.count(render.MISSING)
+    if missing:
+        st.warning(f"{missing} value(s) could not be filled. They are marked in the letter "
+                   "so they cannot be missed — fill them in or fix the source before sending.")
+
+    # PRINT FROM THE READER'S OWN BROWSER, which is the one machine in this picture
+    # that definitely has one. letter.topdf drives headless Edge on the HOST, so on
+    # Streamlit Cloud -- a bare Linux container -- there is nothing to drive and the
+    # Build PDF button is disabled. This sidesteps that entirely: the preview below
+    # is already an iframe holding the complete letter with its own @page rules, so
+    # window.print() inside it prints exactly that document. Same print CSS, same
+    # result as Build PDF, and it works on the deployed app.
+    #
+    # The button hides itself in the print output -- it is chrome, not letter.
+    st.components.v1.html(_with_print_button(html), height=720, scrolling=True)
+    st.caption("**Print / Save as PDF** prints the preview above from your own browser — "
+               "same print CSS as Build PDF, and it works on the deployed app where "
+               "Build PDF cannot. Choose *Save as PDF* as the destination. "
+               "**Save as image** downloads the letter as PNGs laid out as printed "
+               "8.5×11 sheets — same margins, same frame, same line breaks as the "
+               "PDF — at twice print size. A multi-page letter saves as **one file "
+               "per page**, each stamped *Page N of M* along the bottom, because a "
+               "single tall image is unreadable once a phone fits it to a message "
+               "bubble and a client never sees the filename. Cuts land in "
+               "whitespace, not through a line. Your browser may ask once to "
+               "allow several downloads.")
+
+    # THE FILENAME SAYS WHICH COPY IT IS. Two near-identical PDFs of the same
+    # letter land in the same folder every day, and the only difference is six
+    # lines of small print at the foot. Naming them apart is the cheap half of
+    # not attaching the wrong one.
+    #
+    # The IMAGE filename is not marked, deliberately: it comes from the document's
+    # <title>, and appending to that would put "(no disclaimer)" in the browser's
+    # print header on a client letter. The on-screen warning covers that case.
+    _stem = f"{config.title_for(session)} {day.title()} {issue}"
+    if _no_disc:
+        _stem += " (no disclaimer)"
+
+    d1, d2 = st.columns(2)
+    with d1:
+        st.download_button("Download HTML", data=html.encode("utf-8"),
+                           file_name=f"{_stem}.html",
+                           mime="text/html", use_container_width=True)
+    with d2:
+        browser = topdf.find_browser()
+        if browser:
+            if st.button("Build PDF", type="primary", use_container_width=True):
+                OUT.mkdir(parents=True, exist_ok=True)
+                html_path = OUT / f"{_stem}.html"
+                pdf_path = OUT / f"{_stem}.pdf"
+                html_path.write_text(html, encoding="utf-8")
+                ok, msg = topdf.html_to_pdf(html_path, pdf_path)
+                if ok:
+                    st.session_state["wcr_pdf"] = pdf_path.read_bytes()
+                    st.success(f"Built {pdf_path.name}")
+                else:
+                    st.error(f"PDF failed — {msg}")
+        else:
+            # THE REASON IS VISIBLE, NOT A TOOLTIP. This was help= only, and a greyed
+            # button with a hover explanation reads as broken -- it got reported as a
+            # bug on 2026-09-24 by the person who wrote the docstring explaining it.
+            # Someone looking at a disabled control is asking why, and a hover they
+            # have to guess at is not an answer.
+            st.button("Build PDF", disabled=True, use_container_width=True)
+            st.caption("No browser on this host. Use **Print / Save as PDF** or "
+                       "**Save as image** above the preview — both run in your own "
+                       "browser and give the same layout. Build PDF only earns its "
+                       "place locally, where it writes the file `--archive` publishes.")
+
+    if st.session_state.get("wcr_pdf"):
+        st.download_button("Download PDF", data=st.session_state["wcr_pdf"],
+                           file_name=f"{_stem}.pdf",
+                           mime="application/pdf", use_container_width=True)
+
+    # -- Archive ------------------------------------------------------------------
+    # AFTER SENDING, NOT INSTEAD OF IT. This copies the rendered letter into the
+    # private jsa-letter-archive repo and pushes. It is a separate button on purpose:
+    # "published" means Ross emailed it, which nothing here can detect, and archiving
+    # every build would bury the one that went out under a day of drafts.
+    #
+    # Unavailable on the deployed app -- no clone, no push credentials -- so it says
+    # so rather than offering a button that cannot work.
+    _arch_ok, _arch_why = archive.available()
+    st.divider()
+    if not _arch_ok:
+        st.caption(f"Archive unavailable — {_arch_why}. Run locally to archive a sent letter.")
     else:
-        # THE REASON IS VISIBLE, NOT A TOOLTIP. This was help= only, and a greyed
-        # button with a hover explanation reads as broken -- it got reported as a
-        # bug on 2026-09-24 by the person who wrote the docstring explaining it.
-        # Someone looking at a disabled control is asking why, and a hover they
-        # have to guess at is not an answer.
-        st.button("Build PDF", disabled=True, use_container_width=True)
-        st.caption("No browser on this host. Use **Print / Save as PDF** or "
-                   "**Save as image** above the preview — both run in your own "
-                   "browser and give the same layout. Build PDF only earns its "
-                   "place locally, where it writes the file `--archive` publishes.")
+        a1, a2 = st.columns([1, 3])
+        with a1:
+            if st.button("Archive as sent", use_container_width=True):
+                OUT.mkdir(parents=True, exist_ok=True)
+                _hp = OUT / f"{config.title_for(session)} {day.title()} {issue}.html"
+                _hp.write_text(html, encoding="utf-8")
+                _pp = OUT / f"{config.title_for(session)} {day.title()} {issue}.pdf"
+                res = archive.publish(issue, session, _hp, _pp if _pp.exists() else None,
+                                      kind=kind, title=config.title_for(session))
+                if not res["ok"]:
+                    st.error(f"Not archived — {res['reason']}")
+                elif not res["changed"]:
+                    st.info("Already archived, unchanged.")
+                else:
+                    st.success("Archived and pushed." if res["pushed"]
+                               else f"Committed locally. {res['reason']}")
+        with a2:
+            st.caption("Press this for the letter you actually sent. It copies the HTML "
+                       "and PDF into the private archive repo and pushes — re-sending a "
+                       "corrected letter keeps the earlier one in git history.")
 
-if st.session_state.get("wcr_pdf"):
-    st.download_button("Download PDF", data=st.session_state["wcr_pdf"],
-                       file_name=f"{_stem}.pdf",
-                       mime="application/pdf", use_container_width=True)
 
-# -- Archive ------------------------------------------------------------------
-# AFTER SENDING, NOT INSTEAD OF IT. This copies the rendered letter into the
-# private jsa-letter-archive repo and pushes. It is a separate button on purpose:
-# "published" means Ross emailed it, which nothing here can detect, and archiving
-# every build would bury the one that went out under a day of drafts.
-#
-# Unavailable on the deployed app -- no clone, no push credentials -- so it says
-# so rather than offering a button that cannot work.
-_arch_ok, _arch_why = archive.available()
-st.divider()
-if not _arch_ok:
-    st.caption(f"Archive unavailable — {_arch_why}. Run locally to archive a sent letter.")
-else:
-    a1, a2 = st.columns([1, 3])
-    with a1:
-        if st.button("Archive as sent", use_container_width=True):
-            OUT.mkdir(parents=True, exist_ok=True)
-            _hp = OUT / f"{config.title_for(session)} {day.title()} {issue}.html"
-            _hp.write_text(html, encoding="utf-8")
-            _pp = OUT / f"{config.title_for(session)} {day.title()} {issue}.pdf"
-            res = archive.publish(issue, session, _hp, _pp if _pp.exists() else None,
-                                  kind=kind, title=config.title_for(session))
-            if not res["ok"]:
-                st.error(f"Not archived — {res['reason']}")
-            elif not res["changed"]:
-                st.info("Already archived, unchanged.")
-            else:
-                st.success("Archived and pushed." if res["pushed"]
-                           else f"Committed locally. {res['reason']}")
-    with a2:
-        st.caption("Press this for the letter you actually sent. It copies the HTML "
-                   "and PDF into the private archive repo and pushes — re-sending a "
-                   "corrected letter keeps the earlier one in git history.")
+with tab_slide:
+    # Built from the SAME ctx the letter above was rendered from, so the two
+    # cannot quote the same figure differently -- the bug CLAUDE.md records
+    # twice between the letter and a dashboard, each defensible and neither
+    # raising. See letter/rundown.py.
+    _rd_rows = rundown.rows(ctx)
+    _rd_fresh = rundown.freshness(ctx)
+
+    # WHICH SESSION IS THIS? Community Cloud has no scheduler, so nothing
+    # rebuilds the slide at 3pm -- it is built when the tab is opened. A
+    # previous session's cutout is a perfectly good number and looks exactly
+    # like today's, so the page says out loud which one it has.
+    (st.warning if _rd_fresh["stale"] else st.success)(_rd_fresh["message"])
+
+    _rd_gaps = rundown.missing(_rd_rows)
+    if _rd_gaps:
+        st.error(
+            f"{_rd_gaps} figure(s) came back empty and print as "
+            f"`{rundown.MISSING}` on the slide. Press **Fetch latest data** at "
+            "the top of the page, or chase the source, before sending this.")
+
+    st.markdown(rundown.as_markdown(_rd_rows))
+
+    st.caption(
+        "Every figure is live. Four that differ from the hand-typed deck and "
+        "are not errors: the carcass weight line prints the week AMS actually "
+        "published (that report runs about a fortnight behind), the 5-day "
+        "averages are the five sessions **before** this print, both YTD rates "
+        "are USDA's own published Change rows rather than ours, and the "
+        "**Feeder Index firms up through the day** — its row is the first "
+        "business day after CME's last file, so it is the least complete one "
+        "and keeps moving as auctions report. On 2026-10-05 it read 337.79 "
+        "mid-afternoon and 337.22 the next morning. Rebuild late for the "
+        "steadier number; it is the same figure the index dashboard shows at "
+        "any given moment.")
+
+    _rd_stamp = rundown.short_date(issue).replace("/", "-")
+    st.download_button(
+        "Download PowerPoint slide",
+        data=_rundown_pptx(tuple(_rd_rows)),
+        file_name=f"Cattle Market Rundown {_rd_stamp}.pptx",
+        mime=("application/vnd.openxmlformats-officedocument"
+              ".presentationml.presentation"),
+        type="primary",
+    )
+    st.caption(
+        "One 16:9 slide, black text on white, John Stewart mark bottom-left — "
+        "drop it straight into the weekly deck.")

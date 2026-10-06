@@ -473,8 +473,27 @@ def fetch_cutout() -> dict:
             out[key] = {
                 "value": round(cur, 2),
                 "change": round(cur - prev, 2) if prev is not None else None,
-                # The letter quotes a 5-day average -- the trailing business week.
-                "avg5": round(float(s[key].tail(5).mean()), 2) if len(s) >= 5 else None,
+                # THE 5-DAY AVERAGE EXCLUDES THE DAY BEING REPORTED.
+                #
+                # It is the five sessions BEFORE this print, so it is a fixed
+                # benchmark the new number is read against rather than a window
+                # that moves with it. Including today makes the average chase
+                # the print: a sharp day drags its own comparison toward itself
+                # and the gap understates the move.
+                #
+                # This was `tail(5)` -- including today -- until 2026-10-06, and
+                # the two conventions disagree by real money. For Monday
+                # 2026-10-05: excluding today gives Choice 379.38 / Select
+                # 358.14, including it gives 378.94 / 358.20. The first pair is
+                # what the Cattle Market Rundown slide has always carried,
+                # hand-typed, and the letter was quietly printing the other one.
+                # Neither is wrong in isolation, which is exactly why it went
+                # unnoticed -- see CLAUDE.md on the letter and a dashboard
+                # disagreeing about the same figure.
+                #
+                # Needs SIX rows now, not five, because one of them is dropped.
+                "avg5": (round(float(s[key].iloc[-6:-1].mean()), 2)
+                         if len(s) >= 6 else None),
             }
         out["report_date"] = cut["report_date"].max().date().isoformat()
 
@@ -620,11 +639,18 @@ FIS_SECTION = "Report FIS Meat Production"
 
 def fetch_carcass_weights() -> dict:
     """
-    Weekly actual FIS dressed weight for the Cattle class, from AMS MARS 3658.
+    Weekly actual FIS dressed weight from AMS MARS 3658, Cattle AND Steers.
+
+    The Cattle figures stay at the top level and Steers sits under "steers",
+    so nothing that already read this function has to change.
 
     Published Thursday, covering the week that ended about twelve days earlier,
     so on a Tuesday the newest row is roughly a fortnight old. That lag is the
-    series behaving normally, not a stale fetch.
+    series behaving normally, not a stale fetch. It is wide enough to mislead:
+    the Cattle Market Rundown slide carried "as of 8/19/26" for a week ending
+    2026-09-19, a hand-typed month that nobody caught because a four-week-old
+    weight looks no different from a two-week-old one. The week_ending is
+    returned so it can be PRINTED rather than remembered.
 
     Needs MARS_API_KEY -- the same secret Beef Trimmings already uses, so no new
     credential. Returns {} with an error key rather than raising.
@@ -642,13 +668,17 @@ def fetch_carcass_weights() -> dict:
         return {"error": f"AMS returned HTTP {r.status_code}"}
     r.raise_for_status()
 
-    rows = []
+    # TWO CLASSES, ONE REQUEST. 3658 carries Cattle, Steers, Heifers, Cows and
+    # Bulls as separate `class` values in the same section, so the Steers line
+    # the rundown slide quotes costs no extra call -- only a second bucket.
+    by_class = {"Cattle": {}, "Steers": {}}
     for x in r.json().get("results", []):
         if str(x.get("commodity", "")).strip() != "Slaughter Cattle":
             continue
         if str(x.get("description", "")).strip() != "Dressed Weight":
             continue
-        if str(x.get("class", "")).strip() != "Cattle":
+        cls = str(x.get("class", "")).strip()
+        if cls not in by_class:
             continue
         # Unit guard, as in the dashboard: a silent unit rename would land as a
         # plausible wrong number rather than an error.
@@ -663,22 +693,28 @@ def fetch_carcass_weights() -> dict:
             d = datetime.strptime(str(wk).split()[0], "%m/%d/%Y").date()
         except ValueError:
             continue
-        rows.append((d, val))
+        by_class[cls][d] = val
 
-    if not rows:
+    if not by_class["Cattle"]:
         return {"error": "no Slaughter Cattle / Dressed Weight rows in report 3658"}
 
-    rows.sort()
-    by_date = dict(rows)
-    last = rows[-1][0]
-    week_ago = last - timedelta(days=7)
-    year_ago = last - timedelta(days=364)   # same weekday, 52 weeks back
-    return {
-        "value": by_date.get(last),
-        "week_ending": last.isoformat(),
-        "last_week": by_date.get(week_ago),
-        "year_ago": by_date.get(year_ago),
-    }
+    def _block(by_date: dict) -> dict:
+        if not by_date:
+            return {}
+        last = max(by_date)
+        return {
+            "value": by_date.get(last),
+            "week_ending": last.isoformat(),
+            "last_week": by_date.get(last - timedelta(days=7)),
+            # same weekday, 52 weeks back
+            "year_ago": by_date.get(last - timedelta(days=364)),
+        }
+
+    out = _block(by_class["Cattle"])
+    # Nested rather than flattened, so every existing caller keeps reading the
+    # Cattle figures off the top level exactly as before.
+    out["steers"] = _block(by_class["Steers"])
+    return out
 
 
 # -- CFTC Commitments of Traders ---------------------------------------------
