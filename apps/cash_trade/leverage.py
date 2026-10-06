@@ -459,6 +459,92 @@ def need_accuracy(mix: pd.DataFrame, weeks: int = NEED_WEEKS,
     return out
 
 
+# Years of same-week history the weight trend is fitted on. Eight, because the
+# drift is secular and slow (about +10 lb a year on live weight since 2016) and
+# a short fit mistakes a run of heavy years for the baseline, which is exactly
+# the error this measure exists to avoid.
+WEIGHT_TREND_YEARS = 8
+
+
+def weight_frame(price_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Head-weighted live and dressed weights per week, from the 5-Area report.
+
+    NO NEW REQUEST: the page already pulls LM_CT150's full History for the
+    price panel and `weight_range_avg` rides along on it, back to 2004.
+
+    Steer and heifer are combined head-weighted rather than averaged — a
+    50-head heifer lot and a 3,000-head steer lot are not two equal readings,
+    the same combine the price tiles use and for the same reason.
+    """
+    if price_df.empty or "weight_range_avg" not in price_df:
+        return pd.DataFrame()
+    d = price_df[price_df["current_period"] == "WEEKLY WEIGHTED AVERAGES"].copy()
+    d = d.dropna(subset=["weight_range_avg", "head_count", "report_date"])
+    if d.empty:
+        return pd.DataFrame()
+    d["hw"] = d["head_count"] * d["weight_range_avg"]
+    g = d.groupby(["report_date", "selling_basis_desc"], as_index=False).agg(
+        head=("head_count", "sum"), hw=("hw", "sum"))
+    g = g[g["head"] > 0].copy()
+    g["weight"] = g["hw"] / g["head"]
+    out = g.pivot(index="report_date", columns="selling_basis_desc",
+                  values="weight").reset_index()
+    out.columns.name = None
+    return out.sort_values("report_date")
+
+
+def weight_context(weights: pd.DataFrame, column: str = "Live",
+                   years: int = WEIGHT_TREND_YEARS) -> dict:
+    """
+    This week's weight against what the trend says it should be.
+
+    A RAW YEAR-AGO COMPARISON OVERSTATES THE SIGNAL and would be the easy
+    mistake here. Fed cattle have got heavier for two decades — genetics,
+    feeding efficiency, cheap corn — at about +10 lb a year on live weight
+    since 2016. So "+67 lb on the year" is partly a market telling you cattle
+    are backing up and partly a trend that was always going to happen.
+
+    The fix is the same shape the COF Recap uses for its year-ago column:
+    compare like with like. The trend is fitted on the SAME ISO WEEK in prior
+    years, which also removes the seasonal swing without a separate
+    adjustment — week 41 against week 41, never against an annual mean.
+
+    Returns the raw year-ago move, the fitted expectation and the deviation
+    from it, so the page can show that most of the move is real rather than
+    asserting it.
+    """
+    if weights.empty or column not in weights:
+        return {}
+    d = weights.dropna(subset=[column]).copy()
+    if d.empty:
+        return {}
+    d["iso_week"] = d["report_date"].dt.isocalendar().week.astype(int)
+    d["year"] = d["report_date"].dt.year
+    cur = d.iloc[-1]
+    same = d[(d["iso_week"] == int(cur["iso_week"])) & (d["year"] < int(cur["year"]))]
+    same = same.tail(years)
+    if len(same) < 4:
+        return {"weight": float(cur[column]), "week": pd.Timestamp(cur["report_date"])}
+
+    import numpy as np
+    fit = np.polyfit(same["year"].to_numpy(dtype=float),
+                     same[column].to_numpy(dtype=float), 1)
+    expected = float(np.polyval(fit, float(cur["year"])))
+    prior = float(same[column].iloc[-1])
+    return {
+        "weight": float(cur[column]),
+        "week": pd.Timestamp(cur["report_date"]),
+        "iso_week": int(cur["iso_week"]),
+        "year_ago": prior,
+        "vs_year_ago": float(cur[column]) - prior,
+        "expected": expected,
+        "vs_trend": float(cur[column]) - expected,
+        "slope": float(fit[0]),
+        "n": int(len(same)),
+    }
+
+
 def percentile(mix: pd.DataFrame, column: str, value: float, years: int = 3) -> float:
     """
     Where this week's share sits against its own recent history.

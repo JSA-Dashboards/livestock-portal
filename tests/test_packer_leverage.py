@@ -307,3 +307,78 @@ def test_the_weekly_flow_ratio_is_no_longer_called_coverage():
                                               for i in range(1, 6)]))
     assert "signings_vs_pace" in c
     assert c.iloc[-1]["signings_vs_pace"] == pytest.approx(400_000 / 350_000)
+
+# ── currentness: weight against its own trend ───────────────────────────────
+
+def _price_rows(weeks):
+    """weeks: list of (date, basis, class, head, weight)."""
+    return pd.DataFrame([
+        {"report_date": pd.Timestamp(d), "current_period": "WEEKLY WEIGHTED AVERAGES",
+         "selling_basis_desc": b, "class_description": c,
+         "head_count": float(h), "weight_range_avg": float(w)}
+        for d, b, c, h, w in weeks])
+
+
+def test_weights_are_head_weighted_not_averaged():
+    """A 50-head heifer lot is not half the signal of a 3,000-head steer lot.
+
+    A plain mean of the two class figures would let a tiny heifer print drag
+    the week, which is the same error the price combine avoids.
+    """
+    d = _price_rows([
+        ("2026-10-05", "Live", "Steer", 3000, 1600),
+        ("2026-10-05", "Live", "Heifer", 50, 1200),
+    ])
+    w = lev.weight_frame(d)
+    assert len(w) == 1
+    got = w.iloc[0]["Live"]
+    assert got == pytest.approx((3000 * 1600 + 50 * 1200) / 3050)
+    assert got > 1590                      # not the 1,400 a plain mean gives
+
+
+def test_trend_is_fitted_on_the_same_week_of_prior_years():
+    """Comparing against an annual mean would import the season.
+
+    Cattle are heavier in some weeks than others; fitting week 41 against
+    week 41 removes that without a separate seasonal adjustment.
+    """
+    rows = []
+    for yr in range(2018, 2027):
+        # week 41 climbs +10/yr; week 20 is 80 lb lighter and must not count
+        rows.append((f"{yr}-10-10", "Live", "Steer", 1000, 1400 + 10 * (yr - 2018)))
+        rows.append((f"{yr}-05-16", "Live", "Steer", 1000, 1320 + 10 * (yr - 2018)))
+    w = lev.weight_frame(_price_rows(rows))
+    # the newest row is the 2026 week-41 print, exactly on trend
+    c = lev.weight_context(w.sort_values("report_date"), "Live")
+    assert c["slope"] == pytest.approx(10.0, abs=0.5)
+    assert c["vs_trend"] == pytest.approx(0.0, abs=1.5)
+
+
+def test_the_year_ago_move_is_separated_from_ordinary_drift():
+    """A raw year-ago delta counts two decades of genetics as market signal.
+
+    The real series drifts about +10 lb a year, so "+67 on the year" is
+    partly a market telling you cattle are backing up and partly a trend that
+    was always going to happen. The page has to show both numbers or it
+    overstates the signal by the drift.
+    """
+    rows = []
+    for yr in range(2018, 2026):
+        rows.append((f"{yr}-10-10", "Live", "Steer", 1000, 1400 + 10 * (yr - 2018)))
+    rows.append(("2026-10-10", "Live", "Steer", 1000, 1550))   # +80 on the year
+    c = lev.weight_context(lev.weight_frame(_price_rows(rows)).sort_values("report_date"),
+                           "Live")
+    assert c["vs_year_ago"] == pytest.approx(80.0, abs=1)
+    assert c["slope"] == pytest.approx(10.0, abs=0.5)
+    # the honest signal is the move MINUS the drift, not the raw move
+    assert c["vs_trend"] == pytest.approx(70.0, abs=2)
+    assert c["vs_trend"] < c["vs_year_ago"]
+
+
+def test_too_little_history_declines_to_quote_a_trend():
+    """Three prior years is no basis for a fitted expectation."""
+    rows = [(f"{yr}-10-10", "Live", "Steer", 1000, 1400) for yr in (2024, 2025, 2026)]
+    c = lev.weight_context(lev.weight_frame(_price_rows(rows)).sort_values("report_date"),
+                           "Live")
+    assert "vs_trend" not in c and "weight" in c
+    assert lev.weight_context(pd.DataFrame(), "Live") == {}
