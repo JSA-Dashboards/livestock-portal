@@ -965,11 +965,20 @@ somebody opens it after the morning release. Days nobody opens it are holes.
 A cron on the droplet that already writes `JSA.BEEF_TRIMMINGS.IMPORT_COW90`
 can take the same table over without changing the page.
 
-**The schema has to exist before anything records.** Until it does the page
-prints `⚠️ Morning cutout is not being recorded` with the reason. That banner
-is deliberate: a write that silently fails looks exactly like a page nobody
-has opened, and months later there would be no history and no clue why. Same
-reasoning as the letter page's autosave banner.
+**The portal created the schema itself on first run, which was not the
+expectation.** It was expected to sit dead until an admin created
+`JSA.BOXED_BEEF`, on the assumption that the deployed identity is scoped the
+way Ross's CME_INGEST_ROLE is — read-only plus one schema. It is not: on the
+first live run, 2026-10-07, `ensure_table()` created schema and table and
+banked Oct 06 straight away (Choice AM 382.46 / PM 378.93, fade −3.53). That
+is the same CREATE SCHEMA capability `letter/draft_store.py` relied on for
+`JSA.LETTER`. **Do not assume the deployed app cannot create what it needs.**
+
+If the write ever does fail, the page prints `⚠️ Morning cutout is not being
+recorded` with the reason. That banner is deliberate: a write that silently
+fails looks exactly like a page nobody has opened, and months later there
+would be no history and no clue why. Same reasoning as the letter page's
+autosave banner.
 
 ### Four things that look wrong and are not
 
