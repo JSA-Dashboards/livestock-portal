@@ -49,6 +49,33 @@ grant on that schema (same identity already used for `NASS_CACHE` +
 `CME_FEEDER_CATTLE`). US Fresh 90s still calls `mpr.datamart.ams.usda.gov`
 live — that domain isn't blocked, only `marsapi.ams.usda.gov` is.
 
+**That cron's code is NOT in this repo and it is not unversioned.** It lives in
+`JSA-Dashboards/beef-trimmings-dashboard` at `deploy/fetch_import_cow90.py`,
+with `deploy/run_fetch.sh` beside it, deployed to
+`/opt/beef-trimmings-dashboard/` on the droplet. It MERGEs on
+`(report_date, origin)` rather than rewriting the series, so re-running it is
+free.
+
+Worth stating because the obvious search finds nothing: that repo is not
+cloned on Ross's machine, so grepping the local checkouts turns up a reader
+with no writer and reads exactly like an ingest nobody ever versioned. On
+2026-10-07 I concluded precisely that and built a second one — module, cron
+installer, tests — before `crontab -l` on the droplet showed the real job. It
+was reverted in `a3ae41e`. **Two writers doing a full-series replace on one
+table, on different schedules, against a source the page has no other copy of**
+was the outcome one merge away. Check GitHub's org listing before concluding a
+droplet job is unversioned; `gh repo list JSA-Dashboards` costs one call.
+
+The schedule is Friday plus a Monday catch-up, which was the other thing I got
+wrong — it is not a single weekly run with no slack:
+
+    30 16 * * 5   "Beef trimmings import fetch"
+    0  7 * * 1    "Beef trimmings import fetch (Monday catchup)"
+
+So a late USDA publication is already covered by Monday. The 2026-10-02 report
+landing after the 10-05 run left the page on 09-25 data for a few days, which
+argues for a daily sweep, but it argues about the CADENCE of a job that exists.
+
 Setting it to any one value overrides all nine and silently breaks the others.
 Pages load, queries miss, charts come back empty, nothing raises. **Unset is the
 only working configuration.** `SNOWFLAKE_DATABASE = "JSA"` is safe to set.
