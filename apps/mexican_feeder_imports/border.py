@@ -1059,6 +1059,9 @@ def year_outlook(conn, year, series, watch=WATCH_PORT, window=PACE_WINDOW,
         # two-port border would read as permanently broken.
         "maturity": as_is / (open_share * normal_head),
         "normal_rate": rate,
+        # How many crossings a normal border actually has, so the page can name
+        # the count rather than say "every crossing" and leave it to be asked.
+        "n_crossings": len(sh["shares"]),
         "scenarios": {
             "as_is": as_is,
             "watch": with_watch,

@@ -542,38 +542,53 @@ if OUTLOOK and OUTLOOK["scenarios"]:
     _op = _o["open_ports"]
     _ports = (" and ".join(_op) if len(_op) < 3
               else ", ".join(_op[:-1]) + " and " + _op[-1])
+    # Named from the data, never typed in. The first tile IS the open ports --
+    # today's pace comes from nothing else -- so it carries their names, and
+    # the third has to spell out that it includes the watch port too, which
+    # "those ports" stopped conveying once the first tile was named.
+    _slash = "/".join(_op)
     c = st.columns(4)
     with c[0]:
         st.markdown(tile(
-            "Nothing Changes",
+            _slash or "Nothing Changes",
             f"~{_s['as_is']:,.0f}",
-            sub(f"{_o['pace']:,.0f} head/day × {_o['reporting_days']} "
+            sub(f"today's {_o['pace']:,.0f} head/day × {_o['reporting_days']} "
                 f"reporting days"), "tile-scen"), unsafe_allow_html=True)
     with c[1]:
         st.markdown(tile(
             f"{_o['watch']} Reopens" if _o["watch"] else "One More Crossing",
             f"~{_s['watch']:,.0f}" if _o["watch"] else "—",
-            sub(f"+{_s['watch'] - _s['as_is']:,.0f} head, restarting the way "
-                f"its neighbours did" if _o["watch"] else "no watch port set"),
+            # NOT "the pace Douglas and Santa Teresa had when THEY reopened".
+            # That reading is unstable: their own first 10, 15 and 20 reporting
+            # days give 21%, 38% and 49% of normal, so the increment would swing
+            # from +68k to +154k on an arbitrary window, and Santa Teresa has
+            # only 9 days on file so it drops out of the blend entirely past 9.
+            # This is the maturity they are at NOW, which is one number.
+            sub(f"+{_s['watch'] - _s['as_is']:,.0f} head, at the "
+                f"{_o['maturity'] * 100:.0f}% of normal {_ports} run now"
+                if _o["watch"] else "no watch port set"),
             "tile-scen"), unsafe_allow_html=True)
     with c[2]:
         st.markdown(tile(
-            "Those Ports Recover",
+            "/".join(_op + ([_o["watch"]] if _o["watch"] else [])),
             f"~{_s['mature']:,.0f}",
-            sub(f"the same crossings at their normal rates"),
+            sub("all three at their normal rates, not today's"
+                if _o["watch"] else "at their normal rates, not today's"),
             "tile-scen"), unsafe_allow_html=True)
     with c[3]:
         st.markdown(tile(
-            "The Whole Border Back",
+            f"All {_o['n_crossings']} Crossings",
             f"~{_s['normal']:,.0f}",
-            sub(f"every crossing, {_o['normal_rate']:,.0f} head/day"),
+            sub(f"the whole border at {_o['normal_rate']:,.0f} head/day"),
             "tile-scen"), unsafe_allow_html=True)
 
     st.caption(
         f"**None of {_yr} has happened, so every figure here is a scenario.** "
         f"They are ordered, and the gaps between them are the point. "
-        f"**Nothing changes** carries today's {_o['pace']:,.0f} head a day "
-        f"across all {_o['reporting_days']} of {_yr}'s reporting days. "
+        f"**{_slash}** carries today's {_o['pace']:,.0f} head a day "
+        f"across all {_o['reporting_days']} of {_yr}'s reporting days — those "
+        f"two crossings are the only ones taking cattle, so today's pace is "
+        f"theirs entirely. "
         f"**{_o['watch']} reopens** adds the one crossing expected back: it "
         f"carried **{_o['watch_share'] * 100:.0f}% of every head** when the "
         f"border ran normally, against the **{_o['open_share'] * 100:.0f}%** "
@@ -583,15 +598,21 @@ if OUTLOOK and OUTLOOK["scenarios"]:
         if _o["watch"] else
         f"**None of {_yr} has happened, so every figure here is a scenario.**"
     )
+    # Like for like: the two OPEN ports at normal, with no watch port in it.
+    # The "recover" tile includes the watch port, so using that figure here
+    # would credit maturity with a reopening and overstate the comparison.
+    _open_at_normal = _o["open_share"] * _s["normal"]
+    _maturity_worth = _open_at_normal - _s["as_is"]
+    _watch_worth = _s["watch"] - _s["as_is"]
     st.caption(
         f"**The reopening is not the big number, and that is worth sitting "
         f"with.** {_ports} are open now and running at "
         f"**{_o['maturity'] * 100:.0f}% of what those two crossings normally "
-        f"carry** — so the step from {_s['as_is']:,.0f} to "
-        f"{_s['mature']:,.0f} is them simply getting back to normal, which is "
-        f"worth several times what adding "
-        f"{_o['watch'] or 'another crossing'} is. A reopening is a headline; "
-        f"maturity is the volume."
+        f"carry**. Bringing just those two up to normal — no new crossing at "
+        f"all — is worth **+{_maturity_worth:,.0f} head**, about "
+        f"**{_maturity_worth / _watch_worth:.0f}×** the "
+        f"+{_watch_worth:,.0f} {_o['watch'] or 'another crossing'} adds. "
+        f"A reopening is a headline; maturity is the volume."
     )
     # Derived, not written in: the naive figure has to move with the data or
     # it becomes a claim about numbers the page is no longer showing.
