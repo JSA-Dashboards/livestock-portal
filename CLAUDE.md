@@ -910,6 +910,100 @@ prices on the other tabs. That is USDA's schedule, not staleness.
 A share is a number between 0 and 1 whether or not it is right, so none of the
 above fails loudly. `tests/test_packer_leverage.py` pins all of it.
 
+## The morning cutout — LM_XB402
+
+Added 2026-10-06. The Beef Cutout page now reads **both** daily cutout
+reports, behind a session switch at the top: `Morning (9:30am) | Afternoon
+(close)`. Fetching, parsing and the Snowflake banking are in
+`apps/beef_cutout/am_cutout.py`; the panel is in `app.py` next to the brand
+helpers it needs, the same split as `cof_recap` and `leverage`.
+
+**They are TWO REPORTS, not one report published twice**, and the sidebar used
+to say otherwise. LM_XB403 goes out once, in the afternoon. The morning
+figures are LM_XB402 — a separate report, a separate slug, and the gap between
+them is the point: on 2026-10-06 the morning said Choice 382.46, **+4.20**,
+and the close printed 378.93, **+0.67**. A $3.53 fade the portal could not
+show.
+
+### There is no feed for it and no history anywhere — do not go looking again
+
+Established by probe on 2026-10-06. Every avenue is closed:
+
+- The datamart catalog (`GET /services/v1.1/reports`, 151 reports) **does not
+  list slug 2452 at all**. 2453 is the only daily boxed beef cutout in it.
+- Slug 2452 answers HTTP **200** with the body `"No Results Found. "` to every
+  query shape — bare, `lastReports`, `allSections`, and an explicit
+  `report_date` range. A named section instead returns "Unable to find this
+  subreport", so the service knows the slug and has no rows for it. A 200 that
+  means "nothing here" is the trap `direct_reports.py` documents for MARS.
+- MARS v1.2 refuses it: `"Slug Id is invalid / Report has no data"`. MARS
+  carries **no boxed beef reports of any kind** — five titles match "beef" and
+  they are trimmings, variety meats and retail features.
+- The only live copy is `www.ams.usda.gov/mnreports/ams_2452.pdf`,
+  **overwritten in place every morning**. A `?date=` parameter is accepted and
+  silently ignored, returning today's bytes whatever you ask for.
+
+So the look-back **cannot be back-filled**. It accrues from the first day the
+page records one, and the panel says so rather than letting an empty table
+read as a broken one.
+
+**It costs no new secret and no new host.** `www.ams.usda.gov/mnreports/` is
+already fetched from the deployed app by `letter/sources.AMS_3208_PDF` with
+the same `pypdf`, so unlike `marsapi.ams.usda.gov` this path works on
+Community Cloud.
+
+### Banking is opportunistic, and that is a known gap
+
+`JSA.BOXED_BEEF.CUTOUT_AM`, append-only and newest-wins per `REPORT_DATE`, the
+same shape as `JSA.LETTER.DRAFTS` and for the same reasons: USDA issues
+corrections, an INSERT needs no UPDATE grant, and no write can bury the figure
+that was actually published.
+
+Community Cloud has no scheduler — the constraint `letter/rundown.py` records
+— so **the page itself is the only thing that writes**, on whichever days
+somebody opens it after the morning release. Days nobody opens it are holes.
+A cron on the droplet that already writes `JSA.BEEF_TRIMMINGS.IMPORT_COW90`
+can take the same table over without changing the page.
+
+**The schema has to exist before anything records.** Until it does the page
+prints `⚠️ Morning cutout is not being recorded` with the reason. That banner
+is deliberate: a write that silently fails looks exactly like a page nobody
+has opened, and months later there would be no history and no clue why. Same
+reasoning as the letter page's autosave banner.
+
+### Four things that look wrong and are not
+
+- **Parentheses are negative.** USDA prints a down day as `(2.23)`, not
+  `-2.23` — verified against the PM report on 2026-10-06, where Select fell
+  2.23. The trap `letter/sterling.py` documents. Read naively that is a
+  two-dollar *rally*, and the tile is green on a day the cutout broke.
+- **The spread is a free audit and the parser refuses a row that fails it.**
+  USDA prints Choice, Select and the spread independently, so the first two
+  must difference to the third. A shifted column is the failure that does not
+  raise and does not look wrong; `SPREAD_TOLERANCE` allows one cent of
+  independent rounding and no more.
+- **The parser checks it is reading LM_XB402 and the word "Morning".** The two
+  PDFs sit one slug apart in the same directory with a near-identical layout.
+  If USDA ever repoints that path, the afternoon close would be banked as a
+  morning reading and every fade would silently become zero.
+- **The default session reads the two REPORT DATES, not the clock.** A rule
+  like "after 3pm show the close" opens on a report that does not exist on
+  every day USDA runs late. `am_cutout.default_session()` owns it and
+  `tests/test_am_cutout.py` pins the truth table.
+
+**`am_cutout.SCHEMA` exists because the cache serves shape, not freshness** —
+the `leverage.SCHEMA` trap. Bump it whenever `parse_am` changes the shape of
+what it returns, or the page keeps serving a dict from before the new key
+existed and the tile renders "—" with nothing raising.
+
+**The morning panel renders ABOVE the page's `st.stop()` guard**, the same
+four-line shape as the Saturday Slaughter view below. It reads a different
+USDA host over a different protocol, so an LMR outage must not blank it.
+
+Everything below the switch — attribution, charts, grading, the data table —
+is the afternoon report regardless, and a caption says so. USDA publishes no
+cut-level detail for the morning report in any feed.
+
 ## The Saturday Slaughter view
 
 Added 2026-10-02 as the **fifth tab**, between AMS Weekly Slaughter and Beef

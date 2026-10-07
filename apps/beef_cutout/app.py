@@ -1,3 +1,6 @@
+import sys
+from pathlib import Path
+
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -7,6 +10,13 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from datetime import datetime, timedelta
 import time
+
+# A Streamlit page's own directory is never added to sys.path automatically.
+# Same two lines apps/beef_weight/app.py uses to reach daily_slaughter.py.
+# "am_cutout" is a name that exists ONCE in this repo, so unlike snowflake_db
+# it cannot join the five-copy sys.modules collision CLAUDE.md documents.
+sys.path.insert(0, str(Path(__file__).parent))
+import am_cutout
 
 # ── JSA Brand Colors ────────────────────────────────────────────────────────
 JSA_GREEN    = "#5e7164"
@@ -804,6 +814,161 @@ def fetch_grading_weekly() -> pd.DataFrame:
     return pd.DataFrame()
 
 
+# ── The MORNING cutout ───────────────────────────────────────────────────────
+# A SECOND USDA REPORT, NOT A SLICE OF THIS ONE. Everything above reads
+# LM_XB403, the afternoon close. LM_XB402 is the 9:30am read, published around
+# 10:55 CT, and it regularly tells a different story -- on 2026-10-06 it said
+# Choice +4.20 and the day closed +0.67.
+#
+# It has no API and no history anywhere; see am_cutout's docstring, which
+# records the probes so nobody repeats them. The fetch is a PDF from
+# www.ams.usda.gov -- the host letter/sources.py already reads from the
+# deployed app, and NOT marsapi, which Community Cloud cannot reach.
+
+@st.cache_data(ttl=900, show_spinner=False)
+def fetch_am_cutout(_schema: int = am_cutout.SCHEMA) -> dict:
+    """
+    Today's morning cutout. `_schema` is in the signature ONLY to key the
+    cache -- st.cache_data never notices that am_cutout.py changed. See
+    am_cutout.SCHEMA.
+    """
+    return am_cutout.fetch_am()
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def fetch_am_history(_schema: int = am_cutout.SCHEMA) -> pd.DataFrame:
+    """The mornings banked so far. Empty until this has run for a few days."""
+    return am_cutout.history()
+
+
+def am_panel(am_row: dict, pm_hist: pd.DataFrame, banked: pd.DataFrame):
+    """
+    The morning read, its own tiles, and what it did by the close.
+
+    PM FIGURES ARE NEVER RECOMPUTED HERE. The close comes from `pm_hist`, the
+    frame the rest of the page is built on, so the two sessions cannot
+    disagree about the same day -- the failure CLAUDE.md records twice for the
+    letter and the dashboard quoting the same FCI.
+    """
+    if am_row.get("error"):
+        st.warning(f"⏳ **Morning cutout unavailable** — {am_row['error']}")
+        return
+
+    rd = am_row.get("report_date")
+    st.markdown(
+        '<div class="sec-header">Morning Cutout — USDA LM_XB402, values as of 9:30am</div>',
+        unsafe_allow_html=True)
+
+    cols = st.columns(4)
+    with cols[0]:
+        st.markdown(tile("Choice", fmt(am_row["choice"]),
+                         delta_html(am_row.get("change_choice")), "tile-choice"),
+                    unsafe_allow_html=True)
+    with cols[1]:
+        st.markdown(tile("Select", fmt(am_row["select"]),
+                         delta_html(am_row.get("change_select")), "tile-select"),
+                    unsafe_allow_html=True)
+    with cols[2]:
+        st.markdown(tile("Choice–Select Spread", fmt(am_row["spread"]), cls="tile-spread"),
+                    unsafe_allow_html=True)
+    with cols[3]:
+        st.markdown(tile("Loads So Far", fmt_loads(am_row.get("loads")), cls="tile-vol"),
+                    unsafe_allow_html=True)
+
+    # PARENTHESISED ON PURPOSE. Written as a bare `f"..." if rd else ""`
+    # followed by more string literals, the conditional takes the implicit
+    # concatenation as its ELSE branch -- so the caption silently loses every
+    # sentence after the first on exactly the days the date IS present.
+    st.caption(
+        (f"Morning report for {rd:%b %d, %Y}. " if rd else "")
+        + "The change is USDA's own, against the prior afternoon close. "
+        + "USDA's 5-day simple average — the five sessions **before** this one — is "
+        + f"{fmt(am_row.get('avg5_choice'))} Choice, "
+        + f"{fmt(am_row.get('avg5_select'))} Select."
+    )
+
+    # ── What the morning read did by the close ──────────────────────────────
+    close = None
+    if rd is not None and not pm_hist.empty:
+        same = pm_hist[pm_hist["report_date"].dt.date == rd]
+        if not same.empty:
+            close = same.iloc[-1]
+
+    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+    if close is not None:
+        cfade = close["choice"] - am_row["choice"]
+        sfade = close["select"] - am_row["select"]
+        st.markdown('<div class="sec-header">Morning vs Close</div>', unsafe_allow_html=True)
+        cols = st.columns(4)
+        with cols[0]:
+            st.markdown(tile("Choice AM", fmt(am_row["choice"]), cls="tile-choice"),
+                        unsafe_allow_html=True)
+        with cols[1]:
+            st.markdown(tile("Choice PM", fmt(close["choice"]), delta_html(cfade), "tile-choice"),
+                        unsafe_allow_html=True)
+        with cols[2]:
+            st.markdown(tile("Select AM", fmt(am_row["select"]), cls="tile-select"),
+                        unsafe_allow_html=True)
+        with cols[3]:
+            st.markdown(tile("Select PM", fmt(close["select"]), delta_html(sfade), "tile-select"),
+                        unsafe_allow_html=True)
+        st.caption(
+            f"The close moved {cfade:+.2f} on Choice and {sfade:+.2f} on Select away from "
+            "the morning print. The delta on each PM tile is that move, not the day change."
+        )
+    else:
+        st.info(
+            "**The afternoon report is not out yet.** The morning read above is the "
+            "newest figure USDA has published today; the close lands around 3pm CT."
+        )
+
+    # ── The look-back ───────────────────────────────────────────────────────
+    # EMPTY IS THE EXPECTED STATE AT FIRST, and the caption says why rather
+    # than letting an empty panel read as a broken one. USDA keeps no archive
+    # of LM_XB402 at all, so this series starts the day the portal first
+    # recorded one and can never be back-filled.
+    st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="sec-header">Morning vs Close — History</div>',
+                unsafe_allow_html=True)
+
+    hist_fade = am_cutout.fade(banked, pm_hist)
+    if hist_fade.empty:
+        st.caption(
+            "No banked mornings with a close yet. USDA overwrites LM_XB402 in place "
+            "every morning and keeps no archive of it, so this history cannot be "
+            "back-filled — it fills one day at a time, from whichever days this page "
+            "is opened after the morning release."
+        )
+        return
+
+    show = hist_fade.sort_values("report_date", ascending=False).head(60)
+    st.dataframe(
+        pd.DataFrame({
+            "Date":        show["report_date"].dt.strftime("%b %d, %Y"),
+            "Choice AM":   show["choice_am"],
+            "Choice PM":   show["choice_pm"],
+            "Choice fade": show["choice_fade"],
+            "Select AM":   show["select_am"],
+            "Select PM":   show["select_pm"],
+            "Select fade": show["select_fade"],
+        }),
+        hide_index=True, use_container_width=True,
+        column_config={
+            c: st.column_config.NumberColumn(c, format="%.2f")
+            for c in ("Choice AM", "Choice PM", "Select AM", "Select PM")
+        } | {
+            c: st.column_config.NumberColumn(c, format="%+.2f")
+            for c in ("Choice fade", "Select fade")
+        },
+    )
+    med = show["choice_fade"].median()
+    st.caption(
+        f"{len(hist_fade)} day(s) banked. Median Choice fade {med:+.2f} — "
+        "the close minus the morning print, so a negative number is a morning "
+        "read the day did not hold."
+    )
+
+
 def build_history(sections: dict) -> pd.DataFrame:
     """Merge Cutout + Volume sections into a clean daily DataFrame."""
     cutout = sections.get("Current Cutout Values", pd.DataFrame())
@@ -925,10 +1090,16 @@ with st.sidebar:
     st.markdown("<hr>", unsafe_allow_html=True)
     st.markdown(
         f'<div style="color:{DM_MUTED};font-size:0.72rem;line-height:1.6;">'
-        f'Source: USDA AMS Livestock Mandatory Reporting<br>'
-        f'Report: <b>LM_XB403</b> (National Daily Boxed Beef Cutout &amp; Boxed Beef Cuts — PM)<br><br>'
-        f'Published twice daily:<br>'
-        f'&nbsp;&nbsp;AM ~10:30 CT &nbsp;·&nbsp; PM ~2:30 CT<br><br>'
+        f'Source: USDA AMS Livestock Mandatory Reporting<br><br>'
+        # TWO REPORTS, NOT ONE REPORT PUBLISHED TWICE. This read
+        # "Report: LM_XB403 ... Published twice daily", which conflated them:
+        # XB403 goes out once, in the afternoon. The morning figures are
+        # XB402, a separate report with a separate slug and no data feed.
+        f'<b>LM_XB402</b> — morning, values as of 9:30am, out ~10:55 CT<br>'
+        f'<b>LM_XB403</b> — afternoon close, out ~2:55 CT<br><br>'
+        f'The morning report is published only as a PDF and USDA keeps no '
+        f'archive of it, so its history is banked here one day at a time.'
+        f'<br><br>'
         f'Cache: 30 min. Use <b>Refresh Now</b> to force reload.</div>',
         unsafe_allow_html=True,
     )
@@ -957,6 +1128,31 @@ with st.spinner("Loading USDA beef cutout data…"):
         sections = {}
         hist     = pd.DataFrame()
 
+# ITS OWN try, AND ITS OWN HOST. The morning report is a PDF from
+# www.ams.usda.gov; everything above is the LMR JSON API. Folding it into the
+# block above would mean an LMR outage blanking a view that does not read LMR
+# at all -- the mistake the Saturday Slaughter tab's four-line guard exists to
+# prevent (CLAUDE.md, "The Saturday Slaughter view").
+try:
+    am_row = fetch_am_cutout()
+except Exception as e:
+    am_row = {"error": str(e)}
+
+# Record it, if it is not recorded already. OPPORTUNISTIC: Community Cloud has
+# no scheduler, so the series fills on the days somebody opens this page after
+# the morning release. See am_cutout.bank().
+am_bank_msg = ""
+if not am_row.get("error") and am_cutout.enabled():
+    am_bank_msg = am_cutout.ensure_table() or am_cutout.bank(am_row)
+    if am_bank_msg == "banked":
+        fetch_am_history.clear()
+        am_bank_msg = ""
+
+try:
+    am_banked = fetch_am_history()
+except Exception:
+    am_banked = pd.DataFrame()
+
 
 # ── Header ───────────────────────────────────────────────────────────────────
 
@@ -966,7 +1162,8 @@ with c1:
         f"<h1 style='color:{DM_TEXT};margin:0;padding:0;font-size:1.9rem;'>"
         "JSA - Daily Beef Cutout</h1>"
         f"<div style='color:{DM_MUTED};font-size:0.8rem;margin-top:2px;'>"
-        "Choice &amp; Select Composite 600–900 lbs · USDA LMR LM_XB403</div>",
+        "Choice &amp; Select Composite 600–900 lbs · "
+        "USDA LM_XB402 (morning) &amp; LM_XB403 (close)</div>",
         unsafe_allow_html=True,
     )
 with c2:
@@ -995,6 +1192,12 @@ if not load_ok:
     )
     with st.expander("Technical details"):
         st.code(err_msg)
+    # NOT REDUNDANT. The morning report comes from a different USDA host over
+    # a different protocol, so it is very often fine when LMR is not. Delete
+    # this and an LMR hiccup blanks a panel that never touched LMR.
+    if not am_row.get("error"):
+        st.markdown("<hr style='margin:18px 0;'>", unsafe_allow_html=True)
+        am_panel(am_row, pd.DataFrame(), am_banked)
     st.stop()
 
 if hist.empty:
@@ -1033,55 +1236,102 @@ loads_prev = vol_rows.iloc[-2]["total_loads"]  if len(vol_rows) > 1  else None
 loads_d1   = (loads_now - loads_prev) if (loads_now and loads_prev) else None
 
 
-# ── Metric Tiles — Choice ────────────────────────────────────────────────────
+# ── Session switch: morning read or afternoon close ─────────────────────────
+# USDA publishes this cutout TWICE a day and the portal only ever showed the
+# close. LM_XB402 is the 9:30am read; LM_XB403 is the settle. They disagree
+# often enough to matter -- see am_cutout's docstring.
+#
+# THE DEFAULT FOLLOWS WHAT IS PUBLISHED, NOT THE CLOCK. A rule like "after 3pm
+# show the close" opens on a report that does not exist on every day USDA runs
+# late. Reading the two report dates gives the same answer on a normal day and
+# the right one on a slow one. am_cutout.default_session() owns that rule and
+# tests/test_am_cutout.py pins its truth table.
+try:
+    from zoneinfo import ZoneInfo
+    _today_ct = datetime.now(ZoneInfo("America/Chicago")).date()
+except Exception:
+    _today_ct = datetime.now().date()
 
-st.markdown('<div class="sec-header">Choice Cutout — Composite 600–900 lbs</div>',
-            unsafe_allow_html=True)
-cols = st.columns(4)
-with cols[0]:
-    st.markdown(tile("Current", fmt(cn), cls="tile-choice"), unsafe_allow_html=True)
-with cols[1]:
-    st.markdown(tile("Day Change", fmt(cd1), delta_html(cd1), "tile-choice"), unsafe_allow_html=True)
-with cols[2]:
-    st.markdown(tile("Month Change", fmt(cd30), delta_html(cd30), "tile-choice"), unsafe_allow_html=True)
-with cols[3]:
-    st.markdown(tile("Year Change", fmt(cd365), delta_html(cd365), "tile-choice"), unsafe_allow_html=True)
+_pm_date  = hist["report_date"].max().date()
+_am_date  = am_row.get("report_date")
+_sessions = ["Morning (9:30am)", "Afternoon (close)"]
+_default  = (_sessions[0]
+             if am_cutout.default_session(_am_date, _pm_date, _today_ct) == "AM"
+             else _sessions[1])
 
-st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+_session = st.segmented_control(
+    "Session", _sessions, default=_default,
+    label_visibility="collapsed", key="bc_session")
 
-# ── Metric Tiles — Select ────────────────────────────────────────────────────
+# segmented_control returns None when the reader clears the selection.
+if _session is None:
+    _session = _default
 
-st.markdown('<div class="sec-header">Select Cutout — Composite 600–900 lbs</div>',
-            unsafe_allow_html=True)
-cols = st.columns(4)
-with cols[0]:
-    st.markdown(tile("Current", fmt(sn), cls="tile-select"), unsafe_allow_html=True)
-with cols[1]:
-    st.markdown(tile("Day Change", fmt(sd1), delta_html(sd1), "tile-select"), unsafe_allow_html=True)
-with cols[2]:
-    st.markdown(tile("Month Change", fmt(sd30), delta_html(sd30), "tile-select"), unsafe_allow_html=True)
-with cols[3]:
-    st.markdown(tile("Year Change", fmt(sd365), delta_html(sd365), "tile-select"), unsafe_allow_html=True)
+# SAY IT OUT LOUD. The look-back accrues only if the write is working, and a
+# write that silently fails looks exactly like a page nobody has opened yet --
+# months later there would be no history and no clue why. Same reasoning as
+# the letter page's autosave banner.
+if am_bank_msg:
+    st.caption(f"⚠️ Morning cutout is not being recorded — {am_bank_msg}")
 
-st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+if _session == _sessions[0]:
+    am_panel(am_row, hist, am_banked)
+    st.markdown("<hr style='margin:18px 0;'>", unsafe_allow_html=True)
+    st.caption(
+        "Everything below this line is the **afternoon** report (LM_XB403) — "
+        "the attribution, charts, grading and table are all built on the close. "
+        "USDA publishes no cut-level detail in a feed for the morning report."
+    )
+else:
+    # ── Metric Tiles — Choice ────────────────────────────────────────────────────
 
-# ── Metric Tiles — Spread & Volume ──────────────────────────────────────────
-
-st.markdown('<div class="sec-header">Choice–Select Spread &amp; Total Volume</div>',
-            unsafe_allow_html=True)
-cols = st.columns(4)
-with cols[0]:
-    st.markdown(tile("Choice–Select Spread", fmt(spn), delta_html(spd1), "tile-spread"),
+    st.markdown('<div class="sec-header">Choice Cutout — Composite 600–900 lbs</div>',
                 unsafe_allow_html=True)
-with cols[1]:
-    st.markdown(tile("Spread Month Change", fmt(spd30), delta_html(spd30), "tile-spread"),
+    cols = st.columns(4)
+    with cols[0]:
+        st.markdown(tile("Current", fmt(cn), cls="tile-choice"), unsafe_allow_html=True)
+    with cols[1]:
+        st.markdown(tile("Day Change", fmt(cd1), delta_html(cd1), "tile-choice"), unsafe_allow_html=True)
+    with cols[2]:
+        st.markdown(tile("Month Change", fmt(cd30), delta_html(cd30), "tile-choice"), unsafe_allow_html=True)
+    with cols[3]:
+        st.markdown(tile("Year Change", fmt(cd365), delta_html(cd365), "tile-choice"), unsafe_allow_html=True)
+
+    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+
+    # ── Metric Tiles — Select ────────────────────────────────────────────────────
+
+    st.markdown('<div class="sec-header">Select Cutout — Composite 600–900 lbs</div>',
                 unsafe_allow_html=True)
-with cols[2]:
-    st.markdown(tile("Total Loads Today", fmt_loads(loads_now), cls="tile-vol"),
+    cols = st.columns(4)
+    with cols[0]:
+        st.markdown(tile("Current", fmt(sn), cls="tile-select"), unsafe_allow_html=True)
+    with cols[1]:
+        st.markdown(tile("Day Change", fmt(sd1), delta_html(sd1), "tile-select"), unsafe_allow_html=True)
+    with cols[2]:
+        st.markdown(tile("Month Change", fmt(sd30), delta_html(sd30), "tile-select"), unsafe_allow_html=True)
+    with cols[3]:
+        st.markdown(tile("Year Change", fmt(sd365), delta_html(sd365), "tile-select"), unsafe_allow_html=True)
+
+    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+
+    # ── Metric Tiles — Spread & Volume ──────────────────────────────────────────
+
+    st.markdown('<div class="sec-header">Choice–Select Spread &amp; Total Volume</div>',
                 unsafe_allow_html=True)
-with cols[3]:
-    st.markdown(tile("Loads Day Change", fmt_loads(loads_d1), delta_html(loads_d1, " lds"), "tile-vol"),
-                unsafe_allow_html=True)
+    cols = st.columns(4)
+    with cols[0]:
+        st.markdown(tile("Choice–Select Spread", fmt(spn), delta_html(spd1), "tile-spread"),
+                    unsafe_allow_html=True)
+    with cols[1]:
+        st.markdown(tile("Spread Month Change", fmt(spd30), delta_html(spd30), "tile-spread"),
+                    unsafe_allow_html=True)
+    with cols[2]:
+        st.markdown(tile("Total Loads Today", fmt_loads(loads_now), cls="tile-vol"),
+                    unsafe_allow_html=True)
+    with cols[3]:
+        st.markdown(tile("Loads Day Change", fmt_loads(loads_d1), delta_html(loads_d1, " lds"), "tile-vol"),
+                    unsafe_allow_html=True)
 
 
 # ── What moved the cutout ────────────────────────────────────────────────────
