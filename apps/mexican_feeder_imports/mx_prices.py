@@ -107,6 +107,9 @@ MAX_GAP_DAYS = 21
 #: recorded in CLAUDE.md for leverage.SCHEMA and am_cutout.SCHEMA. Without it a
 #: new key renders "—" and nothing raises.
 #:
+#: 4 (2026-10-07): load() carries ratio_series + the decomposition, so the
+#: panel can say WHICH driver moved the ratio. A cached dict from before
+#: this has neither key and the section renders empty.
 #: 3 (2026-10-07): the AMS price is INTERPOLATED off the quote slide at the
 #: band's own weight instead of taken from whichever bracket the midpoint
 #: fell in. Row keys changed (us_low_lb/us_high_lb -> us_at_lb) and every
@@ -117,7 +120,7 @@ MAX_GAP_DAYS = 21
 #: cannot see, so the deployed page would have gone on serving the old
 #: heifers-first ordering from a cached dict with nothing raising. Bump this
 #: for an ordering or content change, not only for a new key.
-SCHEMA = 3
+SCHEMA = 4
 
 
 def usd_per_cwt(mxn_per_kg, mxn_per_usd):
@@ -436,18 +439,96 @@ def headline(cmp_, sex="M"):
     return best
 
 
-def spread_history(conn, sex="M", auction=AUCTION):
-    """[(sale_date, pct, usd, us_price)] for the heaviest matched band, oldest
-    first -- the series the panel charts once there is more than one sale.
+def ratio_series(conn, sex="M", auction=AUCTION):
+    """[{date, mxn_kg, fx, usd, us, pct, band}] oldest first, one row per sale.
 
-    It accrues from the first run and cannot be backfilled: mexicoganadero.com
-    keeps the current sale and one previous, with no archive and no date
-    parameter. Same shape as JSA.BOXED_BEEF.CUTOUT_AM and for the same reason.
+    Carries the PESO price and the exchange rate alongside the ratio, because
+    without them the ratio cannot be read -- see decompose().
     """
     out = []
     for d in reversed(sale_dates(conn, auction)):
         c = compare(conn, d, auction)
         h = headline(c, sex)
-        if h:
-            out.append((d, h["pct"], h["usd"], h["us_price"]))
+        if not h or not c.get("fx"):
+            continue
+        out.append({"date": d, "mxn_kg": h["price_avg"], "fx": c["fx"],
+                    "usd": h["usd"], "us": h["us_price"], "pct": h["pct"],
+                    "band": h["clasificacion"], "at_lb": h["us_at_lb"]})
     return out
+
+
+def decompose(a, b):
+    """Split the change in the ratio between two sales into its three drivers.
+
+    THE RATIO MOVES FOR THREE REASONS AND THEY DO NOT MEAN THE SAME THING.
+
+        ratio = (MXN_per_kg / LB_PER_KG / fx * 100) / US_per_cwt
+
+    so ln(ratio) = ln(MXN) - ln(fx) - ln(US) + const, and the change splits
+    EXACTLY into three additive parts. Returns percentage changes in logs plus
+    the residual, which is zero by construction and is returned anyway so the
+    page can assert it rather than trust it.
+
+    **THIS EXISTS BECAUSE THE RAW RATIO IS ACTIVELY MISLEADING.** Over the
+    first three sales on file the ratio fell 3.55 points, 62.25% -> 58.70%,
+    which reads as Mexican cattle cheapening against the border. They did not:
+    in PESOS the Tamaulipas price rose 0.24%, 75.20 -> 75.38 MXN/kg. The whole
+    move was the peso going 17.14 -> 18.13 to the dollar. A page that printed
+    the ratio alone would have had a reader concluding something about cattle
+    from a currency chart -- which is exactly what happened to me before this
+    function existed.
+
+    The two readings are both legitimate and answer different questions:
+
+    * **"Are Mexican cattle cheapening?"** -- look at `mxn` alone. Currency is
+      not part of that question.
+    * **"Is exporting more attractive?"** -- look at the whole ratio. A weaker
+      peso genuinely does make a US sale worth more at home, so FX belongs in
+      that one.
+
+    A page that does not say which question it is answering will be read as
+    answering the first while computing the second.
+    """
+    import math
+    for v in (a.get("pct"), b.get("pct"), a.get("mxn_kg"), b.get("mxn_kg"),
+              a.get("fx"), b.get("fx"), a.get("us"), b.get("us")):
+        if not v or v <= 0:
+            return None
+    d_ratio = math.log(b["pct"] / a["pct"])
+    d_mxn = math.log(b["mxn_kg"] / a["mxn_kg"])
+    d_fx = -math.log(b["fx"] / a["fx"])
+    d_us = -math.log(b["us"] / a["us"])
+    return {
+        "pts": b["pct"] - a["pct"],
+        "ratio": d_ratio * 100.0,
+        "mxn": d_mxn * 100.0,
+        "fx": d_fx * 100.0,
+        "us": d_us * 100.0,
+        "residual": (d_ratio - (d_mxn + d_fx + d_us)) * 100.0,
+    }
+
+
+def dominant(parts):
+    """Which driver moved the ratio most, as (key, label, signed %).
+
+    Named rather than ranked silently, because "the peso" and "Mexican cattle"
+    lead to opposite decisions and the page must say which one it saw.
+    """
+    if not parts:
+        return None
+    LABELS = {"mxn": "the Mexican market, in pesos",
+              "fx": "the peso against the dollar",
+              "us": "the US border price"}
+    k = max(LABELS, key=lambda k: abs(parts.get(k) or 0.0))
+    return k, LABELS[k], parts[k]
+
+
+def spread_history(conn, sex="M", auction=AUCTION):
+    """[(sale_date, pct, usd, us_price)] oldest first -- kept for the chart.
+
+    It accrues from the first run and cannot be backfilled:
+    mexicoganadero.com keeps the current sale and one previous, with no archive
+    and no date parameter. Same shape as JSA.BOXED_BEEF.CUTOUT_AM.
+    """
+    return [(r["date"], r["pct"], r["usd"], r["us"])
+            for r in ratio_series(conn, sex, auction)]

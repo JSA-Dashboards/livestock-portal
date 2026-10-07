@@ -360,3 +360,82 @@ def test_an_open_band_sorts_before_the_ladder_rather_than_crashing():
     ]})
     got = [r["clasificacion"] for r in mxp.bands(_Conn(cur), date(2026, 9, 30))]
     assert got[0] == "BECERRO CN MENOR 150KG"
+
+
+# ── the ratio is three things, not one ──────────────────────────────────────
+
+def _raw(pct, mxn, fx, us):
+    """A point built verbatim, for the guard cases that pass invalid values."""
+    return {"pct": pct, "mxn_kg": mxn, "fx": fx, "us": us}
+
+
+def _pt(mxn, fx, us, pct=None):
+    """A sale, with `pct` DERIVED rather than taken from the caller.
+
+    The identity below is exact only if the ratio and its three components
+    describe the same sale. Passing a 2dp `pct` beside unrounded inputs makes
+    the residual non-zero for a reason that is arithmetic rather than a defect
+    -- which is how the first version of this test failed. `pct` is still a
+    parameter so the expected value stays visible in each case; it is asserted
+    against the derived one instead of used.
+    """
+    derived = mxp.usd_per_cwt(mxn, fx) / us * 100.0
+    if pct is not None:
+        assert derived == pytest.approx(pct, abs=0.01), (derived, pct)
+    return {"pct": derived, "mxn_kg": mxn, "fx": fx, "us": us}
+
+
+def test_the_decomposition_sums_to_the_total_exactly():
+    """It is a log identity, not an attribution model. If the residual is ever
+    non-zero the arithmetic is wrong, not the market."""
+    a = _pt(75.20, 17.1382, 319.72, 62.25)
+    b = _pt(75.38, 18.1259, 321.34, 58.70)
+    d = mxp.decompose(a, b)
+    assert d["residual"] == pytest.approx(0.0, abs=1e-9)
+    assert d["mxn"] + d["fx"] + d["us"] == pytest.approx(d["ratio"], abs=1e-9)
+
+
+def test_a_currency_move_is_not_a_cattle_move():
+    """THE ERROR THIS EXISTS TO STOP, with the real figures.
+
+    Over the first three sales the ratio fell 3.55 points, 62.25% -> 58.70%,
+    which reads as Mexican cattle cheapening against the border. They did not:
+    in PESOS Tamaulipas ROSE 0.24%. The entire move was the peso going
+    17.14 -> 18.13 to the dollar. I read the ratio as cattle and told Ross so
+    before this function existed.
+    """
+    d = mxp.decompose(_pt(75.20, 17.1382, 319.72, 62.25),
+                      _pt(75.38, 18.1259, 321.34, 58.70))
+    assert d["pts"] == pytest.approx(-3.55, abs=0.01)
+    assert d["mxn"] > 0, "the peso price rose; it must not read as a fall"
+    assert d["fx"] < -5, "the peso did essentially all of it"
+    assert abs(d["fx"]) > abs(d["mxn"]) * 10
+    assert mxp.dominant(d)[0] == "fx"
+
+
+def test_dominant_names_the_biggest_mover_whichever_it_is():
+    cattle = mxp.decompose(_pt(80.0, 18.0, 320.0),
+                           _pt(66.0, 18.0, 320.0))
+    assert mxp.dominant(cattle)[0] == "mxn"
+    border = mxp.decompose(_pt(80.0, 18.0, 300.0),
+                           _pt(80.0, 18.0, 360.0))
+    assert mxp.dominant(border)[0] == "us"
+
+
+def test_a_flat_ratio_can_still_hide_two_large_offsetting_moves():
+    """The 09-24 -> 09-30 step: the ratio moved +0.03 pts and looked like
+    nothing happened, while the peso fell 3.03% and the US border price fell
+    2.57% against it. A page reporting only the ratio would call that a quiet
+    week. The control-channel mistake CLAUDE.md records for the video seam, in
+    a new place."""
+    d = mxp.decompose(_pt(75.00, 17.5841, 329.72, 58.68),
+                      _pt(75.38, 18.1259, 321.34, 58.70))
+    assert abs(d["pts"]) < 0.1, "the ratio barely moved"
+    assert abs(d["fx"]) > 2.5 and abs(d["us"]) > 2.5, "but two parts did"
+
+
+def test_bad_inputs_decompose_to_nothing_rather_than_raising():
+    assert mxp.decompose(_raw(0, 75, 18, 320), _raw(58, 75, 18, 320)) is None
+    assert mxp.decompose(_raw(58, 75, 18, 320), _raw(58, 0, 18, 320)) is None
+    assert mxp.decompose(_raw(58, 75, 18, 320), _raw(58, 75, None, 320)) is None
+    assert mxp.dominant(None) is None

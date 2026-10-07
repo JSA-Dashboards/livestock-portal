@@ -1061,517 +1061,83 @@ with tab_crossings:
                 st.info(f"No per-crossing detail reported yet in {this_yr}.")
 
         with t_hist:
-            by = D.get("by_year") or {}
-            if by:
-                years = sorted(by)
-                fig = go.Figure()
-                fig.add_bar(x=years, y=[by[y]["head"] for y in years],
-                            marker_color=JPSI_BLUE, name="Head",
-                            hovertemplate="%{x}<br>%{y:,.0f} head<extra></extra>")
-                fig.update_layout(
-                    height=300, margin=dict(l=10, r=10, t=10, b=10),
-                    paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
-                    font=dict(color=TEXT, size=11), showlegend=False,
-                    xaxis=dict(gridcolor=BORDER, title=None, type="category"),
-                    yaxis=dict(gridcolor=BORDER, title="Head", tickformat=","))
-                st.plotly_chart(fig, use_container_width=True)
-                st.dataframe(
-                    pd.DataFrame([{"Year": y, "Head (AMS est.)": by[y]["head"],
-                                   "Reporting days": by[y]["days"],
-                                   "Head per reporting day":
-                                       round(by[y]["head"] / by[y]["days"])
-                                       if by[y]["days"] else 0}
-                                  for y in years]),
-                    use_container_width=True, hide_index=True)
-                st.caption(
-                    "Whole-year totals from the same daily series. **2023 is "
-                    "incomplete** — AMS's daily volume section only runs from part "
-                    "way through that year (156 reporting days against 225 in "
-                    "2024), so its total is not comparable. 2024 and 2025 tie to "
-                    "Census within about 3%, which is the cross-check that the "
-                    "estimates are sound."
-                )
-    else:
-        st.info("No daily receipts stored for this year yet.")
-
-    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
-
-    # ── Tiles ───────────────────────────────────────────────────────────────────
-    st.markdown('<div class="sec-header">Current Activity</div>', unsafe_allow_html=True)
-
-    this_year = str(date.today().year)
-    last_year = str(date.today().year - 1)
-    cy = D["crossings"].get(this_year, {"crossings": 0, "zero": 0, "reports": 0})
-    ly = D["crossings"].get(last_year, {"crossings": 0, "zero": 0, "reports": 0})
-
-    c = st.columns(4)
-    with c[0]:
-        st.markdown(tile("Import Status", headline.split(",")[0].title(),
-                         sub(f"as of {fmt_date(S.get('latest_report'))}")),
-                    unsafe_allow_html=True)
-    with c[1]:
-        st.markdown(tile(f"Crossing Days {this_year}", f"{cy['crossings']:,}",
-                         sub(f"{cy['zero']} published days with no cattle")),
-                    unsafe_allow_html=True)
-    with c[2]:
-        st.markdown(tile(f"Crossing Days {last_year}", f"{ly['crossings']:,}",
-                         sub("same measure, full year")), unsafe_allow_html=True)
-    with c[3]:
-        st.markdown(tile("Days Since Reopening",
-                         f"{reop['days_since']:,}" if reop.get("days_since") is not None else "—",
-                         sub(f"reopened {fmt_date(reop.get('date'))}"
-                             if reop.get("date") else "no reopening on record")),
-                    unsafe_allow_html=True)
-
-    st.caption(
-        "Crossing days count report days on which cattle actually crossed. AMS began "
-        "publishing on zero-crossing days in 2026, so counting reports instead would "
-        f"read {cy['reports']} for {this_year} and understate the closure. It is a "
-        "proxy for activity, not a head count — a crossing day covers whatever "
-        "crossed that day, at whatever size."
-    )
-
-    st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
-
-    # ── Volume tiles ────────────────────────────────────────────────────────────
-    st.markdown('<div class="sec-header">Head Counts — Census</div>', unsafe_allow_html=True)
-
-    ann = D["annual"]
-    yrs = sorted(ann)
-    prev_full = [y for y in yrs if ann[y] > 0]
-    c = st.columns(4)
-    for i, y in enumerate(yrs[-3:]):
-        d = D["ytd"].get(y, {})
-        with c[i]:
-            st.markdown(tile(f"{y} Feeder Head", f"{ann[y]:,}",
-                             pct_delta(d.get("pct"), " vs prior YTD")
-                             + sub(f"{len(d.get('months', []))} months on file")),
-                        unsafe_allow_html=True)
-    with c[3]:
-        peak = max(ann.values()) if ann else 0
-        latest = ann[yrs[-1]] if yrs else 0
-        drop = (latest / peak - 1) * 100 if peak else None
-        st.markdown(tile("vs Peak Year", f"{drop:+.0f}%" if drop is not None else "—",
-                         sub(f"{max(ann, key=ann.get)} peak of {peak:,} head"
-                             if ann else "")), unsafe_allow_html=True)
-
-    # ── Annual + crossing days, the two sources side by side ────────────────────
-    st.markdown('<div class="sec-header">Both Sources, By Year</div>',
-                unsafe_allow_html=True)
-    years_all = sorted(set(list(map(str, ann.keys())) + list(D["crossings"].keys())))
-    fig = go.Figure()
-    fig.add_bar(x=years_all, y=[ann.get(int(y), 0) for y in years_all],
-                marker_color=JPSI_BLUE, name="Census head",
-                hovertemplate="%{x}<br>%{y:,.0f} head<extra></extra>")
-    fig.add_trace(go.Scatter(
-        x=years_all,
-        y=[D["crossings"].get(y, {}).get("crossings", 0) for y in years_all],
-        yaxis="y2", mode="lines+markers", name="Crossing days",
-        line=dict(color=AMBER, width=2.5), marker=dict(size=8),
-        hovertemplate="%{x}<br>%{y:,.0f} crossing days<extra></extra>"))
-    fig.update_layout(
-        height=320, margin=dict(l=10, r=10, t=10, b=10),
-        paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
-        font=dict(color=TEXT, size=11),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
-        xaxis=dict(gridcolor=BORDER, title=None, type="category"),
-        yaxis=dict(gridcolor=BORDER, title="Census head", tickformat=","),
-        yaxis2=dict(overlaying="y", side="right", title="Crossing days",
-                    showgrid=False),
-    )
-    st.plotly_chart(fig, use_container_width=True)
-    st.caption(
-        "The two independent sources track each other, which is the point of "
-        f"showing them together — where they diverge, the AMS line leads. "
-        f"{this_year} has {cy['crossings']} crossing days against a Census bar of "
-        "zero, because the reopening has not reached Census yet."
-    )
-
-    # ── Ports ───────────────────────────────────────────────────────────────────
-    st.markdown('<div class="sec-header">Which Crossings Are Open</div>',
-                unsafe_allow_html=True)
-    if D["ports"]:
-        pyears = sorted({y for d in D["ports"].values() for y in d})
-        prows = []
-        for p, d in D["ports"].items():
-            row = {"Crossing": bd.title_port(p)}
-            for y in pyears:
-                row[y] = d.get(y, 0)
-            prows.append(row)
-        st.dataframe(pd.DataFrame(prows), use_container_width=True, hide_index=True)
-        st.caption(
-            f"Crossing days per year, per port of entry. {peak_open_n} crossings "
-            f"were active in {peak_open_year}; the reopening has restarted "
-            f"{len(S.get('active_ports') or [])} of them. Zero-crossing days are "
-            "excluded, so a port publishing “no cattle crossed” does not count as "
-            "open here."
-        )
-
-    # ── Weight composition ──────────────────────────────────────────────────────
-    st.markdown('<div class="sec-header">What Crosses — Weight Composition</div>',
-                unsafe_allow_html=True)
-    if D["bands"]:
-        bands = D["bands"]
-        fig = go.Figure()
-        fig.add_bar(x=[h for _, h, _ in bands], y=[b for b, _, _ in bands],
-                    orientation="h", marker_color=JPSI_BLUE,
-                    text=[f"{s:.1f}%" for _, _, s in bands], textposition="outside",
-                    hovertemplate="%{y}<br>%{x:,.0f} head<extra></extra>")
-        fig.update_layout(
-            height=250, margin=dict(l=10, r=40, t=10, b=10),
-            paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
-            font=dict(color=TEXT, size=11), showlegend=False,
-            xaxis=dict(gridcolor=BORDER, title="Head", tickformat=","),
-            yaxis=dict(gridcolor=BORDER, title=None,
-                       categoryorder="array",
-                       categoryarray=[b for b, _, _ in bands][::-1]),
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        st.caption(
-            f"Latest year with volume: **{D['band_year']}**. Census's top band is "
-            "“320 kg or more”, and 320 kg is 705 lb — the very bottom of the CME "
-            "index's 700–899 lb window. So nearly all Mexican cattle cross *below* "
-            "index weight and only reach it after months on US feed. **An import cut "
-            "moves the index with a lag, through supply — it never shows up in the "
-            "index's own composition.** Imported cattle mostly go straight to "
-            "feedyards under retained ownership and never sell through a "
-            "USDA-reported auction, so they are not index-eligible."
-        )
-
-        if D["kinds"]:
-            kt = D["kinds"]
-            parts = " · ".join(f"{k}: {v:,}" for k, v in
-                               sorted(kt.items(), key=lambda t: -t[1]))
-            st.caption(
-                f"{D['kind_year']} by entry type — {parts}. Only the feeder bucket "
-                "is charted above: cattle entered for immediate slaughter, breeding "
-                "stock and dairy cows answer different questions."
-            )
-
-    # ── Commentary log ──────────────────────────────────────────────────────────
-    st.markdown('<div class="sec-header">Border Market Commentary</div>',
-                unsafe_allow_html=True)
-    if D["commentary"]:
-        crows = [{"Date": c["date"],
-                  "Crossed": "Yes" if c["crossed"] else "No",
-                  "Crossing": c["port"] or "—",
-                  "Report": c["text"]}
-                 for c in D["commentary"]]
-        st.dataframe(pd.DataFrame(crows), use_container_width=True, hide_index=True,
-                     column_config={"Report": st.column_config.TextColumn(width="large")})
-        st.caption(
-            "AMS's own words, newest first — trade tone, demand, and what the supply "
-            "consisted of. The head counts above come from the same report's volume "
-            "section; this is the colour that no number carries."
-        )
-
-    # ── Suspension timeline ─────────────────────────────────────────────────────
-    with st.expander("Suspension timeline, in AMS's own words"):
-        st.caption(
-            "Import-relevant announcements only. AMS's status report covers both "
-            "directions and its notes are classified by direction before being "
-            "shown here — the September 2026 standing note is about **exports** to "
-            "Mexico and is deliberately excluded from this list."
-        )
-        tl = D["timeline"]
-        if tl:
-            # Collapse consecutive identical announcements to their date range: the
-            # same "IMPORTS ARE SUSPENDED" line repeats weekly for months, and 40
-            # identical rows hide the handful of dates where something changed.
-            collapsed, run = [], None
-            for end, segs in tl:
-                key = " | ".join(segs)
-                if run and run["key"] == key:
-                    run["from"] = end
-                else:
-                    if run:
-                        collapsed.append(run)
-                    run = {"key": key, "from": end, "to": end, "segs": segs}
-            if run:
-                collapsed.append(run)
-            for r in collapsed:
-                span = (fmt_date(r["to"]) if r["from"] == r["to"]
-                        else f"{fmt_date(r['from'])} – {fmt_date(r['to'])}")
-                st.markdown(f"**{span}** — {' '.join(r['segs'])}")
-        else:
-            st.info("No status announcements stored.")
-
-    # ── Method ──────────────────────────────────────────────────────────────────
-    with st.expander("Sources and method"):
-        st.markdown(f"""
-**AMS (USDA Market News), current to {fmt_date(F['ams_through'])}**
-
-- Report 3486, *Mexico to United States Feeder Cattle Import Summary* —
-  section **Report Volume** gives daily receipts by crossing point
-  (`receipts_current_est`, rounded to the nearest hundred head) and the
-  week-to-date running total; section **Report Header** gives the narrative log.
-- Report 3629, *U.S. – Mexico Livestock Imports/Exports* — section **Report
-  Volume** gives exact weekly volumes with AMS's own year-to-date and
-  prior-year-to-date; **Report Header** gives the weekly status note.
-- MARS sections are **path** segments (`/reports/3486/Report%20Volume`). Passing
-  `section` as a query parameter is accepted and silently ignored, returning the
-  header — which is how this source was first mistaken for having no data.
-- Daily figures are AMS **estimates**; weekly and YTD figures are **actuals**.
-  Through 2026-09-04 the daily estimates summed to ~2,600 against an actual
-  2,557 — a 1.7% rounding gap.
-- Head counts use AMS's own "All Crossing Points / All Crossing States" row.
-  The per-crossing rows are hierarchical rollups that triple-count if summed,
-  and they disagreed with the published total on 19 of 463 days measured.
-- Crossing days exclude days AMS published but reported no cattle crossing. AMS
-  only began publishing those in 2026, so the raw report count understates the
-  closure.
-
-**Census (International Trade API), current to {fmt_month(F['census_through'])}**
-
-- Live bovine animals, HS 0102, from Mexico (country code 2010), monthly,
-  general imports, at the ten-digit commodity level.
-- Quantity is Census's `UNIT_QY1`, checked on ingest to be “NO.” (number of
-  head) rather than assumed.
-- The HS10 code list is **discovered, not hardcoded** — the ten-digit breakouts
-  get renumbered, and a code carrying all the volume one year can be empty the
-  next. Entry types are classified at read time from the description, splitting
-  off the “OTHER THAN PUREBRED BREEDING AND/OR DAIRY” exclusion clause first.
-- Census publishes about six weeks after month end, so this series cannot
-  answer what crossed last week. That is what the AMS status above is for.
-
-**Not shown, and why**
-
-- No price series **yet**. Report 3486's *Report Detail Current* section does
-  carry structured prices, weight breaks, frame and muscle grade — it is simply
-  not ingested here, and is the obvious next addition. Census value-per-head is
-  a declared customs value that moves with both the market and the weight mix,
-  so it is a level check rather than a quote.
-""")
-
-    st.markdown("<hr style='margin:18px 0 8px;'>", unsafe_allow_html=True)
-    st.markdown(
-        f'<div class="srcline">JSA · John Stewart &amp; Associates &nbsp;·&nbsp; '
-        f'Border status USDA AMS Market News · Head counts US Census Bureau '
-        f'International Trade &nbsp;·&nbsp; AMS through {fmt_date(F["ams_through"])} · '
-        f'Census through {fmt_month(F["census_through"])}</div>',
-        unsafe_allow_html=True)
-
-
-# ── Mexican Feeder Prices ───────────────────────────────────────────────────
-# The other half of the border: what the calf is worth BEFORE it crosses.
-# Arithmetic and every read live in mx_prices.py, the same split as the
-# Cold Storage view and the Packer Leverage tab.
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def load_mx_prices(_schema=mxp.SCHEMA):
-    """One connection, everything the prices tab draws. None on any failure.
-
-    `_schema` is passed in purely as part of the cache key. st.cache_data keys
-    on the decorated function's own code and arguments and NEVER on the modules
-    it calls, so without it a change to mx_prices.compare()'s shape would keep
-    serving a dict from before the new key existed and the tiles would render
-    "—" with nothing raising. The trap is recorded in CLAUDE.md for
-    leverage.SCHEMA and am_cutout.SCHEMA; bump mxp.SCHEMA, not this line.
-    """
-    conn = None
-    try:
-        conn = db.get_conn()
-        cmp_ = mxp.compare(conn)
-        if not cmp_:
-            return None
-        return {"cmp": cmp_,
-                "history": mxp.spread_history(conn),
-                "steer": mxp.headline(cmp_, "M"),
-                "heifer": mxp.headline(cmp_, "F")}
-    except Exception as e:
-        st.session_state["_mxp_error"] = f"{type(e).__name__}: {e}"
-        return None
-    finally:
-        if conn is not None:
-            conn.close()
-
-
-with tab_prices:
-    st.markdown('<div class="sec-header">Mexican Feeder Prices</div>',
-                unsafe_allow_html=True)
-
-    MX = load_mx_prices()
-
-    if not MX:
-        st.info(
-            "**No Mexican auction prices recorded yet.** This view reads "
-            "`JSA.CME_FEEDER_CATTLE.MX_AUCTION_PRICES`, written by the "
-            "`mx_auction.py` job. The source keeps only the current sale and "
-            "one previous, with no archive and no date parameter, so the "
-            "history accrues from the first run and cannot be back-filled."
-        )
-        if st.session_state.get("_mxp_error"):
-            st.caption(f"Detail: `{st.session_state['_mxp_error']}`")
-    else:
-        C = MX["cmp"]
-        steer = MX["steer"]
-
-        # THE CAVEAT GOES FIRST, NOT IN A FOOTNOTE. The figures below are
-        # correctly computed and describe a different state's cattle from the
-        # ones crossing at Douglas; a reader who meets the number before the
-        # caveat has already drawn the wrong conclusion.
-        st.warning(
-            "**Tamaulipas is not where these cattle come from.** Douglas and "
-            "Santa Teresa take **Sonora** and **Chihuahua** cattle, and neither "
-            "state runs a published feeder auction — the only figures for them "
-            "anywhere are association spokesmen quoted in the Mexican press. "
-            "Tamaulipas is a northern border state that publishes real feeder "
-            "bands by weight, which makes it the closest honest comparator and "
-            "not the right one. Read the gap below as *what a Mexican feeder "
-            "market pays*, never as the export premium at Douglas."
-        )
-
-        c = st.columns(4)
-        with c[0]:
-            st.markdown(tile(
-                "Tamaulipas Steer Calf",
-                f"${steer['usd']:,.2f}" if steer else "—",
-                sub(f"{steer['low_lb']:.0f}–{steer['high_lb']:.0f} lb · $/cwt"
-                    if steer else "no matched band")), unsafe_allow_html=True)
-        with c[1]:
-            st.markdown(tile(
-                "Same Weight at Douglas",
-                f"${steer['us_price']:,.2f}" if steer else "—",
-                sub(f"AMS #1-2 steers, read at {steer['us_at_lb']:.0f} lb"
-                    if steer else "not quoted")),
-                unsafe_allow_html=True)
-        with c[2]:
-            st.markdown(tile(
-                "Mexico as % of Border",
-                f"{steer['pct']:.0f}%" if steer else "—",
-                sub("auction price ÷ border quote")), unsafe_allow_html=True)
-        with c[3]:
-            st.markdown(tile(
-                "Difference",
-                f"${steer['diff']:,.2f}" if steer else "—",
-                sub("$/cwt, Mexico minus border")), unsafe_allow_html=True)
-
-        _gap = C["gaps"].get("M")
-        _gapwords = (f" — **{_gap} day{'s' if _gap != 1 else ''} apart**. "
-                     if _gap else ". ")
-        _fxwords = (
-            f"Converted at **{C['fx']:,.4f} MXN/USD**, the ECB reference rate "
-            f"for {fmt_date(C['fx_date'])} — the rate that stood when the sale "
-            f"traded, not today's, so a past sale is never restated by a later "
-            f"move in the peso." if C["fx"]
-            else "No exchange rate is recorded for this sale.")
-        st.caption(
-            f"Sale of **{fmt_date(C['sale_date'])}** at "
-            f"{C['auction'].title()}, against the AMS border quote for "
-            f"**{fmt_date(C['us_dates'].get('M'))}**" + _gapwords + _fxwords)
-
-        # DERIVED, NOT TYPED. This sentence carried a hard-coded "60%" and the
-        # headline moved to 59% the moment the AMS price started being read off
-        # the slide instead of a bracket -- so the tile and the sentence six
-        # inches below it disagreed about the same figure. That is the
-        # letter-vs-dashboard failure CLAUDE.md records twice, in miniature:
-        # both numbers defensible, neither raising. The Packer Leverage tab's
-        # honesty check is computed live for the same reason.
-        _pct = steer["pct"] if steer else None
-        st.caption(
-            "This is a **level, not a margin**. Nothing here nets out freight, "
-            "the test, the crossing fee, shrink or the buyer's margin"
-            + (f", so a calf worth {_pct:.0f}% of the Douglas price is not "
-               f"{100 - _pct:.0f}% of profit." if _pct else ".")
-        )
-
-        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
-
-        t_bands, t_hist, t_method = st.tabs(
-            ["By weight band", "Spread history", "How this is built"])
-
-        with t_bands:
-            _rows = []
-            for r in C["rows"]:
-                _rows.append({
-                    "Class": r["clasificacion"],
-                    "Sex": "Steer" if r["sex"] == "M" else "Heifer",
-                    "Weight (kg)": (f"{r['low_kg']:.0f}–{r['high_kg']:.0f}"
-                                    if r["low_kg"] and r["high_kg"]
-                                    else (f"<{r['high_kg']:.0f}"
-                                          if r["high_kg"] else "—")),
-                    "Weight (lb)": (f"{r['low_lb']:.0f}–{r['high_lb']:.0f}"
-                                    if r["low_lb"] and r["high_lb"]
-                                    else (f"<{r['high_lb']:.0f}"
-                                          if r["high_lb"] else "—")),
-                    "MXN/kg": (f"{r['price_avg']:,.2f}"
-                               if r["price_avg"] is not None else "—"),
-                    "USD/cwt": f"${r['usd']:,.2f}" if r["usd"] else "—",
-                    "AMS read at": (f"{r['us_at_lb']:.0f} lb"
-                                    if r["us_price"] else "—"),
-                    "AMS $/cwt": (f"${r['us_price']:,.2f}"
-                                  if r["us_price"] else "—"),
-                    "% of AMS": f"{r['pct']:.0f}%" if r["pct"] else "—",
-                })
-            st.dataframe(pd.DataFrame(_rows), use_container_width=True,
-                         hide_index=True)
-
-            # A whole sex with no counterpart is a fact about the US feed, not
-            # a failed join, and a column of dashes cannot tell the reader
-            # which. AMS stopped quoting Spayed Heifers in May 2025.
-            for _sex, _lastq in (C.get("us_last") or {}).items():
-                _which = "steer" if _sex == "M" else "heifer"
-                _cls = mxp.US_CLASS_BY_SEX[_sex]
-                if _lastq:
-                    st.info(
-                        f"**No border quote for {_which} calves.** AMS last "
-                        f"priced *{_cls}* at the border on "
-                        f"**{fmt_date(_lastq)}** — every 2026 quoted day is "
-                        f"Steers. The {_which} bands above are still converted "
-                        f"to $/cwt; they simply have nothing on the US side to "
-                        f"sit beside, which is the feed's state and not a "
-                        f"failed match."
-                    )
-                else:
-                    st.info(
-                        f"**No border quote for {_which} calves.** AMS has "
-                        f"never priced *{_cls}* at grade "
-                        f"{mxp.US_GRADE} in this record."
-                    )
-
-            _slide = (C.get("us_slide") or {}).get("M") or []
-            st.caption(
-                "**The AMS column is read off the quote slide at each band's "
-                "own weight, not taken from a bracket.** AMS quotes brackets — "
-                + (" · ".join(f"\\${p:,.0f} at {w:.0f} lb" for w, p in _slide)
-                   if _slide else "none quoted")
-                + " — and feeder prices slide with weight, so a 443–507 lb lot "
-                "is priced at what a 475 lb calf is worth rather than being "
-                "forced into 400–500 or 500–600. Those two choices gave 55% "
-                "and 60% for the same animal, which is why neither was kept. "
-                "Inside the lightest and heaviest brackets the slide is flat, "
-                "because there USDA's own quote is the answer."
-            )
-            st.caption(
-                "A band shows no AMS figure when its weight falls outside "
-                "everything AMS quoted — the 351–400 kg lot is 774–882 lb and "
-                "AMS stops at 800, so the slide is not run past the end of its "
-                "own data — or when it is one of the wide **CNH** lots. Those "
-                "are priced in dollars and left uncompared."
-            )
-
-        with t_hist:
-            _hist = MX["history"]
-            if len(_hist) > 1:
+            _ser = MX["series"]
+            if len(_ser) > 1:
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(
-                    x=[pd.Timestamp(str(d)) for d, _p, _u, _a in _hist],
-                    y=[p for _d, p, _u, _a in _hist],
+                    x=[pd.Timestamp(str(r["date"])) for r in _ser],
+                    y=[r["pct"] for r in _ser],
                     mode="lines+markers", name="Mexico as % of border",
-                    line=dict(color=JPSI_BLUE, width=2)))
+                    line=dict(color=JPSI_BLUE, width=2.5)))
+                # THE PESO PRICE RIDES ALONGSIDE ON ITS OWN AXIS, because the
+                # two lines diverging IS the finding. The ratio fell 3.55
+                # points over the first three sales while this line was flat.
+                fig.add_trace(go.Scatter(
+                    x=[pd.Timestamp(str(r["date"])) for r in _ser],
+                    y=[r["mxn_kg"] for r in _ser],
+                    mode="lines+markers", name="Tamaulipas, MXN/kg",
+                    yaxis="y2", line=dict(color="#B07A2A", width=2,
+                                          dash="dot")))
                 fig.update_layout(
-                    height=320, margin=dict(l=10, r=10, t=30, b=10),
-                    yaxis_title="% of AMS border quote", xaxis_title=None,
-                    plot_bgcolor="white", showlegend=False)
+                    height=330, margin=dict(l=10, r=10, t=30, b=10),
+                    yaxis=dict(title="% of AMS border quote"),
+                    yaxis2=dict(title="MXN/kg", overlaying="y", side="right",
+                                showgrid=False),
+                    xaxis_title=None, plot_bgcolor="white",
+                    legend=dict(orientation="h", y=1.15, x=0))
                 st.plotly_chart(fig, use_container_width=True)
+
+                st.markdown(
+                    "**Read the two lines against each other.** When they move "
+                    "apart, the ratio is telling you about the peso rather than "
+                    "about cattle."
+                )
+
+                rows = []
+                for a, b, d in MX["steps"]:
+                    if not d:
+                        continue
+                    rows.append({
+                        "From": fmt_date(a["date"], "%b %d"),
+                        "To": fmt_date(b["date"], "%b %d"),
+                        "Ratio": f"{a['pct']:.1f}% → {b['pct']:.1f}%",
+                        "Move": f"{d['pts']:+.2f} pts",
+                        "Mexican mkt (pesos)": f"{d['mxn']:+.2f}%",
+                        "Peso vs USD": f"{d['fx']:+.2f}%",
+                        "US border": f"{d['us']:+.2f}%",
+                    })
+                if rows:
+                    st.dataframe(pd.DataFrame(rows), use_container_width=True,
+                                 hide_index=True)
+
+                _ov, _d = MX.get("overall"), mxp.dominant(MX.get("overall"))
+                if _ov and _d:
+                    st.info(
+                        f"**Over the whole record the ratio moved "
+                        f"{_ov['pts']:+.2f} points, and most of that was "
+                        f"{_d[1]} ({_d[2]:+.2f}%).** The three parts are a "
+                        f"log decomposition and sum to the total exactly "
+                        f"(residual {_ov['residual']:+.4f}%), so this is "
+                        f"arithmetic rather than an attribution model."
+                    )
+                    st.caption(
+                        "**Which number you want depends on the question.** "
+                        "*Are Mexican cattle cheapening?* — read the "
+                        "**Mexican market (pesos)** column alone; currency is "
+                        "no part of that. *Is exporting more attractive?* — "
+                        "read the whole ratio, because a weaker peso genuinely "
+                        "does make a US sale worth more at home. The two "
+                        "answers can point opposite ways in the same week, and "
+                        "over this record they do."
+                    )
             st.caption(
-                f"**{len(_hist)} sale{'s' if len(_hist) != 1 else ''} on "
-                f"file.** mexicoganadero.com keeps the current sale and one "
-                f"previous, with no archive and no date parameter, so this "
-                f"series cannot be back-filled — it accrues from the first run "
-                f"of the recording job, the same shape as the morning cutout "
-                f"table. An empty or short chart here is the age of the "
-                f"record, not a broken feed."
+                f"**{len(_ser)} sale{'s' if len(_ser) != 1 else ''} on file.** "
+                f"mexicoganadero.com keeps the current sale and one previous, "
+                f"with no archive and no date parameter, so this cannot be "
+                f"back-filled — it accrues from the first run of the recording "
+                f"job, the same shape as the morning cutout table. A short "
+                f"record here is the age of the series, not a broken feed, and "
+                f"three sales is far too few to call a trend."
             )
 
         with t_method:
