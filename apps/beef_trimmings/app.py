@@ -933,9 +933,25 @@ with st.spinner("Loading full USDA beef trimmings history (US pull can take ~60-
     try:
         us_hist = fetch_us_fresh90()
         imp_hist = fetch_import_cow90()
-        load_ok, err_msg = True, ""
+        load_ok, err_msg, load_was_network = True, "", False
     except Exception as e:
-        load_ok, err_msg = False, str(e)
+        # WHAT FAILED, NOT A GUESS AT WHY. This handler used to catch every
+        # exception and render "the USDA server is not responding" over all of
+        # them. On 2026-10-07 the data arrived perfectly -- 5,619 rows through
+        # 10-02 -- and the page failed afterwards on a numpy dtype, while
+        # telling the reader USDA was down and telling whoever investigated to
+        # go and look at USDA. That cost twenty minutes before anyone opened
+        # the expander, and the expander is the only place the real error
+        # appeared.
+        #
+        # requests raises RequestException for every transport failure, which
+        # is the one case the old wording describes, so that is the one case
+        # that still claims it. Everything else now says the fetch succeeded
+        # and names the error class, which points at the page rather than at
+        # Washington.
+        load_ok = False
+        load_was_network = isinstance(e, requests.exceptions.RequestException)
+        err_msg = f"{type(e).__name__}: {e}"
         us_hist, imp_hist = pd.DataFrame(), pd.DataFrame()
 
     # The weekly line is context, not the product. If LM_XB460 is down the page
@@ -969,10 +985,21 @@ with _header:
             "Frozen 90s (Cow Meat)"), unsafe_allow_html=True)
 
 if not load_ok:
-    st.warning(
-        "⏳ **USDA data temporarily unavailable** — the USDA server is not responding. "
-        "This usually resolves in a few minutes. Use **Refresh now** in the sidebar to retry."
-    )
+    if load_was_network:
+        st.warning(
+            "⏳ **USDA data temporarily unavailable** — the USDA server is not responding. "
+            "This usually resolves in a few minutes. Use **Refresh now** in the sidebar to retry."
+        )
+    else:
+        # Says the fetch WORKED, because that is the fact that redirects the
+        # search. A reader who sees "USDA is down" checks USDA; one who sees
+        # the data arrived and the page failed checks the page.
+        st.error(
+            "**The USDA data loaded, but this page could not process it.** "
+            "This is not a USDA outage — retrying will not help. The error is "
+            f"in **Technical details** below (`{err_msg.split(':')[0]}`), and "
+            "it needs a code fix rather than a refresh."
+        )
     with st.expander("Technical details"):
         st.code(err_msg)
     st.stop()
