@@ -1703,12 +1703,50 @@ def fetch_feeder_index() -> dict:
     shown = round(value, 2)
     prev_shown = round(prev_val, 2) if prev_val is not None else None
 
+    # WHAT CME HAS ACTUALLY PRINTED, alongside the forward estimate.
+    #
+    # `value` above is the index CME will publish NEXT -- the first business
+    # day after their last file -- which is the right headline for the
+    # dashboard and for the morning brief, both of which label it an
+    # ESTIMATE. It is the wrong number for the evening letter, which prints
+    # "Feeder Cattle Index: x" with no date and no qualifier, so a reader
+    # takes it for the index as it stands.
+    #
+    # Reported by Ross on 2026-10-07: the afternoon report quoted 335.86 for
+    # index date 10/07, an estimate built on 228 locations and 17,524 head
+    # with the day still running, when CME had that morning published 10/06
+    # at 337.87 -- a figure our own 10/06 estimate matched to the cent
+    # (337.869294). Two dollars apart, and the published one was available.
+    #
+    # So both are returned and the caller chooses by what it is claiming.
+    # Nothing here changes `value`; the morning brief's "JSA FCI Estimate"
+    # is doing exactly what it says.
+    pub_block = None
+    if not published.empty and "fci_value" in published.columns:
+        pr = published.copy()
+        pr["date"] = pd.to_datetime(pr["date"], errors="coerce")
+        pr = pr.dropna(subset=["date", "fci_value"]).sort_values("date")
+        if not pr.empty:
+            p_date = pr["date"].iloc[-1].date()
+            p_val = round(float(pr["fci_value"].iloc[-1]), 2)
+            # Same round-then-subtract convention as above: a reader holding
+            # two letters subtracts the printed figures and must get this.
+            p_prev = (round(float(pr["fci_value"].iloc[-2]), 2)
+                      if len(pr) > 1 else None)
+            pub_block = {
+                "value": p_val,
+                "date": p_date.isoformat(),
+                "change": round(p_val - p_prev, 2) if p_prev is not None else None,
+                "source": "CME published (cme_ftp_daily)",
+            }
+
     return {
         "value": shown,
         "date": headline.isoformat(),
         "change": round(shown - prev_shown, 2) if prev_shown is not None else None,
         "source": "JSA estimate (fci_daily)",
         "cme_last_published": last_published.isoformat() if last_published else None,
+        "published": pub_block,
     }
 
 

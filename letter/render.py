@@ -15,7 +15,7 @@ here either.
 from __future__ import annotations
 
 import html
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from . import chart as chart_mod
@@ -250,6 +250,51 @@ def cash_trade_block(cash: dict) -> str:
     return "<h2>Last week&rsquo;s cash trade:</h2>" + _bullets(rows)
 
 
+def fci_published(fci: dict) -> str:
+    """
+    The EVENING letter's index figure: what CME has actually printed, dated.
+
+    NOT `fci["value"]`, which is the index CME will publish NEXT -- the first
+    business day after their last file. That forward estimate is the right
+    headline for the dashboard and for the morning brief, and both label it
+    one. The evening rundown prints "Feeder Cattle Index: x" bare, so a
+    reader takes it for the index as it stands, and an estimate of a day
+    still in progress is not that.
+
+    Reported by Ross on 2026-10-07: the afternoon report quoted 335.86 for
+    index date 10/07 -- 228 locations, 17,524 head, the day still running --
+    when CME had published 10/06 that morning at 337.87. Our own 10/06
+    estimate was 337.869294, so the published figure was not merely
+    available, it was one we already agreed with.
+
+    THE DATE IS PART OF THE FIGURE now. The index being printed is no longer
+    the letter's own date, and without saying so this trades one silent
+    wrong reading for another.
+
+    Falls back to the estimate, marked, rather than printing nothing: a
+    missing line reads as "no index today", which is never true.
+    """
+    fci = fci or {}
+    pub = fci.get("published") or {}
+    if pub.get("value") is not None:
+        return f"{money(pub['value'])}{_as_of(pub.get('date'))}"
+    if fci.get("value") is not None:
+        return f"{money(fci['value'])} (JSA est.{_as_of(fci.get('date'), bare=True)})"
+    return MISSING
+
+
+def _as_of(iso, bare: bool = False) -> str:
+    """' (10/6)' from an ISO date. Built by hand -- the no-pad day directive
+    is %-d on Linux and %#d on Windows, and this runs on both."""
+    if not iso:
+        return ""
+    try:
+        d = datetime.strptime(str(iso)[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return ""
+    return f" {d.month}/{d.day}" if bare else f" ({d.month}/{d.day})"
+
+
 def rundown_block(fci: dict, slaughter: dict, cutout: dict,
                   daily: dict = None, weights: dict = None) -> str:
     rows = []
@@ -257,7 +302,7 @@ def rundown_block(fci: dict, slaughter: dict, cutout: dict,
     weights = weights or {}
 
     if config.INCLUDE_FEEDER_INDEX:
-        rows.append(f"Feeder cattle index- {money((fci or {}).get('value'))}")
+        rows.append(f"Feeder cattle index- {fci_published(fci)}")
 
     # Daily and WTD come from AMS 3208, which is a different report from the
     # weekly SJ_LS712 the carcass weights use -- see sources.parse_3208.
@@ -320,7 +365,7 @@ def friday_rundown_block(fci: dict, slaughter: dict, cutout: dict,
     rows = []
 
     if config.INCLUDE_FEEDER_INDEX:
-        rows.append(f"Feeder Cattle Index: {money((fci or {}).get('value'))}")
+        rows.append(f"Feeder Cattle Index: {fci_published(fci)}")
 
     rows.append(f"Daily slaughter: {head_k(daily.get('current_day'))}")
     # NO "(est., w/e 10/3)" TAG HERE, and it is not an oversight.

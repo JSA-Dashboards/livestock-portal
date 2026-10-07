@@ -573,9 +573,41 @@ usually printed by the time the letter goes out, and that is the one to take
 from them. `tests/test_feeder_index.py` pins it with the real 09-29/09-30
 numbers and runs the REAL `index_dates` rule rather than a fake.
 
-The general lesson, since it has now cost two mornings: **when the letter and
+- **2026-10-07, the WRONG DATE entirely.** The afternoon report printed
+  `Feeder cattle index- 335.86` where CME had that morning published 10/06 at
+  **337.87**. Not a rounding or precedence fault: 335.86 is the estimate for
+  index date **10/07**, off 228 locations and 17,524 head with the day still
+  running, against 10/06's 277 and 20,050. Our own 10/06 estimate was
+  337.869294 — the published figure was one we already agreed with to the
+  cent.
+
+  The cause is a rule applied outside its purpose. `fetch_feeder_index`
+  headlines **the index CME will print NEXT**, which is right for the
+  dashboard and right for the morning brief — both label it an estimate, and
+  the AM block's heading is literally "JSA FCI Estimate". The evening rundown
+  prints `Feeder Cattle Index: x` bare, with no date and no qualifier, so a
+  reader takes it for the index as it stands. A forward estimate is not that.
+
+  `fetch_feeder_index` now also returns a **`published`** block — CME's
+  newest actually-printed index, its date and its move — and
+  `render.fci_published()` is what the two evening rundowns and the rundown
+  slide call. The AM brief is untouched; it was never wrong. **The date is
+  now printed** (`337.87 (10/6)`), because the index being quoted is no
+  longer the letter's own date and leaving that unsaid trades one silent
+  wrong reading for another. The fallback prints the estimate marked
+  `(est 10/7)` rather than nothing, since a missing line reads as "no index
+  today".
+
+  Cross-check worth knowing: the computed move matched `reported_change` in
+  `cme_ftp_daily` exactly (+0.65), which is an independent confirmation the
+  round-then-subtract convention is right.
+
+The general lesson, since it has now cost three mornings: **when the letter and
 a dashboard quote the same figure, a disagreement is a bug even when both
-numbers are defensible.** Neither will raise.
+numbers are defensible.** Neither will raise. The 10-07 case adds a second
+edge: **the same figure on two surfaces can need two different DATES**, and a
+rule that is correct on one surface can be wrong on the other for reasons that
+have nothing to do with arithmetic.
 
 ## The COF Recap tab
 

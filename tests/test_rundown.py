@@ -57,7 +57,11 @@ CTX = {
         "steers": {"value": 979.0, "week_ending": "2026-09-19",
                    "last_week": 977.0, "year_ago": 967.0},
     },
-    "fci": {"value": 337.66, "date": "2026-10-05"},
+    # CME had published 10/02 at 337.76 when this slide was built; 337.66
+    # was our forward estimate for 10/05, the row still filling.
+    "fci": {"value": 337.66, "date": "2026-10-05",
+            "published": {"value": 337.76, "date": "2026-10-02",
+                          "change": 0.92}},
     "slaughter": {"weekly": {"ytd_chg_pct": -7.5},
                   "beef_production": {"ytd_chg_pct": -5.2}},
 }
@@ -78,7 +82,7 @@ EXPECTED = [
     (1, "5-day average- 358.14."),
     (0, "Choice/Select spread: 19.69"),
     (1, "Choice & Higher- 87.3%"),
-    (0, "Feeder Index: 337.66 (est)"),
+    (0, "Feeder Index: 337.76 (10/2)"),
     (0, "Slaughter -7.5% YTD"),
     (0, "Beef Production -5.2% YTD"),
 ]
@@ -93,6 +97,45 @@ def test_it_reproduces_the_slide_that_was_typed_by_hand():
     swapped week reads as a perfectly plausible market.
     """
     assert rundown.rows(CTX) == EXPECTED
+
+
+def test_the_index_is_cme_s_published_figure_not_the_forward_estimate():
+    """
+    `fci["value"]` is the index CME will print NEXT, so on an afternoon
+    slide it is a part-day estimate of a day that has not finished. On
+    2026-10-07 it read 335.86 for index date 10/07 -- 228 locations against
+    the previous day's 277 -- where CME had published 10/06 at 337.87.
+    Ross caught it on the letter; the slide had the same fault.
+    """
+    line = [t for _, t in rundown.rows(CTX) if t.startswith("Feeder Index")][0]
+    assert line == "Feeder Index: 337.76 (10/2)"
+    assert "337.66" not in line, "still quoting the forward estimate"
+
+
+def test_the_date_is_printed_because_it_is_no_longer_the_letter_s_own():
+    """Without it this trades one silent wrong reading for another: the
+    reader assumes the index is today's."""
+    line = [t for _, t in rundown.rows(CTX) if t.startswith("Feeder Index")][0]
+    assert "(10/2)" in line
+
+
+def test_without_a_published_figure_it_falls_back_and_says_est():
+    """A missing line would read as "no index today", which is never true.
+    The estimate is printed, marked, and dated."""
+    ctx = {**CTX, "fci": {"value": 335.86, "date": "2026-10-07"}}
+    line = [t for _, t in rundown.rows(ctx) if t.startswith("Feeder Index")][0]
+    assert line == "Feeder Index: 335.86 (est 10/7)"
+
+
+def test_the_slide_and_the_letter_quote_the_same_index():
+    """
+    CLAUDE.md records twice that the letter and a dashboard quoted the same
+    figure and disagreed, each defensible and neither raising. Both now read
+    the same `published` block, so pin that they agree.
+    """
+    from letter import render
+    line = [t for _, t in rundown.rows(CTX) if t.startswith("Feeder Index")][0]
+    assert render.fci_published(CTX["fci"]) in line
 
 
 def test_a_missing_figure_is_marked_and_the_bullet_still_prints():
@@ -315,7 +358,7 @@ def test_the_slide_carries_every_figure_as_text():
     buf.seek(0)
     text = "\n".join(s.text_frame.text for s in Presentation(buf).slides[0].shapes
                      if s.has_text_frame)
-    for probe in ("88,019", "+33,747", "379.38", "19.69", "87.3%", "337.66 (est)",
+    for probe in ("88,019", "+33,747", "379.38", "19.69", "87.3%", "337.76 (10/2)",
                   "-7.5% YTD", "-5.2% YTD", "979#", "9/19/26"):
         assert probe in text, probe
 

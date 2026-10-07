@@ -136,6 +136,15 @@ def _as_date(d):
         return None
 
 
+def _md(iso, bare: bool = False) -> str:
+    """' (10/6)' from a date. Matches render._as_of so the slide and the
+    letter stamp the index the same way."""
+    d = _as_date(iso)
+    if d is None:
+        return ""
+    return f" {d.month}/{d.day}" if bare else f" ({d.month}/{d.day})"
+
+
 def _weekday(d) -> str:
     """'Monday', for the 'Choice- 378.26. +4.07 Monday PM.' line."""
     d = _as_date(d)
@@ -207,14 +216,27 @@ def rows(ctx: dict) -> list:
     out.append((0, f"Choice/Select spread: {money(_diff(choice.get('value'), select.get('value')))}"))
     out.append((1, f"Choice & Higher- {pct1(grading.get('pct'))}"))
 
-    # "(est)" because this row is OUR reconstruction, not CME's published
-    # index, and it is the least complete row in the series by definition --
-    # the headline date is the first business day after CME's last file, so
-    # auctions are still reporting into it. The tag is
-    # Ross's and it is the honest label for a figure that moves after you
-    # print it: the 10/05 row read 337.66 in the morning and 337.22 in the
-    # afternoon of 10/06.
-    out.append((0, f"Feeder Index: {money(fci.get('value'))} (est)"))
+    # CME'S PUBLISHED INDEX, DATED -- not the forward estimate.
+    #
+    # `fci["value"]` is the index CME will print NEXT, which on an afternoon
+    # slide is a part-day estimate of a day that has not finished. On
+    # 2026-10-07 that read 335.86 for index date 10/07, off 228 locations and
+    # 17,524 head, where CME had published 10/06 that morning at 337.87 --
+    # a figure our own 10/06 estimate matched to the cent. Ross reported it
+    # against the afternoon letter, whose evening rundown had the same fault;
+    # both now take `published`, so the slide and the letter cannot disagree.
+    #
+    # The "(est)" tag survives only on the fallback, where it is true. It was
+    # Ross's own label and it is the honest one for a figure that moves after
+    # you print it -- the 10/05 row read 337.66 in the morning of 10/06 and
+    # 337.22 that afternoon.
+    pub = fci.get("published") or {}
+    if pub.get("value") is not None:
+        out.append((0, f"Feeder Index: {money(pub['value'])}"
+                       f"{_md(pub.get('date'))}"))
+    else:
+        out.append((0, f"Feeder Index: {money(fci.get('value'))} (est"
+                       f"{_md(fci.get('date'), bare=True)})"))
 
     weekly = slaughter.get("weekly") or {}
     beef = slaughter.get("beef_production") or {}
