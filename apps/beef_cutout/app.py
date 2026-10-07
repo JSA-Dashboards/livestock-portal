@@ -1254,7 +1254,10 @@ except Exception:
 
 _pm_date  = hist["report_date"].max().date()
 _am_date  = am_row.get("report_date")
-_sessions = ["Morning (9:30am)", "Afternoon (close)"]
+# Just the two words. The qualifiers that used to be here -- "(9:30am)" and
+# "(close)" -- are provenance, and provenance belongs in the caption under
+# the tiles, not in a control the reader clicks twenty times a day.
+_sessions = ["Morning", "Afternoon"]
 _default  = (_sessions[0]
              if am_cutout.default_session(_am_date, _pm_date, _today_ct) == "AM"
              else _sessions[1])

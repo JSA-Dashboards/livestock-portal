@@ -21,7 +21,6 @@ import io
 import re
 
 import trimmings_qc as qc
-import import_cow90
 import quota_tracker as qtr
 
 # ── JPSI Brand ───────────────────────────────────────────────────────────────
@@ -645,11 +644,34 @@ def fetch_import_cow90() -> pd.DataFrame:
     if _sf_use():
         return _fetch_import_cow90_snowflake()
 
-    # ONE implementation of this fetch, in import_cow90.py, because the droplet
-    # cron that writes the Snowflake mirror runs the same code. Two copies --
-    # one here, one unattended on a host nobody looks at -- is how the page and
-    # its own mirror come to disagree with nothing raising.
-    return import_cow90.fetch_live(MARS_KEY)
+    hi = (datetime.now() + timedelta(days=2)).strftime("%m/%d/%Y")
+    url  = f"{MARS_BASE}/{LS421_ID}"
+    sess = _session()
+    resp = sess.get(url, params={"q": f"report_begin_date={IMPORT_HISTORY_START}:{hi}", "allSections": "true"},
+                     auth=(MARS_KEY, ""), timeout=90)
+    resp.raise_for_status()
+    payload = resp.json()
+
+    details = next((s["results"] for s in payload if s.get("reportSection") == "Report Details"), [])
+    if not details:
+        return pd.DataFrame(columns=["report_date", "origin", "avg_price"])
+
+    df = pd.DataFrame(details)
+    df = df[df["commodity"] == IMPORT_ITEM].copy()
+    df["report_date"] = pd.to_datetime(df["report_date"], errors="coerce")
+    df["low"]  = pd.to_numeric(df["low_price"], errors="coerce")
+    df["high"] = pd.to_numeric(df["high_price"], errors="coerce")
+    df["mid"]  = df[["low", "high"]].mean(axis=1)
+    df = df.dropna(subset=["report_date", "mid"])
+
+    origin_map = {ORIGIN_SA: "South America", ORIGIN_ANZ: "Australia/NZ"}
+    df = df[df["country_of_origin"].isin(origin_map)].copy()
+    df["origin"] = df["country_of_origin"].map(origin_map)
+
+    weekly = (df.groupby(["report_date", "origin"], as_index=False)
+                .agg(avg_price=("mid", "mean"), low=("low", "mean"),
+                     high=("high", "mean"), n=("mid", "size")))
+    return weekly.sort_values("report_date").reset_index(drop=True)
 
 
 def pivot_origin(weekly: pd.DataFrame, origin: str) -> pd.DataFrame:
