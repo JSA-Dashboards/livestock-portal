@@ -524,6 +524,16 @@ def publication_stamps() -> str:
         return PROBE_FAILED
     wanted = {CT150_ID, CT154_ID}
     wanted |= {slug for cuts in DAILY_REGIONS.values() for slug in cuts.values()}
+    # THE PACKER LEVERAGE SLUGS BELONG HERE AND WERE MISSING UNTIL 2026-10-07.
+    # fetch_leverage keys on stamps_for(_probe, [CT142_ID, CT153_ID]); with
+    # neither slug in this set that call finds nothing to keep and returns the
+    # CONSTANT sentinel. A constant key plus @st.cache_data(persist="disk") --
+    # which voids a ttl, the trap documented directly above this function -- is
+    # a cache that never expires. The whole tab (purchase mix, packer-owned,
+    # forward book, committed, delivery schedule) therefore froze at whatever it
+    # first fetched and only moved on "Refresh now", a SCHEMA bump or a reboot,
+    # rendering perfectly throughout. Same symptom as the fix at line 338.
+    wanted |= {leverage.CT142_ID, leverage.CT153_ID}
     stamps = {x.get("slug_id"): x.get("published_date") for x in rows
               if isinstance(x, dict) and x.get("slug_id") in wanted}
     if not stamps:
@@ -1495,12 +1505,12 @@ def wasde_steer_panel():
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.markdown(tile(
-            f"WASDE {year} forecast",
+            f"USDA {year} steer price forecast",
             f"${now:,.2f}" if now is not None else "—",
             _d(rev, rev_pct, " vs last month")), unsafe_allow_html=True)
     with c2:
         st.markdown(tile(
-            f"Forecast vs {year - 1}",
+            f"USDA {year} forecast vs {year - 1}",
             f"{yoy_pct:+,.1f}%" if yoy_pct is not None else "—",
             _d(yoy_abs, None, "/cwt")), unsafe_allow_html=True)
     with c3:
@@ -1508,7 +1518,7 @@ def wasde_steer_panel():
         done = [q for q in qs if not q["projected"]]
         left = [q for q in qs if q["projected"]]
         st.markdown(tile(
-            "Quarters still forecast",
+            f"{year} quarters still forecast",
             f"{len(left)} of {len(qs)}" if qs else "—",
             f'<div class="tile-delta-neu">'
             f'{", ".join(q["period"] for q in left) or "none"} to come'
@@ -1519,7 +1529,7 @@ def wasde_steer_panel():
         nxt_rev = ((nxt_v - nxt_p)
                    if (nxt_v is not None and nxt_p is not None) else None)
         st.markdown(tile(
-            f"WASDE {year + 1} forecast",
+            f"USDA {year + 1} steer price forecast",
             f"${nxt_v:,.2f}" if nxt_v is not None else "—",
             _d(nxt_rev,
                (nxt_rev / nxt_p * 100.0) if (nxt_rev is not None and nxt_p)

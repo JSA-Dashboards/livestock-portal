@@ -198,6 +198,25 @@ def delta_pair(value, percent, suffix="", digits=0):
             f'{" · ".join(bits)}{suffix}</div>')
 
 
+def running_html(over_pct):
+    """
+    "running 12.3% above this" -- a sentence, not a signed percentage.
+
+    The earlier version printed the arrow and "% — recent pace against
+    this", which left the reader to work out which of the two numbers was
+    above the other. A headline that needs decoding is not a headline, and
+    on this portal every one of them has to be readable on its own.
+    """
+    if over_pct is None:
+        return '<div class="tile-delta-neu">&mdash;</div>'
+    if abs(over_pct) < 0.05:
+        return '<div class="tile-delta-neu">running at this pace</div>'
+    word = "above" if over_pct > 0 else "below"
+    arrow = "▲" if over_pct > 0 else "▼"
+    return (f'<div class="tile-delta-neu">{arrow} running '
+            f'{abs(over_pct):,.1f}% {word} this</div>')
+
+
 def fmt(v, digits=0, suffix=""):
     return f"{v:,.{digits}f}{suffix}" if v is not None else "—"
 
@@ -347,6 +366,10 @@ def wasde_panel(attribute: str, label: str, key: str):
     if not s:
         return None, None
 
+    # EVERY TILE LABEL NAMES ITS OWN FIGURE. A reader should never have to
+    # look up at the section header to find out whether 6,262 is imports or
+    # exports -- that is the standing rule for headlines on this portal.
+    noun = label.lower().rstrip("s") if label.lower().endswith("s") else label.lower()
     year = s["year"]
     now = s["current"].get(attribute)
     was = s["prior"].get(attribute)
@@ -391,7 +414,7 @@ def wasde_panel(attribute: str, label: str, key: str):
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.markdown(tile(
-            f"WASDE {year} forecast", fmt(now),
+            f"USDA {year} {noun} forecast", fmt(now),
             delta_pair(rev, rev_pct,
                        " vs " + (s["prior_month"] or "last month")),
             sub="calendar year · million lb, carcass weight",
@@ -399,7 +422,7 @@ def wasde_panel(attribute: str, label: str, key: str):
             unsafe_allow_html=True)
     with c2:
         st.markdown(tile(
-            f"Forecast vs {year - 1}",
+            f"USDA {year} forecast vs {year - 1}",
             (f"{yoy:+,.1f}%" if yoy is not None else "—"),
             delta_pair(yoy_abs, None, " million lb"),
             sub=f"{year - 1} actual {fmt(base)}", cls="tile-wasde"),
@@ -415,14 +438,14 @@ def wasde_panel(attribute: str, label: str, key: str):
                 nxt_sub = (f"{nxt_rev_pct:+,.1f}% vs {nxt['prior_month']}"
                            f" · million lb")
         st.markdown(tile(
-            f"WASDE {year + 1} forecast" if nxt_val else "Next year",
-            fmt(nxt_val),
+            f"USDA {year + 1} {noun} forecast", fmt(nxt_val),
             delta_pair(None, nxt_vs_now, f" vs {year}", ),
             sub=nxt_sub,
             cls="tile-wasde"), unsafe_allow_html=True)
     with c4:
         st.markdown(tile(
-            "Report", wd["report_month"].split()[0] if wd["report_month"] else "—",
+            "WASDE report",
+            wd["report_month"].split()[0] if wd["report_month"] else "—",
             sub=(wd["release_date"].isoformat() if wd["release_date"] else ""),
             cls="tile-wasde"), unsafe_allow_html=True)
 
@@ -492,13 +515,13 @@ def pace_panel(flow: str, forecast, year: int, through: int, cls: str):
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.markdown(tile(
-            f"{year} YTD actual", fmt(p["ytd"]),
+            f"{year} {flow.lower()} so far", fmt(p["ytd"]),
             delta_html(p["yoy_pct"], "%", 1),
             sub=f"Jan–{tf.month_name(through)} vs {year - 1}", cls=cls),
             unsafe_allow_html=True)
     with c2:
         st.markdown(tile(
-            "Recent pace", fmt(p["run_rate"]),
+            "Recent monthly pace", fmt(p["run_rate"]),
             sub="average of the last 3 months", cls=cls),
             unsafe_allow_html=True)
     with c3:
@@ -511,17 +534,18 @@ def pace_panel(flow: str, forecast, year: int, through: int, cls: str):
         if p["required"] and p["run_rate"]:
             over = (p["run_rate"] / p["required"] - 1.0) * 100.0
         st.markdown(tile(
-            "Required to hit WASDE", fmt(p["required"]),
-            delta_html(over, "% — recent pace against this", 1,
-                       neutral=True),
-            sub=f"per month, {p['months_left']} months left", cls=cls),
+            "Monthly pace needed", fmt(p["required"]),
+            running_html(over),
+            sub=(f"to reach USDA's {forecast:,.0f}, "
+                 f"{p['months_left']} months left" if forecast
+                 else f"{p['months_left']} months left"), cls=cls),
             unsafe_allow_html=True)
     with c4:
         st.markdown(tile(
-            "Seasonal projection", fmt(p["projection"]),
+            f"{year} full-year projection", fmt(p["projection"]),
             delta_pair(p["implied_vs_forecast"],
                        pct(p["projection"], forecast) if forecast else None,
-                       " vs WASDE"),
+                       " vs USDA's forecast"),
             sub="full year on the seasonal shape", cls=cls),
             unsafe_allow_html=True)
 
@@ -778,7 +802,7 @@ with tab_net:
         with c4:
             net_yoy = pct(n_net, base_net)
             st.markdown(tile(
-                f"Forecast vs {n_year - 1}",
+                f"USDA {n_year} forecast vs {n_year - 1}",
                 (f"{net_yoy:+,.1f}%" if net_yoy is not None else "—"),
                 delta_pair((n_net - base_net)
                            if (n_net is not None and base_net is not None)

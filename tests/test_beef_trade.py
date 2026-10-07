@@ -598,7 +598,7 @@ def test_the_wasde_panel_shows_the_forecast_change_as_a_percentage():
     your head. The year-on-year move is now a tile value in its own right.
     """
     src = (ROOT / "apps" / "beef_trade" / "app.py").read_text(encoding="utf-8")
-    assert 'f"Forecast vs {year - 1}"' in src
+    assert 'f"USDA {year} forecast vs {year - 1}"' in src
     assert 'f"{yoy:+,.1f}%"' in src
     # The month-over-month revision carries its percentage beside the absolute.
     assert "delta_pair(rev, rev_pct," in src

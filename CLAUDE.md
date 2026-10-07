@@ -11,6 +11,39 @@ label changed — the folder is still `apps/beef_weight/` and the `url_path` is
 still `beef-weight`, deliberately, so existing bookmarks keep working. Do not
 "tidy" either one.
 
+## Every headline must read on its own — a standing rule
+
+Asked for directly on 2026-10-07, and it governs every page, not the one it
+came up on: **a tile label, a section header or a delta line must be
+unambiguous to someone who reads only that line.** If a reader has to look up
+at the section header, do arithmetic between two tiles, or decide which of
+two numbers a percentage belongs to, the headline has failed.
+
+What that rules out, each of which was live on this portal at some point the
+same day:
+
+- **A label that does not name its own figure.** "WASDE 2026 forecast" over
+  `6,262` does not say imports, exports, pounds or dollars. It is
+  "USDA 2026 import forecast" now. The section header above it is not an
+  excuse — headers scroll away and tiles get screenshotted.
+- **A delta the reader has to orient.** "3.3% — recent pace against this"
+  made you work out which number was above the other. It says
+  "running 12.3% above this" now. A delta that needs a sentence gets one.
+- **A number whose comparison is implied.** "Forecast vs 2025" became
+  "USDA 2026 forecast vs 2025" at Ross's request, because the first one left
+  you to infer whose forecast and for which year.
+- **Jargon where a plain word exists.** Tile labels say **USDA**; the report
+  is named **WASDE** only in the section header and the caption, where it is
+  provenance rather than the point.
+- **A bare `0`.** "0 vs Aug" reads as a missing figure; USDA leaving a
+  forecast alone is an answer, so it prints "unchanged".
+- **Parentheses around a number.** In USDA's reports they mean NEGATIVE.
+
+The two further up this file are the same rule arriving from other
+directions: the Mexican feeder caveat that must stay above the figure it
+qualifies, and the letter-versus-dashboard FCI disagreements, where both
+numbers were defensible and the pairing was the bug.
+
 ## Never set SNOWFLAKE_SCHEMA in this app's secrets
 
 **NINE** bundled modules read Snowflake and each defaults `SNOWFLAKE_SCHEMA` to
