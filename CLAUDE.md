@@ -1450,8 +1450,8 @@ Added 2026-10-07. Monthly US beef exports and imports, each against the USDA
 WASDE forecast for the same flow. Three tabs — `Exports | Imports | Net
 trade` — and **every one of them carries its own WASDE expectation panel**,
 which is the requirement the page was built for rather than a flourish. The
-arithmetic is in `apps/beef_trade/trade_flows.py`, the WASDE reader is
-`apps/beef_trade/wasde.py`, and the layout is `app.py` — the same split as
+arithmetic is in `apps/beef_trade/trade_flows.py`, the WASDE reader is the
+root-level `wasde.py` (shared — see the Cash Cattle Trade section below), and the layout is `app.py` — the same split as
 `cof_recap`, `leverage` and `am_cutout`.
 
 **No new secret and no new host.** ERS is a plain CSV and ESMIS is the host
@@ -1688,6 +1688,124 @@ already rejected on measurement. The grid now **borrows**: when the last row
 would hold a single tile, one moves down from the row above, giving 4/4/3/2.
 Tiles keep their four-column width. A test pins the arithmetic for every
 count from 2 to 40.
+
+## WASDE on Cash Cattle Trade — and why only there
+
+Added 2026-10-07, at the top of the Weekly tab. USDA's quarterly 5-Area steer
+price forecast, the calendar-year total, the month's revision and each
+quarter marked actual or projected.
+
+**IT IS THIS PAGE'S OWN SERIES, NOT A RELATED INDICATOR PLACED NEARBY.**
+WASDE's footnote defines its steer price as *"5-Area, Direct, Total all
+grades"* — which is what LM_CT150 reports and what the tiles beneath it
+chart. `wasde.STEER_PRICE_BASIS` carries that footnote around rather than
+paraphrasing it, because "the USDA steer price" on its own would not
+establish the comparison.
+
+What it adds that nothing else on the portal does: USDA **cut the 2026
+forecast from $245.35 to $237.35 in one month**, and the 2027 from $249 to
+$238. An $8 and an $11 revision, invisible here until now.
+
+### WASDE HAS NOTHING FOR THE OTHER ELEVEN PAGES, and that is checked
+
+Searched the whole September 2026 release on 2026-10-07: **zero** occurrences
+of *feeder*, *cutout*, *cow*, *heifer*, *on feed* or *placement*. The only
+cattle price in WASDE is the steer line above, and the only cattle quantity
+is beef production.
+
+So there is no WASDE panel for CME Feeder Cattle Index, Beef Cutout, US Cow
+Herd, Cattle on Feed, Livestock Inventory, Beef Trimmings, Mexican Feeder
+Imports or Backgrounding Crush — not an oversight, and **not worth probing
+again**. Adding one would mean showing a loosely-related number, which is
+worse than showing none. Seasonal Futures already marks WASDE release dates
+as chart vlines, which is the right treatment there.
+
+Two that would work and were not asked for: **Cattle Weights** (beef
+production, onto the Beef Production tab) and **Fed Cattle Crush** (the same
+steer price, against the futures-derived sale price).
+
+### WASDE PRINTS BEEF PRODUCTION TWICE AND THE TWO DISAGREE
+
+The quarterly table (page 31) says **24,877** for 2026; the meats
+supply-and-use table (page 32) says **24,945**. The gap is farm production —
+**68 million lb**, the same in both years on file.
+
+Page 31 is *"Commercial production for red meats"*; page 32 is *"Total
+including farm production"*. Both are right. Two portal pages reading
+different tables would quote different US beef production and neither would
+raise — the letter-versus-dashboard failure this file records twice already,
+waiting on a third route. `tests/test_beef_trade.py` pins the 68.
+
+### `wasde.py` lives at the REPO ROOT, and must stay one file
+
+It moved out of `apps/beef_trade/` the moment a second page wanted it. Both
+pages put the repo root on `sys.path` and `import wasde`, the convention
+`apps/weekly_reports/app.py` already uses to reach `letter`.
+
+**Do not copy it next to the page that needs it.** Python caches modules by
+NAME, so a second `wasde.py` under an app directory would mean whichever page
+loaded first decided which copy every other page got — the
+`snowflake_db`-times-five problem at the top of this file, which this module
+was written to avoid rather than to join. A test asserts `rglob("wasde.py")`
+returns exactly one path.
+
+### Four things in the quarterly parser that look wrong and are not
+
+- **The annual rows sit at the LEFT MARGIN, like a year heading.** Quarter
+  rows are indented (`     III*`); `AugProj.` and `SepProj.` are not. The
+  first period regex required leading whitespace and silently dropped every
+  annual row — the table parsed, all four quarters were correct, and
+  `annual()` returned None with nothing raising. Those rows are the only ones
+  the panel wants.
+- **A forecast year has no "Annual" row at all.** It prints `<Mon>Proj.`
+  twice, last month's and this month's, so the newest Proj. row IS the annual
+  forecast and the month-over-month revision is free — the same arrangement
+  the meats table uses. Reaching for "Annual" on the current year returns
+  nothing.
+- **`quarter_number` is a MAP, not the length of the numeral.** `len("III")`
+  is 3 and right; `len("IV")` is 2 and labels the fourth quarter "Q2". That
+  shipped for about ten minutes and rendered the year as Q1, Q2, Q3, Q2.
+- **Two tables share printed page 31**, so the prices table has no page
+  header above it and its month comes from the first header anywhere in the
+  document. Tables are found by TITLE, never by page.
+
+### The audit, because a price table has no accounting identity
+
+The meats table has two identities per row and refuses a row that fails
+either. A price table has none, so a shifted column there would be invisible
+from the row alone.
+
+The substitute: USDA's footnote says the annual is a simple average of months
+and each quarter is three months, so **the annual must equal the mean of its
+four quarters**. For September 2026 that is 237.3525 against a printed
+237.35. `reconciles()` checks it and the panel prints a warning if it ever
+fails.
+
+`ok` is **None, not False**, when fewer than four quarters are published —
+which is every forecast year before the following May. Refusing to judge is
+different from judging it wrong, and a banner that fires for eight months of
+every year is one nobody reads in the month it matters.
+
+### Placement and caching
+
+**The panel renders ABOVE the LMR outage guard**, the same four-line shape as
+the Saturday Slaughter view and the morning cutout panel. WASDE comes from
+ESMIS over a different host; below the guard the whole thing would vanish on
+exactly the days a reader most wants a reference price. A test asserts the
+call precedes `if not load_ok:`.
+
+`fetch_wasde_steer` is cached six hours and keyed on `wasde.SCHEMA` — the
+cache serves shape, not freshness, and never notices that `wasde.py` changed.
+It also flattens the dataclass to a plain dict before caching, because
+`st.cache_data` pickles what it stores and a cached dataclass goes stale
+against its own class the moment the module is edited.
+
+**A local dev server will not pick up an edit to `wasde.py` either.** Seen
+while building this: the page raised `AttributeError: module 'wasde' has no
+attribute 'quarter_number'` against code where the attribute plainly existed
+and the tests passed. The server had imported the module before the function
+was added, and a rerun reuses `sys.modules`. Restart the server; on the
+deployed app, reboot. Same cause as the entry further up this file.
 
 ## The Saturday Slaughter view
 

@@ -30,6 +30,7 @@ import pandas as pd
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "apps" / "beef_trade"))
 
 import trade_flows as tf      # noqa: E402
@@ -386,7 +387,7 @@ def test_wasde_module_is_generic_and_not_beef_specific():
     step back to a second WASDE reader -- the snowflake_db.py-times-five
     problem, which CLAUDE.md records at length.
     """
-    src = (ROOT / "apps" / "beef_trade" / "wasde.py").read_text(encoding="utf-8")
+    src = (ROOT / "wasde.py").read_text(encoding="utf-8")
     body = "\n".join(
         ln for ln in src.splitlines()
         if not ln.lstrip().startswith("#"))
@@ -658,3 +659,165 @@ def test_delta_pair_does_not_wrap_a_percentage_in_parentheses():
 
     assert "unchanged" in dp(0.0, 0.0, " vs Aug")
     assert "&mdash;" in dp(None, None)
+
+
+# -- the quarterly tables (Cash Cattle Trade's WASDE panel) ------------------
+
+QUARTERLY_TXT = FIX / "wasde0926_quarterly.txt"
+
+
+def _prices():
+    return wasde.parse_quarterly(
+        QUARTERLY_TXT.read_text(encoding="utf-8"),
+        wasde.QUARTERLY_PRICES_TITLE, wasde.QUARTERLY_PRICE_COLUMNS)
+
+
+def test_annual_rows_sit_at_the_left_margin_like_a_year_heading():
+    """
+    THE ROWS THE PANEL ACTUALLY WANTS. Quarter rows are indented ("     III*")
+    and the annual rows are NOT -- "AugProj." and "SepProj." start at column
+    zero, exactly like a year heading. The first version of the period regex
+    required leading whitespace, so every annual row was dropped: the table
+    parsed, all four quarters were right, and `annual()` returned None with
+    nothing raising.
+    """
+    q = _prices()
+    periods = {(r.year, r.period) for r in q.rows}
+    assert (2026, "AugProj.") in periods
+    assert (2026, "SepProj.") in periods
+    assert (2025, "Annual") in periods
+
+
+def test_the_steer_forecast_and_its_revision():
+    q = _prices()
+    annual, is_fc = q.annual("steer", 2026)
+    assert is_fc is True
+    assert annual == pytest.approx(237.35)
+    assert q.prior_annual("steer", 2026) == pytest.approx(245.35)
+    # USDA cut the 2026 forecast $8.00/cwt in one month.
+    assert annual - q.prior_annual("steer", 2026) == pytest.approx(-8.00)
+    # A completed year reads its "Annual" row and is not a forecast.
+    assert q.annual("steer", 2025) == (pytest.approx(224.37), False)
+
+
+def test_the_annual_equals_the_mean_of_its_four_quarters():
+    """
+    THE ONLY AUDIT A PRICE TABLE OFFERS. The meats table has two accounting
+    identities; this one has none, so a shifted column would be invisible
+    from the row alone. USDA's footnote says the annual is a simple average
+    of months and each quarter is three months, so the two are the same
+    arithmetic: 237.3525 against a printed 237.35.
+    """
+    q = _prices()
+    audit = q.reconciles("steer", 2026)
+    assert audit["ok"] is True, audit
+    assert audit["mean"] == pytest.approx(237.3525)
+    assert audit["quarters"] == 4
+
+
+def test_the_audit_declines_to_judge_a_part_published_year():
+    """
+    2027 has two quarters published, which is every forecast year before the
+    following May. `ok` is None -- not False -- so the page can stay quiet
+    instead of crying wolf for eight months of every year.
+    """
+    q = _prices()
+    assert q.reconciles("steer", 2027)["ok"] is None
+    assert q.reconciles("steer", 2025)["ok"] is None
+
+
+def test_quarter_number_is_a_map_and_not_the_length_of_the_numeral():
+    """
+    The obvious shortcut -- len("III") == 3 -- is right for I, II and III and
+    calls IV Q2. It shipped for about ten minutes and labelled the last two
+    quarters of the year "Q3 proj" and "Q2 proj".
+    """
+    assert [wasde.quarter_number(r) for r in ("I", "II", "III", "IV")] == [1, 2, 3, 4]
+    assert wasde.quarter_number("Annual") is None
+    assert wasde.quarter_number("SepProj.") is None
+
+
+def test_quarters_are_marked_actual_or_projected_by_the_printed_asterisk():
+    """
+    USDA prints "III*" for a projection and "I" for a settled quarter. The
+    panel says which is which, so the asterisk has to survive the parse.
+    """
+    q = _prices()
+    by_period = {r.period: r for r in q.quarters(2026)}
+    assert by_period["I"].projected is False
+    assert by_period["II"].projected is False
+    assert by_period["III"].projected is True
+    assert by_period["IV"].projected is True
+
+
+def test_two_tables_on_one_printed_page_are_found_separately():
+    """
+    Production and prices both sit on WASDE page 31, so the prices table has
+    no page header above it and the month has to come from elsewhere in the
+    document. Finding tables by title rather than by page is what keeps them
+    apart at all.
+    """
+    txt = QUARTERLY_TXT.read_text(encoding="utf-8")
+    prices = _prices()
+    prod = wasde.parse_quarterly(txt, wasde.QUARTERLY_PRODUCTION_TITLE,
+                                 wasde.QUARTERLY_PRODUCTION_COLUMNS)
+    assert prices.report_month == "September 2026"
+    assert prod.report_month == "September 2026"
+    # Different tables, different numbers: a steer price is not a production
+    # figure, so a mix-up would be obvious here and nowhere else.
+    assert prices.annual("steer", 2026)[0] == pytest.approx(237.35)
+    assert prod.annual("beef", 2026)[0] == pytest.approx(24877)
+
+
+def test_wasde_prints_beef_production_twice_and_they_differ():
+    """
+    A TRAP FOR THE NEXT PAGE THAT WANTS THIS. The quarterly table says 24,877
+    for 2026 and the supply-and-use table says 24,945. The gap is farm
+    production -- 68 million lb, the same in both years on file. Two portal
+    pages reading different tables would quote different beef production and
+    both be right, which is the letter-versus-dashboard failure CLAUDE.md
+    records twice.
+    """
+    txt = QUARTERLY_TXT.read_text(encoding="utf-8")
+    prod = wasde.parse_quarterly(txt, wasde.QUARTERLY_PRODUCTION_TITLE,
+                                 wasde.QUARTERLY_PRODUCTION_COLUMNS)
+    meats = _parsed()
+    commercial = prod.annual("beef", 2026)[0]
+    including_farm = meats.value("Beef", "production")
+    assert including_farm - commercial == pytest.approx(68, abs=1)
+
+    commercial_25 = prod.annual("beef", 2025)[0]
+    including_farm_25 = meats.value("Beef", "production", 2025)
+    assert including_farm_25 - commercial_25 == pytest.approx(68, abs=1)
+
+
+def test_cash_trade_imports_the_shared_wasde_and_does_not_copy_it():
+    """
+    `wasde.py` exists ONCE, at the repo root. Python caches modules by name,
+    so a second copy under an app directory would mean whichever page loaded
+    first decided which one every other page got -- the snowflake_db-times-
+    five problem, which CLAUDE.md documents at length and which this module
+    was written to avoid rather than to join.
+    """
+    copies = sorted(pth.relative_to(ROOT).as_posix()
+                    for pth in ROOT.rglob("wasde.py")
+                    if "__pycache__" not in pth.parts)
+    assert copies == ["wasde.py"], copies
+
+    page = (ROOT / "apps" / "cash_trade" / "app.py").read_text(encoding="utf-8")
+    assert "import wasde" in page
+    assert "wasde.SCHEMA" in page, "the cached fetch must key on the schema"
+
+
+def test_the_cash_trade_panel_renders_above_the_lmr_guard():
+    """
+    WASDE comes from ESMIS over a different host from LMR. Below the outage
+    guard the whole panel would vanish on exactly the days a reader most
+    wants a reference price -- the same four-line shape the Saturday
+    Slaughter view and the morning cutout panel use.
+    """
+    page = (ROOT / "apps" / "cash_trade" / "app.py").read_text(encoding="utf-8")
+    body = page[page.index("with tab_weekly:"):]
+    call = body.index("wasde_steer_panel()")
+    guard = body.index("if not load_ok:")
+    assert call < guard, "the WASDE panel moved below the LMR outage guard"

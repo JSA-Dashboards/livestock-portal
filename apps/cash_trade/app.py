@@ -15,9 +15,19 @@ from pathlib import Path
 # (checked 2026-10-02), so the bare-name import is safe here in a way that
 # `snowflake_db` is not -- see CLAUDE.md on the five identical copies of that
 # one and why whichever page loads first wins.
+# `wasde` is SHARED and lives at the repo root -- the same convention
+# apps/weekly_reports/app.py uses to reach the `letter` package. It is
+# deliberately not copied in beside leverage.py: Python caches modules by
+# NAME, so a second copy would mean whichever page loaded first decided which
+# one every other page got. That is the `snowflake_db`-times-five problem
+# CLAUDE.md documents, and US Beef Trade imports this same file.
+REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).parent))
 import leverage  # noqa: E402
 import scorecard  # noqa: E402
+import wasde  # noqa: E402
 
 # ── JPSI Brand ───────────────────────────────────────────────────────────────
 JPSI_DARK = "#32373c"
@@ -1389,11 +1399,176 @@ with c2:
 # And the hidden-tab rule: a hidden tab is hidden, NOT skipped. The Daily block
 # runs on every rerun whether or not anyone opens it, which is why its fetch is
 # one cached range request per region rather than one per day.
+# ── USDA WASDE steer price forecast ─────────────────────────────────────────
+#
+# THE ONE WASDE LINE THAT IS THIS PAGE'S OWN SERIES. WASDE's footnote defines
+# its "Streers" price (USDA's spelling, left alone) as
+# "5-Area, Direct, Total all grades" -- which is what LM_CT150 reports and
+# what the tiles above chart. So this is not a related indicator placed
+# nearby; it is USDA's forecast of the number the page already shows.
+#
+# It is also the only cattle figure WASDE carries. Searched the whole report
+# on 2026-10-07: ZERO occurrences of feeder, cutout, cow, heifer, on feed or
+# placement. Anyone asking why the feeder index page has no WASDE panel can
+# stop looking -- there is nothing to put on it.
+#
+# QUARTERLY, AND CALENDAR YEARS. WASDE's grain tables are split marketing
+# years; the animal-products tables are January to December, like the meats
+# supply-and-use table the US Beef Trade page reads.
+
+@st.cache_data(ttl=21600, persist="disk", show_spinner=False)
+def fetch_wasde_steer(_schema: int = wasde.SCHEMA) -> dict:
+    """
+    USDA's quarterly 5-Area steer price forecast, flattened to a plain dict.
+
+    FLATTENED because st.cache_data pickles what it stores and a cached
+    dataclass goes stale against its own class the moment the module is
+    edited. `_schema` is in the signature only to key the cache -- the trap
+    CLAUDE.md records for `leverage.SCHEMA`.
+    """
+    q = wasde.load_quarterly_prices()
+    years = q.years()
+    out = {"report_month": q.report_month, "years": years, "by_year": {}}
+    for y in years:
+        annual, is_fc = q.annual("steer", y)
+        out["by_year"][y] = {
+            "annual": annual,
+            "is_forecast": is_fc,
+            "prior": q.prior_annual("steer", y),
+            "audit": q.reconciles("steer", y),
+            "quarters": [{"period": r.period, "value": r.values.get("steer"),
+                          "projected": r.projected}
+                         for r in q.quarters(y)],
+        }
+    return out
+
+
+def wasde_steer_panel():
+    """USDA's forecast for the very series this tab charts."""
+    try:
+        w = fetch_wasde_steer()
+    except Exception as exc:  # noqa: BLE001
+        st.caption(f"WASDE steer price forecast unavailable — {exc}")
+        return
+
+    fc_years = [y for y in w["years"] if w["by_year"][y]["is_forecast"]]
+    if not fc_years:
+        return
+    year = min(fc_years)
+    cur = w["by_year"][year]
+    now, prior = cur["annual"], cur["prior"]
+    base = w["by_year"].get(year - 1, {}).get("annual")
+
+    rev = (now - prior) if (now is not None and prior is not None) else None
+    rev_pct = (rev / prior * 100.0) if (rev is not None and prior) else None
+    yoy_pct = ((now / base - 1.0) * 100.0) if (now and base) else None
+    yoy_abs = (now - base) if (now is not None and base is not None) else None
+
+    def _d(value, percent, suffix, digits=2):
+        if value is None and percent is None:
+            return '<div class="tile-delta-neu">&mdash;</div>'
+        if value == 0 or (value is None and percent == 0):
+            return f'<div class="tile-delta-neu">unchanged{suffix}</div>'
+        ref = value if value is not None else percent
+        arrow = "▲" if ref > 0 else "▼"
+        bits = []
+        if value is not None:
+            bits.append(f"${abs(value):,.{digits}f}")
+        if percent is not None:
+            bits.append(f"{abs(percent):,.1f}%")
+        # NO PARENTHESES: in USDA's own reports they mean negative. See the
+        # same note on the US Beef Trade page and in letter/sterling.py.
+        return (f'<div class="tile-delta-neu">{arrow} '
+                f'{" · ".join(bits)}{suffix}</div>')
+
+    st.markdown(
+        '<div class="sec-header">USDA WASDE expectation &mdash; '
+        '5-Area steer price</div>', unsafe_allow_html=True)
+    st.caption(
+        f"USDA's projection of what the 5-Area Direct steer price will "
+        f"average over the **{year} calendar year**, updated every WASDE. "
+        f"WASDE's own footnote defines this series as "
+        f"*“{wasde.STEER_PRICE_BASIS}”* — the same thing "
+        f"LM_CT150 reports, which is why it can sit beside the weekly "
+        f"average above. Report: **{w['report_month']}**.")
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.markdown(tile(
+            f"WASDE {year} forecast",
+            f"${now:,.2f}" if now is not None else "—",
+            _d(rev, rev_pct, " vs last month")), unsafe_allow_html=True)
+    with c2:
+        st.markdown(tile(
+            f"Forecast vs {year - 1}",
+            f"{yoy_pct:+,.1f}%" if yoy_pct is not None else "—",
+            _d(yoy_abs, None, "/cwt")), unsafe_allow_html=True)
+    with c3:
+        qs = [q for q in cur["quarters"] if q["value"] is not None]
+        done = [q for q in qs if not q["projected"]]
+        left = [q for q in qs if q["projected"]]
+        st.markdown(tile(
+            "Quarters still forecast",
+            f"{len(left)} of {len(qs)}" if qs else "—",
+            f'<div class="tile-delta-neu">'
+            f'{", ".join(q["period"] for q in left) or "none"} to come'
+            f'</div>' if qs else ""), unsafe_allow_html=True)
+    with c4:
+        nxt = w["by_year"].get(year + 1, {})
+        nxt_v, nxt_p = nxt.get("annual"), nxt.get("prior")
+        nxt_rev = ((nxt_v - nxt_p)
+                   if (nxt_v is not None and nxt_p is not None) else None)
+        st.markdown(tile(
+            f"WASDE {year + 1} forecast",
+            f"${nxt_v:,.2f}" if nxt_v is not None else "—",
+            _d(nxt_rev,
+               (nxt_rev / nxt_p * 100.0) if (nxt_rev is not None and nxt_p)
+               else None, " vs last month")), unsafe_allow_html=True)
+
+    qs = [q for q in cur["quarters"] if q["value"] is not None]
+    if qs:
+        st.markdown(
+            '<div class="sec-header" style="margin-top:10px;">'
+            'By quarter</div>', unsafe_allow_html=True)
+        cols = st.columns(len(qs))
+        for col, q in zip(cols, qs):
+            with col:
+                qn = wasde.quarter_number(q["period"])
+                name = f"Q{qn}" if qn else q["period"]
+                state = "proj" if q["projected"] else "actual"
+                st.markdown(tile(
+                    f"{name} {year} · {state}",
+                    f"${q['value']:,.2f}"), unsafe_allow_html=True)
+
+    # THE ONLY AUDIT A PRICE TABLE OFFERS. The meats table has two accounting
+    # identities; this one has none, so a shifted column would be invisible
+    # from the row alone. USDA's footnote says the annual is a simple average
+    # of months and each quarter is three months, so the annual must equal
+    # the mean of the four quarters -- 237.3525 against a printed 237.35 for
+    # September 2026. It can only run once all four are published.
+    audit = cur["audit"]
+    if audit.get("ok") is False:
+        st.caption(
+            f"⚠️ WASDE's annual figure ({audit['annual']:,.2f}) no "
+            f"longer equals the mean of its four quarters "
+            f"({audit['mean']:,.2f}). The table layout has probably changed "
+            f"and these figures should not be relied on until that is "
+            f"checked.")
+
+
 tab_weekly, tab_daily, tab_fcst, tab_lev = st.tabs(
     ["Weekly Cash Trade Averages", "Daily Cash Trade", "Monday Print Forecast",
      "Packer Leverage"])
 
 with tab_weekly:
+    # ABOVE THE LMR GUARD, DELIBERATELY, and the same four-line shape the
+    # Saturday Slaughter view and the morning cutout panel use. WASDE comes
+    # from ESMIS over a different host; an LMR outage must not blank a
+    # forecast that never touched LMR. Below the guard this whole panel would
+    # disappear on exactly the days a reader most wants a reference price.
+    wasde_steer_panel()
+    st.markdown("<hr style='margin:14px 0;'>", unsafe_allow_html=True)
+
     if not load_ok:
         st.warning(
             "⏳ **USDA data temporarily unavailable** — the USDA server is not responding. "

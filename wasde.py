@@ -206,41 +206,63 @@ class Wasde:
         return now - was
 
 
+def _table_body(lines: list, title: str):
+    """
+    (body_lines, report_month) for one WASDE table, found by its title.
+
+    THE DATA BEGINS AFTER THE *SECOND* BANNER OF "=", not the first. Every
+    table opens with one rule under its title, then several lines of column
+    headings -- "Beg- Produc-", "Item inning tion", "stocks 1/ Imports" --
+    then a second rule. Taking the first banner as the start reads those
+    heading lines as data, and taking the first banner after them as the END
+    closes the table before its first real row: the parse then returns a
+    report month, nothing else, and no error at all. It reads exactly like a
+    report that has stopped publishing. Cost one debugging round on
+    2026-10-07.
+
+    Shared by every table here, which is why two WASDE tables on the same
+    printed page (production and prices both sit on page 31) are found
+    independently by title rather than by page.
+    """
+    start = None
+    for i, ln in enumerate(lines):
+        if title in ln:
+            start = i
+            break
+    if start is None:
+        raise ValueError("%r not found in release" % title)
+
+    # The month is printed in the page header, and a page can carry TWO
+    # tables -- production and prices both sit on page 31 -- so the second
+    # one has no header above it within any sane look-back. Fall back to the
+    # first page header in the document, which carries the same month as
+    # every other page of the same release.
+    month = ""
+    for ln in lines[max(0, start - 10):start]:
+        m = re.search(r"([A-Z][a-z]+ \d{4})\s*$", ln)
+        if m:
+            month = m.group(1)
+    if not month:
+        for ln in lines:
+            m = re.search(r"WASDE - \d+ - \d+\s+([A-Z][a-z]+ \d{4})\s*$", ln)
+            if m:
+                month = m.group(1)
+                break
+
+    banners = [i for i in range(start + 1, len(lines))
+               if lines[i].startswith("===")]
+    if len(banners) < 2:
+        raise ValueError("%r has no header rule" % title)
+    body_end = banners[2] if len(banners) > 2 else len(lines)
+    return lines[banners[1] + 1:body_end], month
+
+
 def parse(text: str, release_date: date | None = None,
           source_url: str = "") -> Wasde:
     """Parse the U.S. Meats Supply and Use table out of a WASDE text release."""
     lines = (text or "").splitlines()
 
-    start = None
-    for i, ln in enumerate(lines):
-        if TABLE_TITLE in ln:
-            start = i
-            break
-    if start is None:
-        raise ValueError("%r not found in release" % TABLE_TITLE)
-
-    month = ""
-    for ln in lines[max(0, start - 8):start]:
-        m = re.search(r"([A-Z][a-z]+ \d{4})\s*$", ln)
-        if m:
-            month = m.group(1)
-
-    # THE DATA BEGINS AFTER THE *SECOND* BANNER, not the first. The table
-    # opens with one rule of "=" under its title, then four lines of column
-    # headings -- "Beg- Produc-", "Item inning tion", "stocks 1/ Imports" --
-    # then a second rule. Taking the first banner as the start reads those
-    # heading lines as data, and taking the first banner after them as the END
-    # closes the table before Beef's first row: the parse then returns a
-    # report month, no commodities, and nothing that looks like an error.
-    banners = [i for i in range(start + 1, len(lines))
-               if lines[i].startswith("===")]
-    if len(banners) < 2:
-        raise ValueError("WASDE meats table has no header rule")
-    body_start = banners[1] + 1
-    # The next banner after the body is the following page's title rule.
-    body_end = banners[2] if len(banners) > 2 else len(lines)
-
-    body = lines[body_start:body_end]
+    body, month = _table_body(lines, TABLE_TITLE)
 
     out: list = []
     commodity = ""
@@ -397,3 +419,170 @@ def history(commodity: str, attribute: str, year: int, n: int = 12,
                         "report_month": w.report_month})
     out.sort(key=lambda r: r["date"])
     return out
+
+
+# -- the quarterly tables ----------------------------------------------------
+#
+# WASDE page 31 carries two tables of the same shape: quarterly production and
+# quarterly prices. The Cash Cattle Trade page wants the steer price out of the
+# second; everything here is written for both, because they differ only in
+# their column list and writing it twice is how a second reader gets born.
+
+QUARTERLY_PRICES_TITLE = "U.S. Quarterly Prices for Animal Products"
+QUARTERLY_PRODUCTION_TITLE = "U.S. Quarterly Animal Product Production"
+
+# Left to right as printed. "Streers" is USDA's own spelling and is not fixed
+# here -- see QUARTERLY_PRICE_NOTE.
+QUARTERLY_PRICE_COLUMNS = ["steer", "barrows_gilts", "broilers", "turkeys",
+                           "eggs", "milk"]
+QUARTERLY_PRODUCTION_COLUMNS = ["beef", "pork", "red_meat", "broiler",
+                                "turkey", "total_poultry", "red_meat_poultry",
+                                "egg", "milk"]
+
+# WASDE's own footnote 2/ on the price table. WORTH CARRYING AROUND rather
+# than paraphrasing: it is what makes the figure comparable to the Cash Cattle
+# Trade page's weekly series at all, and "the USDA steer price" on its own
+# would not be.
+STEER_PRICE_BASIS = "5-Area, Direct, Total all grades"
+
+_QTR_YEAR = re.compile(r"^(\d{4})\s*$")
+# LEADING WHITESPACE IS OPTIONAL, AND THAT IS NOT TIDINESS. The quarter rows
+# are indented ("     III*") but the annual rows are NOT ("AugProj.    245.35"
+# at column zero, exactly like a year heading). Requiring indentation silently
+# dropped every annual row, which is the only row the forecast panel wants --
+# the table parsed, the quarters were all correct, and `annual()` returned
+# None with nothing raising.
+_QTR_PERIOD = re.compile(
+    r"^\s*(I{1,3}V?|Annual|[A-Z][a-z]{2}Proj\.)\s*(\*?)\s+(.*)$")
+
+# The annual figure must equal the simple mean of the four quarters. USDA's
+# footnote 1/ says the annual is a simple average of months and each quarter
+# is three months, so the two are the same arithmetic. Checked where all four
+# quarters are present; a tenth of a cent of slack for the rounding USDA
+# applies to each quarter independently.
+QUARTERLY_TOLERANCE = 0.02
+
+
+# Roman quarter labels, as printed. AN EXPLICIT MAP, because the obvious
+# shortcut -- the length of the numeral -- is right for I, II and III and
+# wrong for IV, which it calls Q2. That shipped for about ten minutes and
+# rendered "Q3 proj / Q2 proj" as the last two quarters of the year.
+QUARTER_NUMBER = {"I": 1, "II": 2, "III": 3, "IV": 4}
+
+
+def quarter_number(period: str):
+    """1-4 for a Roman quarter label, or None for an annual row."""
+    return QUARTER_NUMBER.get((period or "").strip())
+
+
+@dataclass
+class QuarterRow:
+    year: int
+    period: str                  # "I".."IV", "Annual", "SepProj."
+    projected: bool              # the printed asterisk
+    values: dict = field(default_factory=dict)
+
+    @property
+    def is_annual(self) -> bool:
+        return self.period == "Annual" or self.period.endswith("Proj.")
+
+
+@dataclass
+class Quarterly:
+    report_month: str = ""
+    title: str = ""
+    columns: list = field(default_factory=list)
+    rows: list = field(default_factory=list)
+
+    def years(self) -> list:
+        return sorted({r.year for r in self.rows})
+
+    def quarters(self, year: int) -> list:
+        return [r for r in self.rows if r.year == year and not r.is_annual]
+
+    def annual(self, column: str, year: int):
+        """
+        The year's annual figure and whether it is a forecast.
+
+        A COMPLETED YEAR PRINTS "Annual"; A FORECAST YEAR PRINTS "<Mon>Proj."
+        twice -- last month's and this month's -- and there is no "Annual" row
+        at all. So the newest Proj. row IS the annual forecast, and reaching
+        for "Annual" on the current year silently returns nothing.
+        """
+        rows = [r for r in self.rows if r.year == year and r.is_annual]
+        if not rows:
+            return None, False
+        exact = [r for r in rows if r.period == "Annual"]
+        if exact:
+            return exact[-1].values.get(column), False
+        return rows[-1].values.get(column), True
+
+    def prior_annual(self, column: str, year: int):
+        """Last month's forecast of the same annual figure, or None."""
+        proj = [r for r in self.rows
+                if r.year == year and r.period.endswith("Proj.")]
+        if len(proj) < 2:
+            return None
+        return proj[-2].values.get(column)
+
+    def reconciles(self, column: str, year: int):
+        """
+        {ok, annual, mean, quarters} -- does the annual equal the mean of its
+        four quarters?
+
+        THE ONLY AUDIT THIS TABLE OFFERS. The meats table has two accounting
+        identities; a price table has none, so a shifted column there would be
+        undetectable from the row alone. This is the substitute, and it does
+        work: for September 2026 the four steer quarters average 237.3525
+        against a printed 237.35.
+
+        `ok` is None, not False, when fewer than four quarters are published --
+        which is every forecast year before the following May. Refusing to
+        judge is different from judging it wrong.
+        """
+        qs = [r for r in self.quarters(year)
+              if r.values.get(column) is not None]
+        annual, _ = self.annual(column, year)
+        if annual is None or len(qs) != 4:
+            return {"ok": None, "annual": annual, "mean": None,
+                    "quarters": len(qs)}
+        mean = sum(r.values[column] for r in qs) / 4.0
+        return {"ok": abs(mean - annual) <= QUARTERLY_TOLERANCE,
+                "annual": annual, "mean": mean, "quarters": 4}
+
+
+def parse_quarterly(text: str, title: str, columns: list) -> Quarterly:
+    """Parse one of the page-31 quarterly tables."""
+    body, month = _table_body((text or "").splitlines(), title)
+    out = Quarterly(report_month=month, title=title, columns=list(columns))
+    year = None
+    for raw in body:
+        line = raw.rstrip()
+        if not line.strip() or line.startswith("==="):
+            continue
+        m = _QTR_YEAR.match(line.strip()) if line[:1] not in (" ", "\t") else None
+        if m:
+            year = int(m.group(1))
+            continue
+        m = _QTR_PERIOD.match(line)
+        if not m or year is None:
+            continue
+        toks = _NUMS.findall(m.group(3))
+        if len(toks) < len(columns):
+            continue
+        out.rows.append(QuarterRow(
+            year=year, period=m.group(1), projected=bool(m.group(2)),
+            values={k: _num(t) for k, t in zip(columns, toks[:len(columns)])}))
+    return out
+
+
+def load_quarterly_prices(sess: requests.Session | None = None) -> Quarterly:
+    """The newest WASDE's quarterly animal-product prices."""
+    sess = sess or _session()
+    rel = releases(sess)
+    if not rel:
+        raise RuntimeError("ESMIS returned no WASDE releases")
+    r = sess.get(rel[0]["url"], timeout=45)
+    r.raise_for_status()
+    return parse_quarterly(r.text, QUARTERLY_PRICES_TITLE,
+                           QUARTERLY_PRICE_COLUMNS)

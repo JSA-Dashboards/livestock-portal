@@ -29,9 +29,19 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-# A Streamlit page's own directory is never on sys.path. Both names here exist
-# exactly ONCE in this repo, so unlike `snowflake_db` they cannot join the
-# five-copy sys.modules collision CLAUDE.md documents.
+# A Streamlit page's own directory is never on sys.path, and neither is the
+# repo root from a page. `trade_flows` belongs to this page; `wasde` is shared
+# and lives at the root, which is the convention apps/weekly_reports/app.py
+# already uses to reach the `letter` package.
+#
+# ONE COPY, DELIBERATELY. Python caches modules by NAME, so a second
+# `wasde.py` under another app directory would mean whichever page loaded
+# first decided which copy every other page got -- the `snowflake_db`-times-
+# five problem CLAUDE.md documents at length. Cash Cattle Trade imports this
+# same file.
+REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).parent))
 import trade_flows as tf          # noqa: E402
 import wasde                      # noqa: E402
