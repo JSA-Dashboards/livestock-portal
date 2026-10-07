@@ -228,6 +228,11 @@ def pace(df: pd.DataFrame, flow: str, year: int, through: int,
         gap_pct             required against run_rate, as a percentage
         projection          the seasonal full-year projection (below)
         implied_vs_forecast projection - forecast
+        prior_year_total    last COMPLETE calendar year, for the comparison
+                            below; None until that year has all 12 months
+        projection_yoy_pct  the projection against that full prior year --
+                            the figure that stands beside USDA's own
+                            forecast-versus-last-year percentage
 
     TWO DIFFERENT QUESTIONS, AND THE PAGE SHOWS BOTH. "What must the rest of
     the year average to hit USDA's number" is arithmetic. "What will the year
@@ -245,7 +250,8 @@ def pace(df: pd.DataFrame, flow: str, year: int, through: int,
     """
     out = {"ytd": None, "ytd_prior": None, "yoy_pct": None, "run_rate": None,
            "required": None, "gap_pct": None, "projection": None,
-           "implied_vs_forecast": None, "months_left": max(0, 12 - through)}
+           "implied_vs_forecast": None, "prior_year_total": None,
+           "projection_yoy_pct": None, "months_left": max(0, 12 - through)}
 
     m = monthly(df, flow)
     if m.empty or through < 1:
@@ -266,6 +272,19 @@ def pace(df: pd.DataFrame, flow: str, year: int, through: int,
         covered = float(shape[shape.index <= through].sum())
         if covered > 0:
             out["projection"] = out["ytd"] / covered
+
+    # THE FULL PRIOR YEAR, not the year-to-date months. `yoy_pct` above
+    # compares like periods (Jan-Aug against Jan-Aug); this compares the
+    # projected FULL year against the completed one, which is the figure that
+    # sits beside USDA's own forecast-versus-last-year percentage. Mixing the
+    # two would put a part-year comparison next to a full-year one under
+    # labels that look alike.
+    prior_full = m[m["year"] == year - 1]
+    if len(prior_full) == 12:
+        out["prior_year_total"] = float(prior_full["mil_lb"].sum())
+        if out["projection"] is not None and out["prior_year_total"]:
+            out["projection_yoy_pct"] = (
+                out["projection"] / out["prior_year_total"] - 1.0) * 100.0
 
     if forecast is not None:
         left = out["months_left"]

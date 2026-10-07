@@ -821,3 +821,72 @@ def test_the_cash_trade_panel_renders_above_the_lmr_guard():
     call = body.index("wasde_steer_panel()")
     guard = body.index("if not load_ok:")
     assert call < guard, "the WASDE panel moved below the LMR outage guard"
+
+
+def test_the_projection_tile_is_quoted_year_on_year_like_usdas_forecast():
+    """
+    THE PARALLEL IS THE POINT. The WASDE tile says USDA's 2026 import
+    forecast is +16.2% on 2025; the projection tile says the actual pace is
+    tracking +19.1% on the same base. Two percentages, one basis, one from
+    USDA and one from the market -- the comparison the page exists to make,
+    and it only holds if both are quoted the same way.
+
+    It replaced a share of the forecast ("102.5% of USDA's 6,262"), which
+    answered a question the caption underneath already answers in absolute
+    terms and lined up with nothing else on the page.
+    """
+    src = (ROOT / "apps" / "beef_trade" / "app.py").read_text(encoding="utf-8")
+    assert "def projection_yoy_html(" in src
+    assert "def share_html(" not in src, "the replaced helper is now dead code"
+    assert 'projection_yoy_html(p["projection_yoy_pct"]' in src
+
+    body = src[src.index("def projection_yoy_html("):src.index("def fmt(")]
+    ns = {}
+    exec(body, ns)                                      # noqa: S102
+    render = ns["projection_yoy_html"]
+
+    def text(markup):
+        import html as _html
+        return _html.unescape(re.sub(r"<[^>]+>", "", markup)).strip()
+
+    assert text(render(19.1, 2025, 5388.0)) == "▲ 19.1% vs 2025"
+    assert text(render(-10.3, 2025, 2579.0)) == "▼ 10.3% vs 2025"
+    assert "&mdash;" in render(None, 2025, 5388.0)
+    assert "&mdash;" in render(19.1, 2025, None)
+    assert "level with 2025" in render(0.0, 2025, 5388.0)
+
+
+def test_the_projection_yoy_uses_the_full_prior_year_not_the_ytd_months():
+    """
+    `yoy_pct` compares like periods -- Jan-Aug against Jan-Aug. This one
+    compares the projected FULL year against the completed one, which is
+    what USDA's own forecast-versus-last-year percentage does. Putting a
+    part-year comparison beside a full-year one under labels that look alike
+    is the pairing this repo has been bitten by twice.
+    """
+    df = _ers_frame()
+    p = tf.pace(df, "Imports", 2026, 8, 6262.0)
+    assert p["prior_year_total"] == pytest.approx(5388.0, abs=1.0)
+    assert p["projection_yoy_pct"] == pytest.approx(19.1, abs=0.2)
+
+    # The two are genuinely different, so the distinction earns its keep:
+    # Jan-Aug is +14.3%, the full-year projection +19.1%.
+    assert p["yoy_pct"] == pytest.approx(14.3, abs=0.2)
+    assert abs(p["projection_yoy_pct"] - p["yoy_pct"]) > 3.0
+
+    # Derivable from the projection and the base, so the tile and the
+    # caption underneath cannot drift apart.
+    assert (p["projection"] / p["prior_year_total"] - 1.0) * 100.0 == \
+        pytest.approx(p["projection_yoy_pct"])
+
+
+def test_projection_yoy_is_none_until_the_prior_year_is_complete():
+    """
+    A projected full year against a part-year base would be a confident
+    comparison of two different things.
+    """
+    df = _ers_frame()
+    first = int(df["year"].min())
+    p = tf.pace(df, "Imports", first, 8, 6000.0)
+    assert p["prior_year_total"] is None
+    assert p["projection_yoy_pct"] is None

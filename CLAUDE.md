@@ -1682,7 +1682,18 @@ exercising the trap.
   years.** They are two views of one claim about what a normal year looks
   like. For about an hour the band was six years and the legend still said
   "5-yr".
-- **"Required to hit WASDE" and the projection answer different questions and
+- **The projection is quoted YEAR ON YEAR, the same way USDA's forecast is,
+  and that parallel is the point.** The WASDE tile says USDA's 2026 import
+  forecast is +16.2% on 2025; the projection tile says the actual pace is
+  tracking **+19.1%** on the same base. Two percentages, one basis, one from
+  USDA and one from the market. A share of the forecast ("102.5% of USDA's
+  6,262") was tried first and dropped: it answered a question the caption
+  underneath already answers in absolute terms, and lined up with nothing
+  else on the page. The base is the full PRIOR YEAR, not the year-to-date
+  months -- `pace()` returns both and they differ by five points here, so
+  putting a part-year comparison beside a full-year one under labels that
+  look alike is a live risk rather than a theoretical one.
+- **"Monthly pace needed" and the projection answer different questions and
   are not merged.** The first is arithmetic on USDA's forecast; the second is
   what the year does if it behaves normally. On 2026-10-07 imports needed
   475.9 a month and had been running 534.6 — the pace is 12.3% hot, and the

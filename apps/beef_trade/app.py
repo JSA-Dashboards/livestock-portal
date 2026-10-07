@@ -217,6 +217,31 @@ def running_html(over_pct):
             f'{abs(over_pct):,.1f}% {word} this</div>')
 
 
+def projection_yoy_html(pct_change, base_year, base_value):
+    """
+    "▲ 19.1% vs 2025" -- the projection expressed as a year-on-year
+    change, the same way USDA's forecast is expressed in the panel above.
+
+    THAT PARALLEL IS THE WHOLE POINT. The WASDE tile says the 2026 import
+    forecast is +16.2% on 2025; this one says the actual pace is tracking
+    +19.1% on the same base. Two percentages, one basis, one from USDA and
+    one from the market -- which is the comparison the page exists to make,
+    and it only works if both are quoted the same way.
+
+    It replaced a share of USDA's forecast ("102.5% of USDA's 6,262"), which
+    answered a question the caption underneath already answers in absolute
+    terms and did not line up with anything else on the page.
+    """
+    if pct_change is None or not base_value:
+        return '<div class="tile-delta-neu">&mdash;</div>'
+    if abs(pct_change) < 0.05:
+        return (f'<div class="tile-delta-neu">level with '
+                f'{base_year}</div>')
+    arrow = "▲" if pct_change > 0 else "▼"
+    return (f'<div class="tile-delta-neu">{arrow} '
+            f'{abs(pct_change):,.1f}% vs {base_year}</div>')
+
+
 def fmt(v, digits=0, suffix=""):
     return f"{v:,.{digits}f}{suffix}" if v is not None else "—"
 
@@ -543,10 +568,11 @@ def pace_panel(flow: str, forecast, year: int, through: int, cls: str):
     with c4:
         st.markdown(tile(
             f"{year} full-year projection", fmt(p["projection"]),
-            delta_pair(p["implied_vs_forecast"],
-                       pct(p["projection"], forecast) if forecast else None,
-                       " vs USDA's forecast"),
-            sub="full year on the seasonal shape", cls=cls),
+            projection_yoy_html(p["projection_yoy_pct"], year - 1,
+                                p["prior_year_total"]),
+            sub=(f"{year - 1} actual {fmt(p['prior_year_total'])}"
+                 if p["prior_year_total"] else
+                 "full year on the seasonal shape"), cls=cls),
             unsafe_allow_html=True)
 
     if p["projection"] is not None and forecast:
