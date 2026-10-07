@@ -136,6 +136,16 @@ TOOLS = [
      # kept "beef-weight" -- any bookmark already handed out keeps working.
      "url_path": "weekly-cattle-reports",
      "desc": "Build the daily client letter from live data. Friday is the week-in-review format. Passphrase required."},
+    # ITS OWN PAGE, NOT A TAB ON THE LETTER. A hidden Streamlit tab still
+    # EXECUTES, so as a third tab there its seven fetches would run on every
+    # keystroke in the letter's commentary boxes and add their cold cost to the
+    # page Ross opens under deadline each morning. Separate pages also mean an
+    # exception in one cannot blank the other.
+    {"title": "Cattle Market Board", "page": "apps/market_board/app.py",
+     "url_path": "cattle-market-board",
+     "desc": "Every dashboard's headline on one page: what is moving the cattle "
+             "market, what it means, and how far back the evidence actually "
+             "goes. Passphrase required."},
 ]
 
 _TILE_CSS = """
