@@ -136,15 +136,6 @@ def _as_date(d):
         return None
 
 
-def _md(iso, bare: bool = False) -> str:
-    """' (10/6)' from a date. Matches render._as_of so the slide and the
-    letter stamp the index the same way."""
-    d = _as_date(iso)
-    if d is None:
-        return ""
-    return f" {d.month}/{d.day}" if bare else f" ({d.month}/{d.day})"
-
-
 def _weekday(d) -> str:
     """'Monday', for the 'Choice- 378.26. +4.07 Monday PM.' line."""
     d = _as_date(d)
@@ -216,27 +207,20 @@ def rows(ctx: dict) -> list:
     out.append((0, f"Choice/Select spread: {money(_diff(choice.get('value'), select.get('value')))}"))
     out.append((1, f"Choice & Higher- {pct1(grading.get('pct'))}"))
 
-    # CME'S PUBLISHED INDEX, DATED -- not the forward estimate.
+    # THE ACTUAL CME FEEDER INDEX, MOST RECENT. Bare -- no date, no "(est)".
     #
-    # `fci["value"]` is the index CME will print NEXT, which on an afternoon
-    # slide is a part-day estimate of a day that has not finished. On
-    # 2026-10-07 that read 335.86 for index date 10/07, off 228 locations and
-    # 17,524 head, where CME had published 10/06 that morning at 337.87 --
-    # a figure our own 10/06 estimate matched to the cent. Ross reported it
-    # against the afternoon letter, whose evening rundown had the same fault;
-    # both now take `published`, so the slide and the letter cannot disagree.
+    # `fci["value"]` is the index CME will print NEXT, so on an afternoon
+    # slide it is a part-day estimate of an unfinished day: on 2026-10-07 it
+    # read 335.86 for 10/07 off 228 locations, where CME had published 10/06
+    # at 337.87 and our own 10/06 estimate was 337.869294. Ross reported it
+    # twice -- once for the value, once again when the first fix merely
+    # labelled it "(JSA est. 10/7)" instead of replacing it.
     #
-    # The "(est)" tag survives only on the fallback, where it is true. It was
-    # Ross's own label and it is the honest one for a figure that moves after
-    # you print it -- the 10/05 row read 337.66 in the morning of 10/06 and
-    # 337.22 that afternoon.
-    pub = fci.get("published") or {}
-    if pub.get("value") is not None:
-        out.append((0, f"Feeder Index: {money(pub['value'])}"
-                       f"{_md(pub.get('date'))}"))
-    else:
-        out.append((0, f"Feeder Index: {money(fci.get('value'))} (est"
-                       f"{_md(fci.get('date'), bare=True)})"))
+    # `published` comes from the merged series, so it is CME's print where
+    # we have it and our estimate for that SAME completed session where we
+    # do not. It can never be the forward day. The letter's evening rundown
+    # reads the identical block, so the slide and the letter cannot drift.
+    out.append((0, f"Feeder Index: {money((fci.get('published') or {}).get('value'))}"))
 
     weekly = slaughter.get("weekly") or {}
     beef = slaughter.get("beef_production") or {}

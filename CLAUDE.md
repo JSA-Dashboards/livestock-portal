@@ -588,15 +588,31 @@ numbers and runs the REAL `index_dates` rule rather than a fake.
   prints `Feeder Cattle Index: x` bare, with no date and no qualifier, so a
   reader takes it for the index as it stands. A forward estimate is not that.
 
-  `fetch_feeder_index` now also returns a **`published`** block — CME's
-  newest actually-printed index, its date and its move — and
+  `fetch_feeder_index` now also returns a **`published`** block and
   `render.fci_published()` is what the two evening rundowns and the rundown
-  slide call. The AM brief is untouched; it was never wrong. **The date is
-  now printed** (`337.87 (10/6)`), because the index being quoted is no
-  longer the letter's own date and leaving that unsaid trades one silent
-  wrong reading for another. The fallback prints the estimate marked
-  `(est 10/7)` rather than nothing, since a missing line reads as "no index
-  today".
+  slide call. The AM brief is untouched; it was never wrong.
+
+  **THE FIRST FIX SHIPPED THE SAME BUG WITH A LABEL ON IT, and that is the
+  part worth keeping.** It built `published` by reading `cme_ftp_daily`
+  directly and returned None when the table came back empty — whereupon the
+  caller fell back to `fci["value"]`, the forward estimate, which is
+  precisely the figure being reported. On this machine it worked; **the
+  deployed app reads a different Snowflake**, the table did not answer
+  there, and the live letter printed `335.86 (JSA est. 10/7)`. Ross reported
+  it a second time within the hour. **A fallback that lands on the reported
+  defect is worse than no fallback**, and "it worked locally" proved nothing
+  — the same lesson as the two-backends section above, by a different route.
+
+  `published` is now taken from **`merged`**, the series that already
+  applies "CME's published value wins for any date it covers". Reading the
+  last COMPLETED date out of it gives CME's print where we have it and our
+  own estimate for that same session where we do not — 337.869294 against
+  CME's 337.87 for 10/06 — and it can never be the unfinished forward day.
+  If even that is absent the line marks itself rather than substituting.
+
+  **The line is bare: no date, no label.** A first pass printed
+  `337.87 (10/6)`; Ross rejected it. What the line is for is the actual CME
+  feeder index, most recent, and a parenthesis on it is noise or an excuse.
 
   Cross-check worth knowing: the computed move matched `reported_change` in
   `cme_ftp_daily` exactly (+0.65), which is an independent confirmation the

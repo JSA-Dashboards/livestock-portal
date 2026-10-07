@@ -1671,12 +1671,14 @@ def fetch_feeder_index() -> dict:
     # last file, so its own value always stays ours. It is the PRIOR date that
     # CME has usually printed by now.
     merged = {d.date(): float(v) for d, v in zip(ours["date"], ours["fci_value"])}
+    cme_dates = set()
     if not published.empty and "fci_value" in published.columns:
         pub2 = published.copy()
         pub2["date"] = pd.to_datetime(pub2["date"], errors="coerce")
         pub2 = pub2.dropna(subset=["date", "fci_value"])
         for d, v in zip(pub2["date"], pub2["fci_value"]):
             merged[d.date()] = float(v)
+            cme_dates.add(d.date())
 
     if headline not in merged:
         return {}
@@ -1721,24 +1723,40 @@ def fetch_feeder_index() -> dict:
     # So both are returned and the caller chooses by what it is claiming.
     # Nothing here changes `value`; the morning brief's "JSA FCI Estimate"
     # is doing exactly what it says.
+    # IT IS BUILT FROM `merged`, NOT FROM cme_ftp_daily DIRECTLY, and that is
+    # the whole robustness of it.
+    #
+    # The first version read the CME table itself and returned None when it
+    # came back empty -- whereupon the caller fell back to `value`, the
+    # forward estimate, which is precisely the figure Ross had reported. The
+    # deployed app reads a DIFFERENT Snowflake from this machine (see
+    # CLAUDE.md), the table did not answer there, and the "fix" shipped the
+    # original bug wearing a label. A fallback that lands on the reported
+    # defect is worse than no fallback.
+    #
+    # `merged` already applies the rule that matters -- CME's published value
+    # wins for any date it covers, ours fills the rest -- so taking the last
+    # COMPLETED date out of it gives CME's print when we have it and our own
+    # estimate for that same day when we do not. Those agree closely by
+    # construction: for 2026-10-06 ours was 337.869294 against CME's 337.87.
+    # Either way it can never be the unfinished forward day.
+    settled = sorted(d for d in merged if d < headline)
     pub_block = None
-    if not published.empty and "fci_value" in published.columns:
-        pr = published.copy()
-        pr["date"] = pd.to_datetime(pr["date"], errors="coerce")
-        pr = pr.dropna(subset=["date", "fci_value"]).sort_values("date")
-        if not pr.empty:
-            p_date = pr["date"].iloc[-1].date()
-            p_val = round(float(pr["fci_value"].iloc[-1]), 2)
-            # Same round-then-subtract convention as above: a reader holding
-            # two letters subtracts the printed figures and must get this.
-            p_prev = (round(float(pr["fci_value"].iloc[-2]), 2)
-                      if len(pr) > 1 else None)
-            pub_block = {
-                "value": p_val,
-                "date": p_date.isoformat(),
-                "change": round(p_val - p_prev, 2) if p_prev is not None else None,
-                "source": "CME published (cme_ftp_daily)",
-            }
+    if settled:
+        s_date = settled[-1]
+        s_val = round(merged[s_date], 2)
+        # Same round-then-subtract convention as below: a reader holding two
+        # letters subtracts the printed figures and must get this.
+        s_prev = round(merged[settled[-2]], 2) if len(settled) > 1 else None
+        from_cme = s_date in cme_dates
+        pub_block = {
+            "value": s_val,
+            "date": s_date.isoformat(),
+            "change": round(s_val - s_prev, 2) if s_prev is not None else None,
+            "source": ("CME published (cme_ftp_daily)" if from_cme
+                       else "JSA estimate for a completed session"),
+            "from_cme": from_cme,
+        }
 
     return {
         "value": shown,

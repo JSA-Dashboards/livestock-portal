@@ -267,32 +267,24 @@ def fci_published(fci: dict) -> str:
     estimate was 337.869294, so the published figure was not merely
     available, it was one we already agreed with.
 
-    THE DATE IS PART OF THE FIGURE now. The index being printed is no longer
-    the letter's own date, and without saying so this trades one silent
-    wrong reading for another.
+    BARE, WITH NO DATE AND NO LABEL. A first attempt printed
+    "337.87 (10/6)" and, when the published block was missing,
+    "335.86 (JSA est. 10/7)". Ross rejected both: what the line is for is
+    the actual CME feeder index, most recent, and a parenthesis on it is
+    either noise or an excuse.
 
-    Falls back to the estimate, marked, rather than printing nothing: a
-    missing line reads as "no index today", which is never true.
+    IT NEVER FALLS BACK TO `fci["value"]`. That fallback shipped on
+    2026-10-07 and printed the exact figure Ross had reported an hour
+    earlier -- the deployed app reads a different Snowflake, the CME table
+    did not answer there, and the "fix" reproduced the bug with a label on
+    it. `sources.fetch_feeder_index` now builds `published` from the merged
+    series instead, so it degrades to OUR estimate for the same completed
+    session rather than to the unfinished forward one. If even that is
+    absent there is genuinely no index to print and it marks itself.
     """
-    fci = fci or {}
-    pub = fci.get("published") or {}
-    if pub.get("value") is not None:
-        return f"{money(pub['value'])}{_as_of(pub.get('date'))}"
-    if fci.get("value") is not None:
-        return f"{money(fci['value'])} (JSA est.{_as_of(fci.get('date'), bare=True)})"
-    return MISSING
+    pub = (fci or {}).get("published") or {}
+    return money(pub["value"]) if pub.get("value") is not None else MISSING
 
-
-def _as_of(iso, bare: bool = False) -> str:
-    """' (10/6)' from an ISO date. Built by hand -- the no-pad day directive
-    is %-d on Linux and %#d on Windows, and this runs on both."""
-    if not iso:
-        return ""
-    try:
-        d = datetime.strptime(str(iso)[:10], "%Y-%m-%d").date()
-    except (ValueError, TypeError):
-        return ""
-    return f" {d.month}/{d.day}" if bare else f" ({d.month}/{d.day})"
 
 
 def rundown_block(fci: dict, slaughter: dict, cutout: dict,

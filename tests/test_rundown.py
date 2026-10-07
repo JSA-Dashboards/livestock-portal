@@ -82,7 +82,7 @@ EXPECTED = [
     (1, "5-day average- 358.14."),
     (0, "Choice/Select spread: 19.69"),
     (1, "Choice & Higher- 87.3%"),
-    (0, "Feeder Index: 337.76 (10/2)"),
+    (0, "Feeder Index: 337.76"),
     (0, "Slaughter -7.5% YTD"),
     (0, "Beef Production -5.2% YTD"),
 ]
@@ -108,23 +108,32 @@ def test_the_index_is_cme_s_published_figure_not_the_forward_estimate():
     Ross caught it on the letter; the slide had the same fault.
     """
     line = [t for _, t in rundown.rows(CTX) if t.startswith("Feeder Index")][0]
-    assert line == "Feeder Index: 337.76 (10/2)"
+    assert line == "Feeder Index: 337.76"
     assert "337.66" not in line, "still quoting the forward estimate"
 
 
-def test_the_date_is_printed_because_it_is_no_longer_the_letter_s_own():
-    """Without it this trades one silent wrong reading for another: the
-    reader assumes the index is today's."""
+def test_the_line_is_bare_with_no_date_and_no_label():
+    """
+    A first attempt printed "337.76 (10/2)" and, on the fallback,
+    "(JSA est. 10/7)". Ross rejected both: the line is the actual CME
+    feeder index and a parenthesis on it is noise or an excuse.
+    """
     line = [t for _, t in rundown.rows(CTX) if t.startswith("Feeder Index")][0]
-    assert "(10/2)" in line
+    assert "(" not in line and "est" not in line.lower()
 
 
-def test_without_a_published_figure_it_falls_back_and_says_est():
-    """A missing line would read as "no index today", which is never true.
-    The estimate is printed, marked, and dated."""
+def test_it_never_falls_back_to_the_forward_estimate():
+    """
+    THE FALLBACK WAS THE BUG. The 2026-10-07 fix fell back to fci["value"]
+    when the published block was missing, which on the deployed app -- a
+    different Snowflake, where the CME table did not answer -- printed the
+    exact figure Ross had reported, with a label on it. Marking beats
+    reproducing the defect.
+    """
     ctx = {**CTX, "fci": {"value": 335.86, "date": "2026-10-07"}}
     line = [t for _, t in rundown.rows(ctx) if t.startswith("Feeder Index")][0]
-    assert line == "Feeder Index: 335.86 (est 10/7)"
+    assert "335.86" not in line, "fell back to the forward estimate"
+    assert rundown.MISSING in line
 
 
 def test_the_slide_and_the_letter_quote_the_same_index():
@@ -358,7 +367,7 @@ def test_the_slide_carries_every_figure_as_text():
     buf.seek(0)
     text = "\n".join(s.text_frame.text for s in Presentation(buf).slides[0].shapes
                      if s.has_text_frame)
-    for probe in ("88,019", "+33,747", "379.38", "19.69", "87.3%", "337.76 (10/2)",
+    for probe in ("88,019", "+33,747", "379.38", "19.69", "87.3%", "337.76",
                   "-7.5% YTD", "-5.2% YTD", "979#", "9/19/26"):
         assert probe in text, probe
 
