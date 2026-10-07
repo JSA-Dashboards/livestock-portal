@@ -1318,6 +1318,123 @@ Everything below the switch — attribution, charts, grading, the data table —
 is the afternoon report regardless, and a caption says so. USDA publishes no
 cut-level detail for the morning report in any feed.
 
+## The Mexican Feeder Prices tab
+
+Added 2026-10-07. Mexican Feeder Imports is now **two tabs** — `Mexican Feeder
+Crossings | Mexican Feeder Prices` — `st.tabs`, the Cash Cattle Trade shape.
+The first is the whole page as it was; the second answers what a Mexican feeder
+calf is worth **inside Mexico** against the border quote the page has always
+shown. Arithmetic and every read are in `apps/mexican_feeder_imports/
+mx_prices.py`; the layout is in `app.py`, the same split as `cof_recap`,
+`leverage` and `am_cutout`.
+
+    JSA.CME_FEEDER_CATTLE.MX_AUCTION_PRICES   Tamaulipas auction, MXN/kg
+    JSA.CME_FEEDER_CATTLE.FX_USDMXN           ECB reference rate, per sale day
+    border_prices                             AMS 3486, the Crossings tab's own
+
+On the 2026-09-30 sale a 664–772 lb Tamaulipas steer calf is **$188.64/cwt**
+against **$315.00** for AMS 700–800 lb #1-2 steers at Douglas the same day —
+**60%**. Three sales on file run 64.2%, 60.5%, 59.9%.
+
+**THE CAVEAT IS THE FIRST THING ON THE TAB AND MUST STAY THERE.** Tamaulipas is
+**not** where these cattle come from: Douglas and Santa Teresa take **Sonora**
+and **Chihuahua**, and neither state runs a published feeder auction. The
+figure is correctly computed and describes a different state's cattle, so a
+reader who meets the number before the caveat has already drawn the wrong
+conclusion. Moving it to a footnote would make the page wrong without changing
+a single value.
+
+**There is no Mexican feeder index, and this was probed properly.** SNIIM
+(`economia-sniim.gob.mx`) is a *slaughter*-market system — `Var=Bov` is
+substantial and current but prices cattle delivered to a rastro, and `Var=Bec`
+is effectively dead (15 rows in Sep 2024, empty for Aug 2026, and 45–50 kg bob
+calves where it does report). SIAP carries `Precio` by municipality for
+Chihuahua and Sonora, but **annually, on a carcass basis**, with 2025 published
+in August 2026. Neither can answer what a feeder calf is worth this week. Do
+not go looking again.
+
+### Five things that look wrong and are not
+
+- **Weight is matched on the MIDPOINT, and a band that matches nothing is left
+  alone.** The ladders do not align — Tamaulipas in kg, AMS in lb — so each
+  Mexican band takes the AMS bracket containing its own midpoint in pounds. The
+  351–400 kg lot is 774–882 lb and AMS stops at 800, so it matches nothing.
+  Snapping it to 700–800 would compare a heavier calf to a lighter quote and
+  **report the weight slide as a price gap** — a number that moves the right
+  way for the wrong reason.
+- **Two Mexican bands can share one AMS bracket and are kept separate.** 181–200
+  and 201–230 kg both sit inside 400–500 lb. With no head counts an average
+  would weight a thin band equally with a heavy one and print a figure no lot
+  ever traded at.
+- **Every heifer band matches nothing, and that is the US feed's state.** AMS
+  last priced `Spayed Heifers` at the border on **2025-05-12**; all 23 of 2026's
+  quoted days are Steers. A column of dashes looks exactly like a broken join,
+  so `us_last_quoted()` exists for no other purpose than letting the panel say
+  which it is. Sex is matched because pairing a Mexican heifer against a steer
+  quote reads as a discount that is really a sex difference.
+- **Only the `CN` ladder is compared.** The site also prints wide `CNH` lots
+  (100–180, 181–260, 251–330 kg) that overlap the narrow ladder and run a grade
+  cheaper — 58.33 against 81.89 MXN/kg on the same sale. Mixing them would
+  double-count a weight and drag every figure down by a grade difference the US
+  quote does not share. They are still priced in dollars and shown, flagged.
+- **FX reaches BACKWARD only.** A sale is priced at the rate that stood when it
+  traded. Reaching forward would restate a past sale every time the peso moved
+  — the decay failure `FORECAST_MAX_ANALOGUES` exists to stop on the cash
+  forecast tab, arriving by a different route.
+
+**It is a LEVEL, not a margin**, and the page says so. Nothing nets out
+freight, the test, the crossing fee, shrink or the buyer's margin, so a calf at
+60% of the Douglas price is not 40% of profit.
+
+**The two sides are rarely quoted the same day**, so `compare()` pairs each sale
+with the nearest priced border date in either direction and returns `gap_days`
+for the panel to print, refusing anything beyond `MAX_GAP_DAYS` (21). A
+silently same-day-looking spread would be the letter-vs-dashboard FCI failure
+recorded above, by a new route.
+
+**`mx_prices.py` does not import `requests`, and a test asserts it by AST.**
+The rule for this page is that `border.py` has no HTTP path so the Streamlit
+process cannot acquire one. That forces `usd_per_cwt` to be a *copy* of
+`mx_auction.usd_per_cwt` rather than an import, so `tests/test_mx_prices.py`
+runs the two against each other over a grid — a test may import the scraper
+because a test is not the page.
+
+**`mx_prices.SCHEMA` exists because the cache serves shape, not freshness** —
+the `leverage.SCHEMA` trap. Bump it whenever `compare()` changes the shape of
+what it returns, or the tiles render "—" with nothing raising.
+
+### The history accrues and cannot be back-filled
+
+`mexicoganadero.com` keeps the **current sale and one previous**, with no
+archive and no date parameter, so the series starts at the first run of the
+recording job — the same shape as `JSA.BOXED_BEEF.CUTOUT_AM` and for the same
+reason. The panel says so rather than letting a short chart read as a broken
+feed. Both pages are fetched every run so a missed day is recovered by the
+next, which matters more here than for most jobs: a sale nobody fetches is gone.
+
+The writer is `deploy/mx_auction.py` behind `deploy/run_mx_auction.sh`, on the
+droplet conventions recorded above — **it was in `scripts/` with a bare crontab
+line until 2026-10-07**, which on that host would have failed silently for ever.
+As of that date **nothing is installed on the droplet**: every row in
+`MX_AUCTION_PRICES` was banked from Ross's desktop (`RECORDED_BY` is
+`mx_auction@JSA-Nitro2`), so the series does not advance until the cron is in.
+
+### The tab split, if the page is ever split again
+
+Indenting 1,040 lines under `with tab_crossings:` was done with a
+tokenizer-aware pass, not a blind one: a blind indent injects four spaces into
+every line **inside** a triple-quoted string, which for a CSS block renders
+almost right. The AST cannot distinguish a triple-quoted string from four
+adjacent single-line f-strings — implicit concatenation is one node spanning
+every line — so `tokenize` is what separates them. Afterwards every string
+constant in the module was compared before and after and the write refused if
+any had moved.
+
+**`_MX_METHOD` is at module level on purpose**, the lesson CLAUDE.md already
+records for the letter page: every multi-line string living above the split is
+the only reason indenting the rest is safe. Check that again before moving this
+one.
+
 ## The Saturday Slaughter view
 
 Added 2026-10-02 as the **fifth tab**, between AMS Weekly Slaughter and Beef
