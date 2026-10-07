@@ -938,6 +938,136 @@ def project_year_end(series, today=None, window=PACE_WINDOW):
     }
 
 
+def port_shares(conn, years=NORMAL_YEARS):
+    """
+    {"shares": {port: fraction}, "head": total, "days": reporting days}.
+
+    Each port's share of named-port head over the years the border ran
+    normally, which is the only basis on which scenarios can be added up.
+
+    DO NOT BUILD A SCENARIO BY SUMMING PER-PORT DAILY RATES. port_profile()
+    divides a port's head by the days THAT PORT carried cattle, which is the
+    right rate for "what does it do when it runs" and the wrong one for
+    "what does the border do". Ports run different numbers of days, so the
+    per-port rates sum to 8,750 head/day against a real border rate of 5,521
+    -- 58% high. Shares sum to 1 by construction and cannot do that.
+    """
+    yrs = ", ".join(f"'{y}'" for y in years)
+    cur = conn.cursor()
+    rows = cur.execute(
+        "SELECT crossing_point, SUM(receipts_est) FROM border_receipts "
+        "WHERE is_total = 0 AND receipts_est > 0 "
+        "AND crossing_point <> 'All Crossing Points' "
+        f"AND TO_CHAR(report_date, 'YYYY') IN ({yrs}) "
+        "GROUP BY crossing_point").fetchall()
+    total = sum((h or 0) for _p, h in rows)
+    days = cur.execute(
+        "SELECT COUNT(*) FROM border_receipts WHERE is_total = 1 "
+        f"AND TO_CHAR(report_date, 'YYYY') IN ({yrs})").fetchone()[0]
+    if not total or not days:
+        return None
+    return {"shares": {p: (h or 0) / total for p, h in rows},
+            "head": total, "days": days, "years": years}
+
+
+def normal_rate(conn, years=NORMAL_YEARS):
+    """
+    Head per REPORTING day when the border ran normally, from the total row.
+
+    A RATE, not an annual total, and that is the correction that matters.
+    2024's raw 1,277,600 head looks like a full year and is not -- the border
+    shut on 22 November, so it covers 225 reporting days against a full year's
+    ~257. Using it as "a normal year" understates one by about 12%. The rate
+    carries cleanly onto whatever reporting-day count the target year has.
+    """
+    yrs = ", ".join(f"'{y}'" for y in years)
+    row = conn.cursor().execute(
+        "SELECT SUM(receipts_est), COUNT(*) FROM border_receipts "
+        f"WHERE is_total = 1 AND TO_CHAR(report_date, 'YYYY') IN ({yrs})").fetchone()
+    head, days = (row or (None, 0))
+    if not head or not days:
+        return None
+    return head / days
+
+
+def year_outlook(conn, year, series, watch=WATCH_PORT, window=PACE_WINDOW,
+                 today=None):
+    """
+    Scenarios for a calendar year that has not started yet.
+
+    THIS IS NOT project_year_end(). That one is anchored: it adds a pace to
+    head that have actually crossed, and by December most of its answer is
+    measured rather than projected. A full forward year has NO actuals at all,
+    so every figure here is a scenario and the page has to say so. Four of
+    them, each meaning something different:
+
+        as_is    today's pace carried across the year, nothing changes
+        watch    the watch port reopens and restarts the way its neighbours
+                 did -- the increment the page is really being asked for
+        mature   those same ports recover to their normal rates
+        normal   the whole border back to normal
+
+    THE WATCH SCENARIO SCALES BY SHARE, NOT BY THE PORT'S OWN OLD RATE, and
+    that is the one thing in here that is easy to get wrong in a way nobody
+    would catch. Columbus ran 1,271 head on each day it was open in 2023-24,
+    so "add Columbus back" reads as +1,271/day -- about +316,000 on the year.
+    But the two ports that ARE open are managing 44% of what they normally do,
+    and a crossing that reopened last month will not instantly outrun its
+    neighbours by a factor of two. Scaling port capacity instead -- Columbus
+    is 11.3% of a normal border against the 56.8% already open, so +20% --
+    gives +67,600. The naive figure is 4.7x too high and arrives wearing the
+    same units.
+
+    Returns None when the normal-year basis cannot be formed, which is correct
+    rather than exceptional: without it there is nothing to be a share OF.
+    """
+    sh = port_shares(conn)
+    rate = normal_rate(conn)
+    if not sh or not rate:
+        return None
+    pts = sorted((_as_date(r[0]), r[1] or 0) for r in series)
+    if not pts:
+        return None
+    this_year = (_as_date(today).year if today else date.today().year)
+    cur_series = [(d, h) for d, h in pts if d.year == this_year]
+    pace = daily_pace(cur_series, window=window)
+    if pace is None:
+        return None
+
+    rd = reporting_days(date(year, 1, 1), date(year, 12, 31))
+    open_ports = [p for p, _s, _a, _b, _h, _n
+                  in crossing_debuts(conn, since=f"{this_year}-01-01")]
+    open_share = sum(sh["shares"].get(p, 0.0) for p in open_ports)
+    watch_share = sh["shares"].get(watch, 0.0) if watch else 0.0
+    if not open_share:
+        return None
+
+    normal_head = rate * rd
+    as_is = pace * rd
+    with_watch = pace * ((open_share + watch_share) / open_share) * rd
+    mature = (open_share + watch_share) * normal_head
+    return {
+        "year": year,
+        "reporting_days": rd,
+        "pace": pace,
+        "open_ports": open_ports,
+        "open_share": open_share,
+        "watch": watch if watch_share else None,
+        "watch_share": watch_share,
+        # How far along the open ports are. Measured against what those SAME
+        # ports would normally carry, not against the whole border, or a
+        # two-port border would read as permanently broken.
+        "maturity": as_is / (open_share * normal_head),
+        "normal_rate": rate,
+        "scenarios": {
+            "as_is": as_is,
+            "watch": with_watch,
+            "mature": mature,
+            "normal": normal_head,
+        },
+    }
+
+
 # ── Border prices ───────────────────────────────────────────────────────────
 #
 # From 3486 "Report Detail Current". Uniform where it matters, checked over all

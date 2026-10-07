@@ -84,6 +84,10 @@ st.markdown(f"""
   .tile-value {{
     color:{TEXT}; font-size:1.7rem; font-weight:700; line-height:1.1;
   }}
+  /* Scenario tiles carry an amber rule instead of the blue one. Every other
+     tile on this page is a measurement or a projection anchored to one; these
+     describe a year that has not started and must not read as either. */
+  .tile-scen {{ border-top-color:{AMBER}; }}
   .tile-sub {{ color:{MUTED}; font-size:0.72rem; margin-top:5px; }}
   .tile-delta-pos {{ color:{POS}; font-size:0.82rem; font-weight:600; margin-top:4px; }}
   .tile-delta-neg {{ color:{NEG}; font-size:0.82rem; font-weight:600; margin-top:4px; }}
@@ -129,8 +133,8 @@ st.markdown(f"""
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
-def tile(label, value, extra=""):
-    return (f'<div class="tile"><div class="tile-label">{label}</div>'
+def tile(label, value, extra="", cls=""):
+    return (f'<div class="tile {cls}"><div class="tile-label">{label}</div>'
             f'<div class="tile-value">{value}</div>{extra}</div>')
 
 
@@ -207,6 +211,9 @@ def load_all():
                                               since=f"{date.today().year}-01-01"),
             "watch_port": (bd.port_profile(conn, bd.WATCH_PORT)
                            if bd.WATCH_PORT else None),
+            "outlook": bd.year_outlook(
+                conn, date.today().year + 1,
+                bd.daily_receipts(conn), watch=bd.WATCH_PORT),
             "ytd_ams": bd.ytd_actuals(conn),
             "since_open": bd.since_reopening(conn),
             "weekly": bd.weekly_volumes(conn),
@@ -512,6 +519,97 @@ if PROJ:
             f"reporting days of Douglas alone before the border shut again. "
             f"The projection moves when cattle cross, not when a date is "
             f"announced."
+        )
+
+st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
+# ── Next year, as scenarios ─────────────────────────────────────────────────
+# NOT a second projection. The box above is anchored -- most of its answer is
+# head that have already crossed -- and none of next year has happened at all.
+# So this is four scenarios rather than a number with an error bar, each one
+# answering a different question, and the header says "scenarios" in the first
+# three words.
+OUTLOOK = D.get("outlook")
+if OUTLOOK and OUTLOOK["scenarios"]:
+    _o = OUTLOOK
+    _s = _o["scenarios"]
+    _yr = _o["year"]
+    st.markdown(f'<div class="sec-header">{_yr} Outlook — scenarios, not a '
+                f'forecast</div>', unsafe_allow_html=True)
+
+    # Joined with "and" because these read mid-sentence: "the 57% Douglas,
+    # Santa Teresa carry between them" parses as three ports, not two.
+    _op = _o["open_ports"]
+    _ports = (" and ".join(_op) if len(_op) < 3
+              else ", ".join(_op[:-1]) + " and " + _op[-1])
+    c = st.columns(4)
+    with c[0]:
+        st.markdown(tile(
+            "Nothing Changes",
+            f"~{_s['as_is']:,.0f}",
+            sub(f"{_o['pace']:,.0f} head/day × {_o['reporting_days']} "
+                f"reporting days"), "tile-scen"), unsafe_allow_html=True)
+    with c[1]:
+        st.markdown(tile(
+            f"{_o['watch']} Reopens" if _o["watch"] else "One More Crossing",
+            f"~{_s['watch']:,.0f}" if _o["watch"] else "—",
+            sub(f"+{_s['watch'] - _s['as_is']:,.0f} head, restarting the way "
+                f"its neighbours did" if _o["watch"] else "no watch port set"),
+            "tile-scen"), unsafe_allow_html=True)
+    with c[2]:
+        st.markdown(tile(
+            "Those Ports Recover",
+            f"~{_s['mature']:,.0f}",
+            sub(f"the same crossings at their normal rates"),
+            "tile-scen"), unsafe_allow_html=True)
+    with c[3]:
+        st.markdown(tile(
+            "The Whole Border Back",
+            f"~{_s['normal']:,.0f}",
+            sub(f"every crossing, {_o['normal_rate']:,.0f} head/day"),
+            "tile-scen"), unsafe_allow_html=True)
+
+    st.caption(
+        f"**None of {_yr} has happened, so every figure here is a scenario.** "
+        f"They are ordered, and the gaps between them are the point. "
+        f"**Nothing changes** carries today's {_o['pace']:,.0f} head a day "
+        f"across all {_o['reporting_days']} of {_yr}'s reporting days. "
+        f"**{_o['watch']} reopens** adds the one crossing expected back: it "
+        f"carried **{_o['watch_share'] * 100:.0f}% of every head** when the "
+        f"border ran normally, against the **{_o['open_share'] * 100:.0f}%** "
+        f"{_ports} carry between them, so it is about "
+        f"{_o['watch_share'] / _o['open_share'] * 100:.0f}% more port capacity "
+        f"— **+{_s['watch'] - _s['as_is']:,.0f} head**."
+        if _o["watch"] else
+        f"**None of {_yr} has happened, so every figure here is a scenario.**"
+    )
+    st.caption(
+        f"**The reopening is not the big number, and that is worth sitting "
+        f"with.** {_ports} are open now and running at "
+        f"**{_o['maturity'] * 100:.0f}% of what those two crossings normally "
+        f"carry** — so the step from {_s['as_is']:,.0f} to "
+        f"{_s['mature']:,.0f} is them simply getting back to normal, which is "
+        f"worth several times what adding "
+        f"{_o['watch'] or 'another crossing'} is. A reopening is a headline; "
+        f"maturity is the volume."
+    )
+    # Derived, not written in: the naive figure has to move with the data or
+    # it becomes a claim about numbers the page is no longer showing.
+    _wp = D.get("watch_port")
+    if _wp and _o["watch"]:
+        _naive = _wp["per_day"] * _o["reporting_days"]
+        st.caption(
+            f":orange[**Why {_o['watch']} is "
+            f"+{_s['watch'] - _s['as_is']:,.0f} and not "
+            f"+{_naive:,.0f}.**] Added at its own old rate it would read the "
+            f"larger figure — it moved {_wp['per_day']:,.0f} head on each day "
+            f"it was open in {_wp['years'][0]}–{_wp['years'][-1]}. But that "
+            f"has a crossing restarting from nothing and instantly outrunning "
+            f"its neighbours by more than two to one, while they sit at "
+            f"{_o['maturity'] * 100:.0f}% of their own normal. Scaling port "
+            f"**capacity** is the consistent way to do it. The naive figure is "
+            f"{_naive / (_s['watch'] - _s['as_is']):.1f}× too high and arrives "
+            f"in the same units, which is why it is worth naming."
         )
 
 st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)

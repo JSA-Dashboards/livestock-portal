@@ -29,6 +29,7 @@ else:  # pragma: no cover
 
 from border import (  # noqa: E402
     KNOWN_PORTS,
+    year_outlook,
     NON_REPORTING,
     NORMAL_YEARS,
     PACE_WINDOW,
@@ -298,3 +299,129 @@ def test_columbus_sensitivity_is_material():
     base = project_year_end(SERIES_2026, today=date(2026, 10, 2))["projected"]
     nd = reporting_days(date(2026, 11, 1), date(2026, 12, 31))
     assert (237_600 / 187) * nd > base * 0.5
+
+
+# ── next year, as scenarios ─────────────────────────────────────────────────
+#
+# The real 2023-24 shares, so the arithmetic is pinned against the border AMS
+# actually reported rather than round numbers chosen to agree.
+_SHARES = {"Santa Teresa": 878_950, "Douglas": 315_550, "Nogales": 261_600,
+           "Columbus": 237_600, "Presidio": 199_500, "Pharr / Hidalgo": 63_300,
+           "Del Rio": 46_250, "Laredo": 41_150, "Eagle Pass": 39_700,
+           "Colombia Bridge": 19_800}
+_NORMAL_DAYS = 381
+_NORMAL_HEAD = 2_095_150          # the total row over those same 381 days
+
+
+class _OutlookCur:
+    """Answers the four queries year_outlook makes, in the order it makes them."""
+
+    def __init__(self, open_ports):
+        self._open = open_ports
+        self._q = []
+
+    def execute(self, sql):
+        self._q.append(" ".join(sql.split()))
+        return self
+
+    def fetchall(self):
+        q = self._q[-1]
+        if "GROUP BY crossing_point" in q and "MIN(report_date)" in q:
+            # crossing_debuts
+            return [(p, "ST", "2026-08-24", "2026-10-05", 1000, 10)
+                    for p in self._open]
+        return [(p, h) for p, h in _SHARES.items()]        # port_shares
+
+    def fetchone(self):
+        q = self._q[-1]
+        if "SUM(receipts_est), COUNT(*)" in q:             # normal_rate
+            return (_NORMAL_HEAD, _NORMAL_DAYS)
+        return (_NORMAL_DAYS,)                             # port_shares day count
+
+
+class _OutlookConn:
+    def __init__(self, open_ports=("Douglas", "Santa Teresa")):
+        self._cur = _OutlookCur(list(open_ports))
+
+    def cursor(self):
+        return self._cur
+
+
+def _outlook(**kw):
+    return year_outlook(_OutlookConn(kw.pop("open_ports",
+                                            ("Douglas", "Santa Teresa"))),
+                        2027, SERIES_2026, today=date(2026, 10, 2), **kw)
+
+
+def test_the_outlook_is_four_ordered_scenarios():
+    o = _outlook()
+    s = o["scenarios"]
+    assert s["as_is"] < s["watch"] < s["mature"] < s["normal"], (
+        "the scenarios must only ever get larger, or the page's ordering lies")
+    assert o["year"] == 2027
+    assert o["reporting_days"] == 249
+
+
+def test_the_watch_scenario_scales_capacity_not_the_ports_own_old_rate():
+    """The one error that arrives in the right units and is nearly 5x wrong.
+
+    Columbus moved ~1,271 head on each day it ran in 2023-24, so "add it
+    back" reads as +316,000 on a 249-day year. But its neighbours are at
+    well under half their normal rate, and a crossing restarting from nothing
+    does not instantly beat them two to one. Scaling share of port capacity
+    gives an increment several times smaller.
+    """
+    o = _outlook()
+    gained = o["scenarios"]["watch"] - o["scenarios"]["as_is"]
+    naive = 1_271 * o["reporting_days"]
+    assert gained == pytest.approx(
+        o["scenarios"]["as_is"] * (o["watch_share"] / o["open_share"]))
+    assert naive > 4 * gained, "the naive figure should be several times larger"
+
+
+def test_a_closed_watch_port_adds_nothing():
+    """No share, no increment — and the page then shows a dash, not a zero."""
+    o = _outlook(watch="Nowhere")
+    assert o["watch"] is None
+    assert o["watch_share"] == 0
+    assert o["scenarios"]["watch"] == pytest.approx(o["scenarios"]["as_is"])
+
+
+def test_maturity_is_against_the_open_ports_own_normal():
+    """Not against the whole border, or two open ports read as permanently broken."""
+    o = _outlook()
+    normal_for_those_ports = o["open_share"] * o["scenarios"]["normal"]
+    assert o["maturity"] == pytest.approx(
+        o["scenarios"]["as_is"] / normal_for_those_ports)
+    assert 0 < o["maturity"] < 1
+
+
+def test_the_normal_year_is_a_RATE_carried_onto_the_target_year():
+    """2024's raw head is short — the border shut 22 Nov — so it is not a year.
+
+    The scenario has to be head-per-reporting-day times the TARGET year's
+    reporting days, which is larger than any single recorded year's total.
+    """
+    o = _outlook()
+    assert o["normal_rate"] == pytest.approx(_NORMAL_HEAD / _NORMAL_DAYS)
+    assert o["scenarios"]["normal"] == pytest.approx(
+        o["normal_rate"] * o["reporting_days"])
+    assert o["scenarios"]["normal"] > 1_277_600, "must exceed truncated 2024"
+
+
+def test_shares_are_used_rather_than_summed_per_port_day_rates():
+    """Per-port rates sum ~58% high because ports run different day counts.
+
+    Pinned as a property of the result: the normal scenario has to equal the
+    measured border rate times the year, never the sum of the port rates.
+    """
+    o = _outlook()
+    assert o["open_share"] + o["watch_share"] < 1.0
+    assert o["scenarios"]["mature"] == pytest.approx(
+        (o["open_share"] + o["watch_share"]) * o["scenarios"]["normal"])
+
+
+def test_outlook_needs_a_pace_and_degrades_to_none():
+    assert year_outlook(_OutlookConn(), 2027, [], today=date(2026, 10, 2)) is None
+    assert year_outlook(_OutlookConn(), 2027, SERIES_2026[-3:],
+                        today=date(2026, 10, 2)) is None
