@@ -49,10 +49,24 @@ import streamlit as st
 REPO = Path(__file__).resolve().parent.parent.parent
 APPS = REPO / "apps"
 
-# Both of these exist exactly ONCE in the repo, so unlike `snowflake_db` they
-# cannot join the five-copy sys.modules collision CLAUDE.md documents. Checked
-# before adding either: leverage.py imports neither `requests` nor
-# `snowflake_db`, so this page widens no collision set at all.
+# `leverage` and `corn_cost` each exist exactly once in the repo, so neither
+# NAME can collide. But that is not the whole story and an earlier version of
+# this comment claimed it was.
+#
+# **THIS PAGE DOES WIDEN THE `snowflake_db` COLLISION, THROUGH corn_cost.**
+# `leverage.py` imports neither `requests` nor `snowflake_db` and is genuinely
+# free. `corn_cost.py:45` does `import snowflake_db as db` by BARE NAME, so
+# importing it here makes this page a sixth binder of a name that already
+# exists five times -- and Python caches by name, so whichever page loads first
+# wins and every other page gets ITS copy.
+#
+# All five copies are byte-identical today (checked: one distinct hash across
+# apps/*/snowflake_db.py), which is the only reason this is a curiosity rather
+# than a bug. It is also why the board must not be the thing that lets them
+# drift: if a copy is ever edited, this page is one more reader that silently
+# gets the wrong one. The alternative -- loading corn_cost by path under a
+# private name, the way `letter/sources.py` and `am_cutout.py` load their db
+# module -- does not help, because the bare import is inside corn_cost itself.
 sys.path.insert(0, str(APPS / "cash_trade"))
 sys.path.insert(0, str(APPS / "fed_cattle_crush"))
 
