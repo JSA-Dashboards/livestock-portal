@@ -1,8 +1,9 @@
 """
-JSA Livestock Portal — shared shell combining twelve livestock dashboards
+JSA Livestock Portal — shared shell combining thirteen livestock dashboards
 (CME Feeder Cattle Index, Seasonal Futures & Spreads, Cattle on Feed, US Cow
 Herd, Mexican Feeder Imports, Cattle Weights, Beef Cutout, Beef Trimmings,
-Livestock Inventory, Cash Cattle Trade, Fed Cattle Crush, Backgrounding Crush) into one app with top-navigation tabs.
+Livestock Inventory, Cash Cattle Trade, Fed Cattle Crush, Backgrounding Crush,
+US Beef Trade) into one app with top-navigation tabs.
 
 Makes the single set_page_config call allowed per multi-page run, then
 hands off to st.navigation (top nav, no sidebar, no login gate — matches
@@ -12,7 +13,7 @@ A shared-passphrase gate is written and ready in portal_auth.py but is NOT
 wired in — deferred 2026-09-22. To enable it, set PORTAL_PASSPHRASE in the
 app's secrets FIRST, then call portal_auth.require_passphrase() immediately
 after set_page_config below. It fails closed, so wiring it without the secret
-in place takes all twelve dashboards down.
+in place takes all thirteen dashboards down.
 """
 from pathlib import Path
 
@@ -100,12 +101,20 @@ DASHBOARDS = [
      "desc": "USDA NASS livestock, poultry, aquaculture inventory & dairy production."},
     {"title": "Cash Cattle Trade", "page": "apps/cash_trade/app.py", "url_path": "cash-trade",
      "desc": "Combined Steer/Heifer FOB & Dressed prices, plus national negotiated cash trade volume."},
+    {"title": "US Beef Trade", "page": "apps/beef_trade/app.py", "url_path": "beef-trade",
+     "desc": "Monthly beef exports and imports on the carcass-weight basis, each against the USDA WASDE forecast."},
 ]
 
-# Kept OUT of DASHBOARDS on purpose, for two reasons. It is an authoring tool
-# rather than a dashboard, and a thirteenth tile would give the grid 4/4/4/1 --
-# the stranded last-row tile the TILES_PER_ROW comment below exists to avoid.
-# It gets its own section above the grid instead.
+# Kept OUT of DASHBOARDS on purpose. It is an authoring tool rather than a
+# dashboard, and it gets its own section above the grid instead.
+#
+# The second reason given here until 2026-10-07 was a LAYOUT one -- that a
+# thirteenth tile would give the grid 4/4/4/1 and strand one. US Beef Trade
+# made that thirteenth tile real, and the grid now rebalances its last row
+# rather than depending on the count (see TILES_PER_ROW below), so the layout
+# argument no longer holds and only the first reason does. It is noted rather
+# than deleted because it was load-bearing for two weeks and someone reading
+# the TILES_PER_ROW comment will wonder which of the two moved.
 # UNLISTED, NOT JUST LOCKED. The page is passphrase-gated, which stops a client
 # getting IN -- but a registered page still shows a tile on the home grid and an
 # entry in the top nav, and clients should not see that the letter tool exists
@@ -252,16 +261,33 @@ def render_home():
     # eleven and 4/4/4 at twelve, so it does not need revisiting each time.
     # Five would divide ten evenly but puts the tiles back near the ~170px
     # width that made "CME Feeder Cattle Index" spill past its own edge.
+    #
+    # THIRTEEN IS THE COUNT NO SINGLE NUMBER SOLVES, which is why the rule
+    # above stopped being enough on 2026-10-07. The remainder is 1 at two,
+    # three, four and six per row, so every one of them strands a tile; only
+    # five (5/5/3) and seven divide it acceptably, and five is the width the
+    # comment above rejected on measurement. Rather than pick between a
+    # stranded tile and a narrow one, the LAST ROW BORROWS: when the final row
+    # would hold a single tile, one moves down from the row before it, giving
+    # 4/4/3/2 here. Tiles keep their four-column width -- a row of three or
+    # two still asks for TILES_PER_ROW columns and fills the first few, the
+    # same trick the TOOLS row above uses -- and no row is ever left alone.
     _render_grid = True
     TILES_PER_ROW = 4
-    for start in range(0, len(DASHBOARDS), TILES_PER_ROW):
+    _rows = [DASHBOARDS[i:i + TILES_PER_ROW]
+             for i in range(0, len(DASHBOARDS), TILES_PER_ROW)]
+    if len(_rows) > 1 and len(_rows[-1]) == 1:
+        _rows[-1].insert(0, _rows[-2].pop())
+    _n = 0
+    for row in _rows:
         cols = st.columns(TILES_PER_ROW)
-        for offset, d in enumerate(DASHBOARDS[start:start + TILES_PER_ROW]):
+        for offset, d in enumerate(row):
             with cols[offset]:
-                with st.container(key=f"tile_{start + offset}"):
+                with st.container(key=f"tile_{_n}"):
                     st.page_link(d["page"], label=d["title"])
                     st.markdown(f"<div class='jsa-tile-desc'>{d['desc']}</div>",
                                 unsafe_allow_html=True)
+            _n += 1
 
     # Discreet, and deliberately uninformative: a client who sees "Staff
     # sign-in" learns that staff exist, not that a letter tool does.

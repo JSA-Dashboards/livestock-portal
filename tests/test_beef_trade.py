@@ -1,0 +1,559 @@
+"""
+US Beef Trade -- the traps that do not raise.
+
+Three classes of thing are pinned here, and none of them would fail loudly on
+its own:
+
+  * the WASDE text parse, against the XML of the SAME release. The page reads
+    the 24 KB text file because twenty-five releases of the 2 MB XML is 50 MB
+    for two numbers apiece; the XML earns its keep here instead, as an
+    independent oracle. A fixed-width parse that has silently shifted a column
+    produces plausible numbers, and only a second parser catches it.
+  * the ERS shaping, where `World total` is a ROW in the file. Summing every
+    country double-counts the total exactly, and a doubled beef export figure
+    is still a perfectly believable beef export figure.
+  * the join between them -- that ERS and WASDE are the same series on the
+    same basis. The whole page is an actual-against-forecast comparison, so if
+    that stops being true the page is wrong rather than merely stale.
+
+Fixtures are committed under tests/fixtures/beef_trade/ and are USDA's own
+published files, trimmed to the table in question. They are US Government
+works, so unlike the Sterling tracker there is nothing here that cannot sit in
+a public repo.
+"""
+import re
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+import pandas as pd
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "apps" / "beef_trade"))
+
+import trade_flows as tf      # noqa: E402
+import wasde                  # noqa: E402
+
+FIX = Path(__file__).parent / "fixtures" / "beef_trade"
+WASDE_TXT = FIX / "wasde0926_meats.txt"
+WASDE_XML = FIX / "wasde0926_sr32.xml"
+ERS_CSV = FIX / "ers_beef_monthly_sample.csv"
+
+
+# -- helpers -----------------------------------------------------------------
+
+def _parsed():
+    return wasde.parse(WASDE_TXT.read_text(encoding="utf-8"))
+
+
+def _xml_truth():
+    """
+    {(commodity, year, month_label): {attribute: value}} straight out of the
+    structured release -- the oracle the text parser is checked against.
+
+    Deliberately a SEPARATE implementation, not a shared helper: a bug in one
+    reader that the other inherits is not a check.
+    """
+    root = ET.fromstring(WASDE_XML.read_text(encoding="utf-8"))
+    rep = root.find("Report") if root.tag != "Report" else root
+    name_map = {
+        "Beginning stocks": "beginning_stocks",
+        "Production 1/": "production",
+        "Imports": "imports",
+        "Total Supply": "total_supply",
+        "Exports": "exports",
+        "Ending Stocks": "ending_stocks",
+        "Total Use": "total_use",
+    }
+    out = {}
+    for cg in rep.iter("m1_commodity_group"):
+        # The XML carries the footnote marker on the commodity name --
+        # "Total Red\r\nMeat 5/" -- and the text parser strips it. Strip it
+        # here too, so the two are compared on the figures rather than on a
+        # labelling convention neither claims to share.
+        com = re.sub(r"\s*\d+\s*/\s*$", "",
+                     " ".join((cg.get("m1_commodity1") or "").split()))
+        for yg in cg.iter("m1_year_group"):
+            label = (yg.get("m1_market_year1") or "").strip()
+            year = int(label[:4])
+            for mg in yg.iter("m1_month_group"):
+                mon = (mg.get("m1_forecast_month1") or "").strip()
+                vals = {}
+                for ag in mg.iter("m1_attribute_group"):
+                    attr = " ".join((ag.get("m1_attribute1") or "").split())
+                    key = name_map.get(attr)
+                    if key is None:
+                        continue
+                    cell = ag.find(".//Cell")
+                    if cell is None:
+                        continue
+                    raw = (cell.get("m1_cell_value1") or "").replace(",", "")
+                    try:
+                        vals[key] = float(raw)
+                    except ValueError:
+                        pass
+                out[(com, year, mon)] = vals
+    return out
+
+
+def _ers_frame():
+    df = pd.read_csv(ERS_CSV, encoding="utf-8-sig")
+    out = pd.DataFrame({
+        "flow": df["TRADE_FLOW"].astype(str).str.strip(),
+        "country": df["GEOGRAPHY_DESC"].astype(str).str.strip(),
+        "year": df["YEAR_ID"].astype(int),
+        "month": df["TIMEPERIOD_ID"].astype(int),
+        "mil_lb": pd.to_numeric(df["AMOUNT"], errors="coerce")
+        * tf.THOUSAND_LB_TO_MILLION_LB,
+    }).dropna(subset=["mil_lb"])
+    return out[out["flow"].isin(tf.FLOWS)].reset_index(drop=True)
+
+
+# -- the WASDE text parser, against the XML ---------------------------------
+
+def test_text_parse_matches_the_xml_figure_for_figure():
+    """
+    THE CHECK THAT LICENSES READING THE TEXT FILE AT ALL.
+
+    Every commodity, every year, every attribute. A shifted column survives
+    _row_ok only if it happens to preserve both accounting identities, which
+    is why this exists on top of them.
+    """
+    truth = _xml_truth()
+    got = _parsed()
+    assert got.series, "parsed nothing"
+
+    checked = 0
+    for s in got.series:
+        for month_label, vals in ((s.current_month, s.current),
+                                  (s.prior_month, s.prior)):
+            if not vals:
+                continue
+            key = (s.commodity, s.year, month_label or "")
+            assert key in truth, f"text parse invented {key}"
+            for attr, value in vals.items():
+                if attr == "per_capita":
+                    continue
+                assert truth[key].get(attr) == pytest.approx(value), (
+                    f"{key} {attr}: text {value} vs xml {truth[key].get(attr)}")
+                checked += 1
+    assert checked >= 100, f"only {checked} figures compared"
+
+
+def test_every_parsed_row_satisfies_both_accounting_identities():
+    """
+    beginning + production + imports == total supply, and
+    total supply - exports - ending stocks == total use.
+
+    _collect already refuses a row that fails, so this is really asserting
+    that refusal has not been loosened into uselessness -- and that the
+    fixture's rows all pass, i.e. the guard is not silently dropping real data.
+    """
+    got = _parsed()
+    rows = [v for s in got.series for v in (s.current, s.prior) if v]
+    assert len(rows) >= 15
+    for v in rows:
+        assert wasde._row_ok(v)
+
+
+def test_a_shifted_column_is_refused():
+    """
+    The failure the identities exist for: a layout change that moves every
+    figure one column left. The numbers stay individually plausible.
+    """
+    line = "    2025             602   26071    5388   32061    2579     577   28905    59.2"
+    # _collect never sees the year -- _YEAR_ROW has already taken it -- so go
+    # through the real regex rather than hand-feeding a tail that does not
+    # match what production passes.
+    tail = wasde._YEAR_ROW.match(line).group(3)
+    good = wasde._collect(tail)
+    assert good["imports"] == 5388.0 and good["exports"] == 2579.0
+
+    # One column dropped from the right: eight figures become seven, the
+    # per-capita slot swallows total use, and every remaining number is still
+    # a believable beef figure.
+    short = " ".join(tail.split()[:-1])
+    assert wasde._collect(short) == {}, "a row one column short was accepted"
+
+    # One column dropped from the LEFT, which is the nastier shape: the count
+    # is restored by the per-capita figure sliding into total use, so only the
+    # accounting identities can reject it.
+    slid = " ".join(tail.split()[1:] + ["0.0"])
+    assert len(slid.split()) == len(wasde.COLUMNS)
+    assert wasde._collect(slid) == {}, "a left-shifted row was accepted"
+
+
+def test_commodity_names_split_across_lines_are_rejoined():
+    """
+    The report wraps a long name: "TotalRed" / "Meat5/" and "Total" /
+    "Poultry6/". Getting this wrong attaches Total Red Meat's figures to a
+    commodity called "TotalRed" and loses them -- no error, just a key nobody
+    looks up.
+    """
+    got = _parsed()
+    assert "Total Red Meat" in got.commodities()
+    assert "Total Poultry" in got.commodities()
+    # "RedMeat& Poultry" is complete on ONE line and carries no trailing
+    # padding, which is why the join cannot be decided on padding.
+    assert "Red Meat & Poultry" in got.commodities()
+    assert "Beef" in got.commodities()
+
+
+def test_default_year_is_the_earliest_forecast_not_the_latest():
+    """
+    WASDE carries the following marketing year from May onward. Defaulting to
+    the latest would switch the page's headline mid-season, from the year
+    being revised to one nobody is trading yet.
+    """
+    got = _parsed()
+    beef = got.get("Beef")
+    assert beef.year == 2026 and beef.status == "Proj."
+    assert 2027 in got.years("Beef")
+
+
+def test_revision_comes_from_the_prior_month_row_in_the_same_file():
+    """
+    Each release prints last month's estimate beside this month's, so the
+    month-over-month revision needs no stored history and no second request.
+    """
+    got = _parsed()
+    beef = got.get("Beef")
+    assert (beef.current_month, beef.prior_month) == ("Sep", "Aug")
+    assert got.value("Beef", "imports") == 6262.0
+    assert got.revision("Beef", "imports") == pytest.approx(130.0)
+    assert got.revision("Beef", "exports") == pytest.approx(10.0)
+
+
+def test_revision_is_none_and_not_zero_when_there_is_nothing_to_compare():
+    """
+    An actual year has no prior-month row. Zero would say "USDA did not
+    revise this", which is a different statement from "there is no comparison".
+    """
+    got = _parsed()
+    assert got.value("Beef", "imports", 2025) == 5388.0
+    assert got.revision("Beef", "imports", 2025) is None
+
+
+def test_the_table_header_is_not_read_as_data():
+    """
+    The meats table opens with a rule of "=", four lines of column headings,
+    then a second rule. Starting at the first rule reads the headings as rows;
+    treating the second as the END closes the table before Beef's first line
+    and the parse returns a report month and no commodities -- which looks
+    like a report that has stopped publishing rather than a parser bug. It
+    cost one debugging round on 2026-10-07.
+    """
+    got = _parsed()
+    assert got.report_month == "September 2026"
+    assert len(got.commodities()) == 7
+
+
+# -- the ERS shaping ---------------------------------------------------------
+
+def test_world_total_is_a_row_and_the_countries_sum_to_it():
+    """
+    THE DOUBLE-COUNT. `World total` is published in the same column as the
+    partners, so a groupby that forgets to exclude it returns exactly twice
+    the real figure -- and twice a beef export month is still a number that
+    looks like a beef export month.
+    """
+    df = _ers_frame()
+    rec = tf.reconciles(df)
+    assert rec["ok"], rec
+    assert rec["checked"] > 0
+
+    naive = df[df["flow"] == "Exports"].groupby(["year", "month"])["mil_lb"].sum()
+    correct = tf.monthly(df, "Exports").set_index(["year", "month"])["mil_lb"]
+    joined = pd.concat([naive.rename("naive"), correct.rename("ok")],
+                       axis=1).dropna()
+    assert (joined["naive"] / joined["ok"]).round(6).eq(2.0).all(), (
+        "the naive sum is meant to be exactly double; if it is not, the "
+        "fixture no longer exercises the trap")
+
+
+def test_monthly_reads_usdas_published_total_not_a_sum_of_partners():
+    df = _ers_frame()
+    m = tf.monthly(df, "Imports")
+    direct = (df[(df["flow"] == "Imports") & (df["country"] == tf.WORLD)]
+              .set_index(["year", "month"])["mil_lb"])
+    for _, row in m.iterrows():
+        assert direct[(row["year"], row["month"])] == pytest.approx(
+            row["mil_lb"])
+
+
+def test_country_tables_exclude_the_world_total_row():
+    """
+    Left in, it is the first row of every "top sources" table, at 100% share.
+    """
+    df = _ers_frame()
+    for flow in tf.FLOWS:
+        c = tf.countries(df, flow, 2025, 12, top=20)
+        assert tf.WORLD not in set(c["country"])
+
+
+def test_seasonal_projection_is_not_a_straight_annualisation():
+    """
+    Beef imports run heavy in the first quarter, so YTD x 12/n reads high all
+    spring. The projection scales YTD by the share of the year those months
+    normally carry instead, and the two must differ.
+    """
+    df = _ers_frame()
+    p = tf.pace(df, "Imports", 2026, 6, forecast=6262.0)
+    naive = p["ytd"] * 12.0 / 6.0
+    assert p["projection"] is not None
+    assert abs(p["projection"] - naive) > 1.0, (
+        "the projection collapsed to a straight annualisation")
+    shape = tf.seasonal_shape(df, "Imports", 2026)
+    assert shape.sum() == pytest.approx(1.0, abs=1e-6)
+
+
+def test_seasonal_shape_uses_only_complete_years():
+    """
+    A part year's monthly shares would sum to one over the months it happens
+    to have, silently re-weighting every other month.
+    """
+    df = _ers_frame()
+    shape = tf.seasonal_shape(df, "Imports", 2026)
+    assert len(shape) == 12
+    assert shape.sum() == pytest.approx(1.0, abs=1e-6)
+
+
+def test_pace_returns_none_rather_than_guessing_without_a_forecast():
+    df = _ers_frame()
+    p = tf.pace(df, "Exports", 2026, 8, forecast=None)
+    assert p["ytd"] is not None
+    assert p["required"] is None and p["implied_vs_forecast"] is None
+
+
+def test_net_trade_is_imports_less_exports():
+    df = _ers_frame()
+    nt = tf.net_trade(df)
+    assert not nt.empty
+    assert (nt["net"] - (nt["imports"] - nt["exports"])).abs().max() < 1e-9
+
+
+# -- the join: ERS and WASDE are the same series -----------------------------
+
+def test_ers_reproduces_the_wasde_actual_for_the_completed_year():
+    """
+    THE CLAIM THE WHOLE PAGE RESTS ON. WASDE's 2025 beef line is Imports 5,388
+    and Exports 2,579; ERS's 2025 world totals are 5,387.95 and 2,579.08.
+
+    If this ever fails, the actual-versus-forecast panels are comparing two
+    different series and the page is wrong rather than stale -- which is why
+    the page runs the same check live, in `basis_agrees`, instead of trusting
+    this test to still describe production.
+    """
+    df = _ers_frame()
+    w = _parsed()
+    chk = tf.basis_agrees(df, 2025,
+                          w.value("Beef", "imports", 2025),
+                          w.value("Beef", "exports", 2025))
+    assert chk["ok"] is True, chk
+    assert chk["ers_imports"] == pytest.approx(5388.0, abs=tf_tolerance())
+    assert chk["ers_exports"] == pytest.approx(2579.0, abs=tf_tolerance())
+
+
+def tf_tolerance():
+    """WASDE prints whole million pounds; ERS carries decimals."""
+    return 2.0
+
+
+def test_basis_check_declines_to_judge_an_incomplete_year():
+    """
+    Eight months of ERS against a full-year WASDE actual would always look
+    like a divergence. `ok` is None -- not False -- so the page can say
+    "nothing to check" rather than crying wolf every January.
+    """
+    df = _ers_frame()
+    chk = tf.basis_agrees(df, 2026, 6262.0, 2343.0)
+    assert chk["ok"] is None
+
+
+def test_basis_check_fails_loudly_when_the_series_diverge():
+    df = _ers_frame()
+    chk = tf.basis_agrees(df, 2025, 9999.0, 2579.0)
+    assert chk["ok"] is False
+
+
+# -- module hygiene ----------------------------------------------------------
+
+def test_wasde_module_is_generic_and_not_beef_specific():
+    """
+    It was written for this page and is meant to be reusable by the next one
+    that wants a WASDE line. A hard-coded "Beef" anywhere in it is the first
+    step back to a second WASDE reader -- the snowflake_db.py-times-five
+    problem, which CLAUDE.md records at length.
+    """
+    src = (ROOT / "apps" / "beef_trade" / "wasde.py").read_text(encoding="utf-8")
+    body = "\n".join(
+        ln for ln in src.splitlines()
+        if not ln.lstrip().startswith("#"))
+    # The docstring legitimately uses beef as the worked example; code must not.
+    import ast
+    tree = ast.parse(src)
+    ast.get_docstring(tree)
+    code = ast.unparse(ast.Module(
+        body=[n for n in tree.body
+              if not (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant))],
+        type_ignores=[]))
+    for node in ast.walk(ast.parse(code)):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            assert "Beef" not in node.value, (
+                f"wasde.py hard-codes a commodity: {node.value!r}")
+    assert body  # the file is not empty
+
+
+def test_both_modules_carry_a_cache_schema():
+    """
+    `st.cache_data` keys on the decorated function and never on the modules it
+    calls, so adding a key to `load()` changes nothing on the deployed page and
+    the section renders "-" with nothing raising. The trap is recorded for
+    `leverage.SCHEMA` and `am_cutout.SCHEMA`; these are the third and fourth.
+    """
+    assert isinstance(wasde.SCHEMA, int)
+    assert isinstance(tf.SCHEMA, int)
+    page = (ROOT / "apps" / "beef_trade" / "app.py").read_text(encoding="utf-8")
+    assert "wasde.SCHEMA" in page and "tf.SCHEMA" in page
+
+
+def test_the_page_is_registered_in_the_portal():
+    home = (ROOT / "Home.py").read_text(encoding="utf-8")
+    assert "apps/beef_trade/app.py" in home
+    assert "beef-trade" in home
+
+
+def test_the_tile_grid_never_strands_a_single_tile():
+    """
+    Thirteen dashboards at four per row is 4/4/4/1. The grid borrows one from
+    the row above instead; this pins the arithmetic rather than the rendering.
+    """
+    per_row = 4
+    for n in range(2, 40):
+        rows = [list(range(i, min(i + per_row, n)))
+                for i in range(0, n, per_row)]
+        if len(rows) > 1 and len(rows[-1]) == 1:
+            rows[-1].insert(0, rows[-2].pop())
+        assert sum(len(r) for r in rows) == n
+        assert all(len(r) >= 2 for r in rows), (n, [len(r) for r in rows])
+
+
+# -- the annual chart's axis -------------------------------------------------
+
+def test_the_annual_chart_axis_is_categorical():
+    """
+    THE FORECAST BAR THAT RENDERED NOWHERE. Plotly type-sniffs an axis, and
+    "2014".."2025" are numeric strings, so the axis comes out LINEAR and
+    "2026F" has no position on it. The bar is not dropped -- the trace is
+    there, the legend entry draws, and the y-axis still stretches to fit the
+    value -- so the only symptom is a chart with headroom and no bar.
+
+    Asserted on the figure spec rather than by rendering, and the figure
+    builder is split out of the page for exactly that reason.
+    """
+    import plotly.graph_objects as go
+
+    df = _ers_frame()
+
+    # Rebuilt here rather than imported, because importing app.py executes
+    # Streamlit calls. The two must stay in step, which the next assertion
+    # enforces by reading the page's own source.
+    page = (ROOT / "apps" / "beef_trade" / "app.py").read_text(encoding="utf-8")
+    assert '"type": "category"' in page, (
+        "annual_figure no longer forces a categorical x-axis; the WASDE "
+        "forecast bar will silently stop rendering")
+
+    m = tf.monthly(df, "Imports")
+    complete = m.groupby("year")["month"].count()
+    years = [int(y) for y in complete[complete == 12].index]
+    assert years, "fixture has no complete years"
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=[str(y) for y in years], y=[1.0] * len(years)))
+    fig.add_trace(go.Bar(x=["2026F"], y=[6262.0]))
+    fig.update_layout(xaxis={"type": "category"})
+    assert fig.layout.xaxis.type == "category"
+    cats = [x for t in fig.data for x in t.x]
+    assert "2026F" in cats and str(years[-1]) in cats
+
+
+def test_net_run_is_computed_and_does_not_assert_a_crossover_year():
+    """
+    The caption under the net-trade chart said "the US crossed over durably in
+    2024". The series says otherwise: the run starts in 2023, and the US was a
+    net EXPORTER in 2021 and 2022. A caption that hard-codes a figure above it
+    will disagree with it -- this repo has paid for that before -- so the page
+    reads this off the data.
+    """
+    df = _ers_frame()
+    run = tf.net_run(df)
+    assert run["start"] == 2023
+    assert run["years"] >= 3
+    assert run["flipped"] >= 1, "the sign really has changed inside the fixture"
+    assert run["first"] < run["latest"], "the scale claim must hold"
+
+    # The years immediately before the run were net EXPORT years, which is the
+    # specific fact the old caption got wrong.
+    nt = tf.net_trade(df)
+    complete = nt.groupby("year")["month"].count()
+    annual = nt[nt["year"].isin(complete[complete == 12].index)] \
+        .groupby("year")["net"].sum()
+    assert annual[2021] < 0 and annual[2022] < 0
+
+
+def test_net_run_counts_only_complete_years():
+    """
+    2026 is eight months in. Counting it would put a part year's net beside
+    full ones and could start or break a run on half the evidence.
+    """
+    df = _ers_frame()
+    run = tf.net_run(df)
+    assert run["start"] + run["years"] - 1 == 2025
+
+
+def test_the_wasde_year_is_a_calendar_year_and_ers_proves_it():
+    """
+    WASDE's grain tables are split MARKETING years -- corn 2026/27 runs
+    September to August -- and the meats table in the same report is plain
+    calendar years. Nothing in the file labels which is which.
+
+    The proof is the join: ERS summed January to December 2025 reproduces
+    WASDE's 2025 beef line exactly. If the meats year were split, a Jan-Dec
+    sum could not land on it. So the page's whole year-to-date-against-
+    forecast arithmetic rests on this, and it is worth a test of its own
+    rather than being folded into the basis check.
+    """
+    df = _ers_frame()
+    w = _parsed()
+    m_i = tf.monthly(df, "Imports")
+    jan_dec = m_i[(m_i["year"] == 2025) & (m_i["month"].between(1, 12))]
+    assert len(jan_dec) == 12
+    assert float(jan_dec["mil_lb"].sum()) == pytest.approx(
+        w.value("Beef", "imports", 2025), abs=2.0)
+
+    # A split year would shift the window, and it must NOT also reproduce the
+    # figure -- otherwise the assertion above proves nothing.
+    #
+    # IT DISCRIMINATES ON PRECISION, NOT ON BEING WILDLY WRONG, and the first
+    # version of this test got that backwards by demanding a 50 million lb
+    # miss. A corn-style September-August window lands at 5,415.7 against
+    # WASDE's 5,388 -- only 27.7 out, because US beef imports ran at a
+    # similar rate through late 2024 and late 2025. Jan-Dec lands within
+    # 0.05. That is a factor of about 500, which is conclusive, but a reader
+    # who expects the wrong window to look obviously wrong will be surprised.
+    prev = m_i[(m_i["year"] == 2024) & (m_i["month"] >= 9)]
+    part = m_i[(m_i["year"] == 2025) & (m_i["month"] <= 8)]
+    split = float(prev["mil_lb"].sum() + part["mil_lb"].sum())
+    calendar_miss = abs(float(jan_dec["mil_lb"].sum())
+                        - w.value("Beef", "imports", 2025))
+    split_miss = abs(split - w.value("Beef", "imports", 2025))
+    assert split_miss > 10.0, (
+        "a September-August window reproduces the WASDE figure too; this "
+        "test no longer establishes which window USDA used")
+    assert split_miss > calendar_miss * 100
+
+
+def test_the_page_says_the_year_is_a_calendar_year():
+    page = (ROOT / "apps" / "beef_trade" / "app.py").read_text(encoding="utf-8")
+    assert "calendar year" in page

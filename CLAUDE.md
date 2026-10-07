@@ -1,10 +1,10 @@
 # JSA Livestock Portal
 
-A single Streamlit process (`Home.py`) bundling twelve livestock dashboards
+A single Streamlit process (`Home.py`) bundling thirteen livestock dashboards
 under `apps/`: CME Feeder Cattle Index, Seasonal Futures & Spreads, Cattle on
 Feed, US Cow Herd, Mexican Feeder Imports, Fed Cattle Crush, Backgrounding
 Crush, Cattle Weights, Beef Cutout, Beef Trimmings, Livestock Inventory, Cash
-Cattle Trade.
+Cattle Trade, US Beef Trade.
 
 `Cattle Weights` was renamed from `Beef Weight` on 2026-09-10. Only the visible
 label changed — the folder is still `apps/beef_weight/` and the `url_path` is
@@ -1443,6 +1443,225 @@ any had moved.
 records for the letter page: every multi-line string living above the split is
 the only reason indenting the rest is safe. Check that again before moving this
 one.
+
+## US Beef Trade — the thirteenth dashboard
+
+Added 2026-10-07. Monthly US beef exports and imports, each against the USDA
+WASDE forecast for the same flow. Three tabs — `Exports | Imports | Net
+trade` — and **every one of them carries its own WASDE expectation panel**,
+which is the requirement the page was built for rather than a flourish. The
+arithmetic is in `apps/beef_trade/trade_flows.py`, the WASDE reader is
+`apps/beef_trade/wasde.py`, and the layout is `app.py` — the same split as
+`cof_recap`, `leverage` and `am_cutout`.
+
+**No new secret and no new host.** ERS is a plain CSV and ESMIS is the host
+`letter/sources.fetch_report_calendar` already reads from the deployed app.
+
+    https://www.ers.usda.gov/media/29544/beef-and-veal-monthly-us-trade-carcass-weight-1000-pounds.csv
+    https://esmis.nal.usda.gov/api/v1/release/findByPubId/1659     (WASDE)
+
+### ERS and WASDE are THE SAME SERIES, and that is what licenses the page
+
+For 2025 the ERS file totals **2,579.1** million lb of exports and **5,388.0**
+of imports. The September 2026 WASDE prints **2,579** and **5,388**. Not two
+similar numbers — the same number, to the rounding step.
+
+That is the whole reason an actual-against-forecast panel means anything here,
+so it is **checked live on every load** by `basis_agrees()` rather than
+asserted in a comment, and the page says so loudly if it ever stops holding.
+A test pins it too, but a test describes the fixture; only the live check
+describes production.
+
+It is also why neither obvious alternative source was used:
+
+- **FAS ESR** is what JSA's own `jpsi.com/export-sales-dashboard` already
+  reads, and it is the right tool for what it does — weekly, by destination,
+  with outstanding sales, and it does carry Beef and Pork. But it is **exports
+  only**, it reports *sales* rather than customs-cleared trade, and it is
+  product weight in thousand metric tons. None of that can be set against a
+  WASDE forecast.
+- **Census** is the underlying customs data and the portal already has a
+  `CENSUS_API_KEY` pattern for it, but it is product weight by HS code.
+  Converting 0201/0202/0206 to carcass weight means applying factors ERS has
+  already applied and published.
+
+**TWO JSA SURFACES NOW QUOTE A US BEEF EXPORT FIGURE AND THEY WILL NOT
+AGREE.** That is the shape of the letter-versus-dashboard FCI failure recorded
+above, so it is worth being explicit that this one is not a bug: a sale is not
+a shipment, a shipment is not a customs entry, and product weight is not
+carcass weight. The caption under the exports table says exactly that. Do not
+"reconcile" them.
+
+### The WASDE meats year is a CALENDAR year — the grain tables are not
+
+Worth stating because the same report disagrees with itself. WASDE's grain
+tables are split marketing years (corn 2026/27 runs September to August);
+the meats table is plain January to December, and nothing in the file labels
+which is which. Anyone who knows WASDE from the grain side will assume wrong.
+
+That is what lets the page sum ERS monthly actuals Jan–Dec and set them
+against the forecast at all, so it is pinned rather than assumed — and the
+proof is the join itself: ERS Jan–Dec 2025 reproduces WASDE's 2025 line to
+0.05 million lb.
+
+**The counterfactual discriminates on PRECISION, not on being obviously
+wrong**, and the first version of that test demanded a 50 million lb miss and
+failed. A corn-style September–August window lands at 5,415.7 against 5,388 —
+only 27.7 out, because imports ran at a similar rate through late 2024 and
+late 2025. It is 0.05 against 27.7, a factor of about 500, which settles it;
+but a reader expecting the wrong window to look wildly wrong will not find
+that.
+
+### Why the WASDE reader parses the .txt when there is an .xml
+
+ESMIS publishes each release four ways. The XML is the structured one and is
+2 MB; the text report is **24 KB**. The revision panel wants a dozen releases,
+and twenty-five releases of XML is 50 MB for two numbers apiece.
+
+A fixed-width text parse is normally the fragile choice. Two things make it
+the safe one here:
+
+- **Every row carries its own audit.** Beginning stocks + production +
+  imports must equal total supply, and total supply less exports and ending
+  stocks must equal total disappearance. `_row_ok` refuses a row that fails
+  either, so a shifted column shows up as a missing figure rather than as a
+  plausible number in the wrong place. The tolerance is 2 million lb, because
+  USDA rounds each component independently — Pork 2025 prints 21,744 where
+  the subtraction gives 21,743.
+- **The XML is the test oracle.** `tests/test_beef_trade.py` parses it
+  independently and asserts the text parser agrees figure for figure, over a
+  hundred values. The structured file still does the job it is good at; it
+  does it in CI instead of on every page load.
+
+Validated against all 25 releases ESMIS serves: zero parse failures, seven
+commodities every time.
+
+### Four things in the WASDE reader that look wrong and are not
+
+- **The data starts after the SECOND banner of `=`, not the first.** The
+  table opens with a rule under its title, four lines of column headings
+  ("Beg- Produc-", "Item inning tion"), then a second rule. Starting at the
+  first reads the headings as data; treating the first banner after them as
+  the END closes the table before Beef's first row, and the parse then
+  returns a report month, no commodities, and nothing resembling an error. It
+  reads exactly like a report that has stopped publishing. Cost one debugging
+  round.
+- **A commodity heading can span two lines, and the join is decided by what
+  FOLLOWS it.** The report squeezes out the spaces and wraps: "TotalRed" /
+  "Meat5/", "Total" / "Poultry6/". Trailing padding separates a finished
+  heading from a fragment today — but `RedMeat& Poultry` is complete on one
+  line with no padding, so that tell is wrong on the last commodity in the
+  table. A heading is finished when the next non-blank line is indented.
+- **The prior month is taken POSITIONALLY, not by month name.** Rows arrive
+  oldest first, "Aug" then "Sep". Sorting on the name breaks every December
+  to January roll, where the prior month sorts after the current one.
+- **`get()` with no year returns the EARLIEST forecast year.** WASDE carries
+  the following marketing year from May onward; defaulting to the latest
+  would silently switch the page's headline mid-season, from the year being
+  revised to one nobody is trading yet.
+
+**The revision is free; the revision history is not.** Each release prints
+last month's estimate beside this month's, so the month-over-month change
+needs no stored history and no second request — that is why the headline
+panel always has it. A longer series is one request per release, so it sits
+behind a button, which also stops a hidden tab fetching twelve releases
+because somebody opened a different one.
+
+**ESMIS serves 25 releases and OCTOBER 2025 IS NOT ONE OF THEM** — that WASDE
+was never published. So the history is about two years deep with a real hole
+in it, and the gap is left in rather than bridged. The November 2025 release
+proves the point from the other side: its prior-month column is labelled
+**"Sep"**, not "Oct", and the parser reads it correctly because it never
+assumes the two are adjacent.
+
+### `World total` is a ROW in the ERS file
+
+Summing every `GEOGRAPHY_DESC` double-counts the total by exactly 100%. That
+gives a monthly beef export figure around 390 million lb against a true 195 —
+wrong by a factor of two and still entirely plausible-looking as a beef trade
+number. I made that mistake in the first probe of the file.
+
+The countries sum to USDA's published total with **zero error across all 904
+month/flow checks**, so `reconciles()` audits the identity on every load
+rather than trusting either side, every helper filters the row explicitly,
+and every headline reads USDA's own total rather than a sum. A test asserts
+the naive sum is exactly double, so the fixture cannot quietly stop
+exercising the trap.
+
+### Five more things that look wrong and are not
+
+- **The projection is seasonal, not `YTD × 12/n`.** It scales realised
+  year-to-date by the share of the year those months normally carry, over the
+  last five COMPLETE years. Beef imports run heavy in the first quarter, so a
+  straight annualisation reads high all spring; exports are nearly flat
+  (Jan–Aug is 68% of a normal year against a naive 67%) and barely care. The
+  page prints which months are heavy and light for the flow being viewed, so
+  a reader can see how much the adjustment is doing.
+- **The seasonal band on the chart and the projection use the SAME five
+  years.** They are two views of one claim about what a normal year looks
+  like. For about an hour the band was six years and the legend still said
+  "5-yr".
+- **"Required to hit WASDE" and the projection answer different questions and
+  are not merged.** The first is arithmetic on USDA's forecast; the second is
+  what the year does if it behaves normally. On 2026-10-07 imports needed
+  475.9 a month and had been running 534.6 — the pace is 12.3% hot, and the
+  projection lands 156 million lb above USDA. That disagreement is the
+  information.
+- **Most deltas on this page are deliberately NOT coloured.** Imports running
+  ahead of forecast is good news for a packer buying 90s and bad news for a
+  cow-calf operator, and the page does not know which one is reading it.
+  Green and red are kept for a figure against its own year-ago. A zero
+  revision prints "unchanged" rather than "0", because USDA leaving a
+  forecast alone is an answer and "0" reads as a missing one.
+- **The part year in progress is left OFF the annual chart.** A bar covering
+  eight months beside twelve-month bars tells a true story wrongly.
+
+### The forecast bar that rendered nowhere
+
+`annual_figure` forces `xaxis type="category"` and **that line is
+load-bearing.** Plotly type-sniffs an axis, and "2014".."2025" are all
+numeric strings, so it builds a LINEAR axis from 2013.5 to 2025.5 — at which
+point `"2026F"` has no numeric position and its bar is never drawn.
+
+It is not dropped either, which is what makes it nasty: the trace exists, the
+legend entry renders, and the value still stretches the y-axis, so the chart
+reserved headroom to 6,592 for a bar nobody could see. Nothing raised. Caught
+2026-10-07 by reading `_fullLayout.xaxis._categories` out of the live page
+after the bar failed to show in a screenshot — `barNodes` was `[12, 1]`, so
+the DOM node had been there all along.
+
+The figure builder is split out of the renderer purely so a test can assert
+the axis type without rendering anything.
+
+### Tabs, not a switch, and why that is allowed here
+
+The rule further up this file is that a hidden Streamlit tab is hidden and
+not skipped, so a tab is right only when the hidden body is cheap. All three
+views read the **same two cached fetches** — one ERS file, one WASDE release
+— so the second and third tabs cost rendering and no network at all. The one
+expensive thing on the page is behind a button for exactly this reason.
+
+`trade_flows.SCHEMA` and `wasde.SCHEMA` exist because the cache serves shape,
+not freshness — the `leverage.SCHEMA` trap. Bump them whenever `load()`,
+`history()` or `pace()` changes the shape of what it returns, or the tiles
+render "—" with nothing raising.
+
+**`wasde.py` knows nothing about beef and a test asserts it.** It returns
+every commodity and attribute in the table, so the next page wanting a WASDE
+production or per-capita line imports it rather than growing a second WASDE
+reader. That is the `snowflake_db.py`-times-five lesson applied before the
+fact instead of after it — and it is what makes "every dashboard carries the
+WASDE expectation" cheap to extend to the other twelve.
+
+### The home grid stopped working at thirteen
+
+Thirteen tiles leaves a remainder of one at two, three, four and six per row,
+so every candidate width stranded a tile — and five, the only one that
+divides it acceptably (5/5/3), is the width the `TILES_PER_ROW` comment had
+already rejected on measurement. The grid now **borrows**: when the last row
+would hold a single tile, one moves down from the row above, giving 4/4/3/2.
+Tiles keep their four-column width. A test pins the arithmetic for every
+count from 2 to 40.
 
 ## The Saturday Slaughter view
 
