@@ -18,7 +18,7 @@ import pytest
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _APP = os.path.join(_HERE, "..", "apps", "mexican_feeder_imports")
 sys.path.insert(0, _APP)
-sys.path.insert(0, os.path.join(_HERE, "..", "scripts"))
+sys.path.insert(0, os.path.join(_HERE, "..", "deploy"))
 
 import mx_prices as mxp  # noqa: E402
 
@@ -51,7 +51,12 @@ def test_the_conversion_matches_the_scraper_exactly():
     scraper needs `requests` and the page may not have one. A copy is only safe
     while something compares the two; this is that something.
     """
-    mx_auction = pytest.importorskip("mx_auction")
+    # IMPORTED, NOT importorskip'd. A skip here is worse than a failure: it is
+    # the only thing stopping the two copies drifting, and it reads green.
+    # It skipped silently for one commit when the scraper moved scripts/ ->
+    # deploy/ and this file's sys.path still said scripts/ -- which is the same
+    # class of quiet failure as everything else recorded in this repo.
+    import mx_auction
     assert mxp.LB_PER_KG == mx_auction.LB_PER_KG
     for kg in (43.0, 69.32, 75.38, 90.0, 110.13, 0.01):
         for fx in (17.1382, 18.1259, 25.0):
@@ -291,3 +296,38 @@ def test_a_schema_key_exists_for_the_cache():
     modules it calls, so a new key in compare() would keep serving a dict from
     before it existed and the tiles would render "—" with nothing raising."""
     assert isinstance(mxp.SCHEMA, int)
+
+
+def test_the_rows_that_compare_come_first():
+    """Found on the deployed page, not by a test: sorted `SEX, WEIGHT_LOW_KG`,
+    F sorts before M, so the table opened on ten heifer rows whose AMS columns
+    are all dashes -- AMS stopped quoting Spayed Heifers in May 2025 -- and the
+    steer ladder, the entire point of the table, sat below the fold under a
+    block of em-dashes. No test looks at row order, which is why it shipped.
+    """
+    cur = _Cur({f"FROM {mxp.MX_TABLE}": [
+        _band_row("BECERRA CN 151-180KG", "F", 151, 180, 99.56),
+        _band_row("BECERRO CNH 251-330", "M", 251, 330, 58.33),
+        _band_row("BECERRO CN 301-350KG", "M", 301, 350, 75.38),
+        _band_row("BECERRO CN 181-200KG", "M", 181, 200, 95.81),
+        _band_row("BECERRA CNH 130-230KG", "F", 130, 230, 78.00),
+    ]})
+    got = [(r["sex"], r["cnh"], r["low_kg"])
+           for r in mxp.bands(_Conn(cur), date(2026, 9, 30))]
+    assert got == [
+        ("M", False, 181.0),    # steer CN ladder, ascending
+        ("M", False, 301.0),
+        ("M", True, 251.0),     # then the wide CNH lots
+        ("F", False, 151.0),    # then heifers, which compare to nothing
+        ("F", True, 130.0),
+    ], got
+
+
+def test_an_open_band_sorts_before_the_ladder_rather_than_crashing():
+    """"menor a 150kg" has no low end. A None in the sort key raises."""
+    cur = _Cur({f"FROM {mxp.MX_TABLE}": [
+        _band_row("BECERRO CN 301-350KG", "M", 301, 350, 75.38),
+        _band_row("BECERRO CN MENOR 150KG", "M", None, 150, 110.13),
+    ]})
+    got = [r["clasificacion"] for r in mxp.bands(_Conn(cur), date(2026, 9, 30))]
+    assert got[0] == "BECERRO CN MENOR 150KG"

@@ -106,7 +106,13 @@ MAX_GAP_DAYS = 21
 #: decorated function's own code and never on the modules it calls, the trap
 #: recorded in CLAUDE.md for leverage.SCHEMA and am_cutout.SCHEMA. Without it a
 #: new key renders "—" and nothing raises.
-SCHEMA = 1
+#:
+#: 2 (2026-10-07): bands() now sorts steers and the CN ladder first. The SHAPE
+#: did not change, only the ORDER -- which is precisely a change the cache
+#: cannot see, so the deployed page would have gone on serving the old
+#: heifers-first ordering from a cached dict with nothing raising. Bump this
+#: for an ordering or content change, not only for a new key.
+SCHEMA = 2
 
 
 def usd_per_cwt(mxn_per_kg, mxn_per_usd):
@@ -193,8 +199,8 @@ def bands(conn, sale_date, auction=AUCTION):
     rows = cur.execute(
         f"SELECT CLASIFICACION, SEX, WEIGHT_LOW_KG, WEIGHT_HIGH_KG, "
         f"       PRICE_MIN, PRICE_MAX, PRICE_AVG, UNIT "
-        f"FROM {MX_TABLE} WHERE AUCTION = %s AND SALE_DATE = %s "
-        f"ORDER BY SEX, WEIGHT_LOW_KG NULLS FIRST", (auction, sale_date)
+        f"FROM {MX_TABLE} WHERE AUCTION = %s AND SALE_DATE = %s ",
+        (auction, sale_date)
     ).fetchall()
     out = []
     for cls, sex, lo_kg, hi_kg, lo, hi, avg, unit in rows:
@@ -214,6 +220,21 @@ def bands(conn, sale_date, auction=AUCTION):
             "unit": unit,
             "cnh": is_cnh(cls),
         })
+
+    # THE ROWS THAT CARRY A COMPARISON COME FIRST, and that is not cosmetic.
+    # Sorted by the SQL's `SEX, WEIGHT_LOW_KG`, F sorts before M -- so the first
+    # ten rows were heifers, every one of them showing a dash in the AMS
+    # columns because AMS stopped quoting Spayed Heifers in May 2025. The whole
+    # point of the table sat below the fold under a block of em-dashes, which
+    # reads as a broken join rather than as the US feed's state. Spotted on the
+    # deployed page, not in a test, because no test looks at row order.
+    #
+    # Steers before heifers, the clean CN ladder before the wide CNH lots, then
+    # ascending weight -- so the table opens on the ladder a reader can compare
+    # straight down and the uncomparable rows collect at the bottom.
+    out.sort(key=lambda r: (0 if r["sex"] == "M" else 1,
+                            1 if r["cnh"] else 0,
+                            r["low_kg"] if r["low_kg"] is not None else -1.0))
     return out
 
 
