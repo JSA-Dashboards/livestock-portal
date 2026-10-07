@@ -281,3 +281,42 @@ def test_the_wrapper_handles_a_missing_flock_explicitly():
     exits 0 having done nothing."""
     src = open(_WRAPPER, encoding="utf-8").read()
     assert "command -v flock" in src
+
+
+def test_the_installer_reads_the_crontab_back_after_writing():
+    """THE BUG THAT SAID "cron installed" WHEN NOTHING WAS SCHEDULED.
+
+    The script printed "appending", piped into `crontab -`, and went straight
+    to its done banner. A write that never took read as a clean install and
+    said so. The only thing resembling a check was a trailing `crontab -l |
+    grep` whose EMPTY output looked exactly like a successful one -- a check
+    whose failure is indistinguishable from its success is not a check.
+
+    What proved it had not installed was the data, not the installer: every row
+    in MX_AUCTION_PRICES carried RECORDED_BY = mx_auction@JSA-Nitro2, Ross's
+    desktop, and none from the droplet.
+    """
+    src = open(_INSTALLER, encoding="utf-8").read()
+    assert 'grep -cF "$CRON_TAG"' in src, "no count-based read-back"
+    assert '[ "$installed" -ne 1 ]' in src, "the read-back does not assert a count"
+    # It must STOP, not warn: a warning in a long install log is not read.
+    tail = src[src.index('grep -cF "$CRON_TAG"'):]
+    assert "exit 1" in tail, "a failed read-back must exit non-zero"
+
+
+def test_the_installer_points_at_the_wrappers_own_logs():
+    """The wrapper writes timestamped logs inside the checkout. A leftover
+    /var/log path would have cron-alert attach a file nothing writes, so a
+    failure mail would arrive carrying nothing.
+
+    COMMENTS ARE STRIPPED FIRST. The first version of this test failed on the
+    installer's own comment saying "nothing writes /var/log any more" -- the
+    same trap tests/test_rundown.py records for its AST assertion, where the
+    check tripped over the docstring explaining the rule it was checking.
+    """
+    code = "\n".join(
+        l for l in open(_INSTALLER, encoding="utf-8").read().splitlines()
+        if not l.lstrip().startswith("#")
+    )
+    assert "/var/log" not in code
+    assert 'LOG_GLOB="$DEST/logs/mx_auction_*.log"' in code

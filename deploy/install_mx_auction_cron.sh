@@ -17,7 +17,10 @@ set -euo pipefail
 
 REPO_URL="https://github.com/JSA-Dashboards/livestock-portal.git"
 DEST="${DEST:-/opt/livestock-portal}"
-LOG="${LOG:-/var/log/mx_auction.log}"
+# The wrapper writes timestamped logs inside the checkout, the convention
+# every other job on this host follows; cron-alert is handed the glob so a
+# failure mail carries the right one. Nothing writes /var/log any more.
+LOG_GLOB="$DEST/logs/mx_auction_*.log"
 PY="$DEST/.venv/bin/python"
 
 # TWICE A DAY, AT NO PARTICULAR TIME, AND THAT IS THE DESIGN.
@@ -164,10 +167,33 @@ else
     echo "# Mexican auction prices -> JSA.CME_FEEDER_CATTLE.MX_AUCTION_PRICES"; \
     echo "$CRON_LINE"; } | crontab -
 fi
-touch "$LOG"
+
+# READ IT BACK. THE WRITE IS NOT THE INSTALL.
+#
+# Until 2026-10-07 this script printed "appending", piped into `crontab -` and
+# went straight to its done banner. A write that never took therefore read as a
+# clean install and SAID SO -- which is what told Ross the job was scheduled
+# when the droplet's crontab held nothing. The proof it had not was in the data
+# rather than in the installer's own output: every row in MX_AUCTION_PRICES
+# carried RECORDED_BY = mx_auction@JSA-Nitro2, his desktop, and none from the
+# host.
+#
+# The old trailing `crontab -l | grep` was cosmetic: its EMPTY output looked
+# exactly like a successful one. A check whose failure is indistinguishable
+# from its success is not a check.
+installed=$(crontab -l 2>/dev/null | grep -cF "$CRON_TAG" || true)
+if [ "$installed" -ne 1 ]; then
+  echo >&2
+  echo "FAILED: expected 1 line matching '$CRON_TAG', found $installed." >&2
+  echo "The crontab did not take. NOTHING IS SCHEDULED; do not assume it is." >&2
+  echo "  crontab now reads:" >&2
+  crontab -l 2>/dev/null | sed 's/^/    /' >&2 || echo "    (unreadable)" >&2
+  exit 1
+fi
+say "verified: 1 line present in the live crontab"
 
 echo
 echo "== done =="
-say "log:  $LOG"
+say "logs: $LOG_GLOB (written by the wrapper, pruned at 30 days)"
 say "table: JSA.CME_FEEDER_CATTLE.MX_AUCTION_PRICES"
 say "HISTORY ACCRUES FROM NOW -- the site keeps two sales and cannot be backfilled."
