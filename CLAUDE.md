@@ -13,17 +13,33 @@ still `beef-weight`, deliberately, so existing bookmarks keep working. Do not
 
 ## Never set SNOWFLAKE_SCHEMA in this app's secrets
 
-Six bundled modules read Snowflake and each defaults `SNOWFLAKE_SCHEMA` to
+**NINE** bundled modules read Snowflake and each defaults `SNOWFLAKE_SCHEMA` to
 the schema **it** owns:
 
 | module | its default |
 |---|---|
 | `apps/beef_weight/nass_cache_client.py` | `NASS_CACHE` |
 | `apps/livestock_inventory/nass_cache_client.py` | `NASS_CACHE` |
+| `apps/us_cow_herd/nass_cache_client.py` | `NASS_CACHE` |
 | `apps/cme_feeder_cattle/snowflake_db.py` | `CME_FEEDER_CATTLE` |
 | `apps/us_cow_herd/snowflake_db.py` | `CME_FEEDER_CATTLE` |
 | `apps/mexican_feeder_imports/snowflake_db.py` | `CME_FEEDER_CATTLE` |
+| `apps/fed_cattle_crush/snowflake_db.py` | `CME_FEEDER_CATTLE` |
+| `apps/backgrounding_crush/snowflake_db.py` | `CME_FEEDER_CATTLE` |
 | `apps/beef_trimmings/app.py` (`_sf_connect`) | `BEEF_TRIMMINGS` |
+
+**This table said SIX until 2026-10-07 and it had been wrong since the crush
+pages landed**, which is worse than it sounds: the whole point of the section is
+how much breaks at once, and it was understating that by a third. The three it
+missed are the two crush pages' `snowflake_db.py` copies and US Cow Herd's
+*second* reader — that page has both a `snowflake_db.py` and a
+`nass_cache_client.py`, so it appears twice and a reader scanning page names
+rather than file paths will count it once. `letter/draft_store.py`'s docstring
+said "five", a third number, and is corrected too.
+
+Re-derive it rather than trusting the count; nothing keeps the table honest:
+
+    grep -rn "SNOWFLAKE_SCHEMA" apps letter --include="*.py" | grep schema=
 
 Added 2026-10-04: `marsapi.ams.usda.gov` rejects requests from Streamlit
 Community Cloud's IPs, so the import side of Beef Trimmings (South America /
@@ -33,7 +49,7 @@ grant on that schema (same identity already used for `NASS_CACHE` +
 `CME_FEEDER_CATTLE`). US Fresh 90s still calls `mpr.datamart.ams.usda.gov`
 live — that domain isn't blocked, only `marsapi.ams.usda.gov` is.
 
-Setting it to any one value overrides all six and silently breaks the others.
+Setting it to any one value overrides all nine and silently breaks the others.
 Pages load, queries miss, charts come back empty, nothing raises. **Unset is the
 only working configuration.** `SNOWFLAKE_DATABASE = "JSA"` is safe to set.
 
@@ -1019,6 +1035,20 @@ collision at the top of this file, so there is nothing for it to set.
 
 `--dry-run` fetches and prints without writing; run that first on a new host.
 `ensure_table()` runs every time, so a fresh host needs no manual DDL step.
+
+`scripts/install_am_cutout_cron.sh` does the install, idempotently: it pulls
+rather than re-clones, and **appends to the crontab rather than replacing
+it**, so the beef-trimmings job already on that host survives. `--check`
+reports and changes nothing. It refuses to install when the Snowflake
+environment is incomplete, and stops before cloning or touching cron —
+**a job installed without credentials fails silently once a day forever**,
+which is the one outcome worse than not installing it. It reports credentials
+by presence and never prints one.
+
+**Claude cannot run it.** SSH to the droplet is blocked by the harness as a
+production action, and the user saying "go ahead" does not clear that — it
+needs a Bash permission rule. Hand over the command rather than looking for
+another route; the same gate is recorded for merging PRs.
 
 ### Four things that look wrong and are not
 
