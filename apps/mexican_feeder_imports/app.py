@@ -1432,8 +1432,8 @@ with tab_prices:
             st.markdown(tile(
                 "Same Weight at Douglas",
                 f"${steer['us_price']:,.2f}" if steer else "—",
-                sub(f"AMS {steer['us_low_lb']:.0f}–{steer['us_high_lb']:.0f} lb"
-                    f" #1-2 steers" if steer else "not quoted")),
+                sub(f"AMS #1-2 steers, read at {steer['us_at_lb']:.0f} lb"
+                    if steer else "not quoted")),
                 unsafe_allow_html=True)
         with c[2]:
             st.markdown(tile(
@@ -1488,8 +1488,8 @@ with tab_prices:
                     "MXN/kg": (f"{r['price_avg']:,.2f}"
                                if r["price_avg"] is not None else "—"),
                     "USD/cwt": f"${r['usd']:,.2f}" if r["usd"] else "—",
-                    "AMS band": (f"{r['us_low_lb']:.0f}–{r['us_high_lb']:.0f} lb"
-                                 if r["us_price"] else "—"),
+                    "AMS read at": (f"{r['us_at_lb']:.0f} lb"
+                                    if r["us_price"] else "—"),
                     "AMS $/cwt": (f"${r['us_price']:,.2f}"
                                   if r["us_price"] else "—"),
                     "% of AMS": f"{r['pct']:.0f}%" if r["pct"] else "—",
@@ -1520,14 +1520,25 @@ with tab_prices:
                         f"{mxp.US_GRADE} in this record."
                     )
 
+            _slide = (C.get("us_slide") or {}).get("M") or []
             st.caption(
-                "A band shows no AMS counterpart when its midpoint falls "
-                "outside every quoted bracket — the 351–400 kg lot is "
-                "774–882 lb and AMS stops at 800 — or when it is one of the "
-                "wide **CNH** lots, which overlap the narrow ladder and run a "
-                "grade cheaper. Those are priced in dollars and deliberately "
-                "left uncompared rather than snapped to the nearest bracket, "
-                "which would report a weight slide as a price gap."
+                "**The AMS column is read off the quote slide at each band's "
+                "own weight, not taken from a bracket.** AMS quotes brackets — "
+                + (" · ".join(f"\\${p:,.0f} at {w:.0f} lb" for w, p in _slide)
+                   if _slide else "none quoted")
+                + " — and feeder prices slide with weight, so a 443–507 lb lot "
+                "is priced at what a 475 lb calf is worth rather than being "
+                "forced into 400–500 or 500–600. Those two choices gave 55% "
+                "and 60% for the same animal, which is why neither was kept. "
+                "Inside the lightest and heaviest brackets the slide is flat, "
+                "because there USDA's own quote is the answer."
+            )
+            st.caption(
+                "A band shows no AMS figure when its weight falls outside "
+                "everything AMS quoted — the 351–400 kg lot is 774–882 lb and "
+                "AMS stops at 800, so the slide is not run past the end of its "
+                "own data — or when it is one of the wide **CNH** lots. Those "
+                "are priced in dollars and left uncompared."
             )
 
         with t_hist:

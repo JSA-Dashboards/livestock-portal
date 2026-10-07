@@ -107,12 +107,17 @@ MAX_GAP_DAYS = 21
 #: recorded in CLAUDE.md for leverage.SCHEMA and am_cutout.SCHEMA. Without it a
 #: new key renders "—" and nothing raises.
 #:
+#: 3 (2026-10-07): the AMS price is INTERPOLATED off the quote slide at the
+#: band's own weight instead of taken from whichever bracket the midpoint
+#: fell in. Row keys changed (us_low_lb/us_high_lb -> us_at_lb) and every
+#: pct moved, so a cached dict from before this would both miss a key and
+#: report superseded figures.
 #: 2 (2026-10-07): bands() now sorts steers and the CN ladder first. The SHAPE
 #: did not change, only the ORDER -- which is precisely a change the cache
 #: cannot see, so the deployed page would have gone on serving the old
 #: heifers-first ordering from a cached dict with nothing raising. Bump this
 #: for an ordering or content change, not only for a new key.
-SCHEMA = 2
+SCHEMA = 3
 
 
 def usd_per_cwt(mxn_per_kg, mxn_per_usd):
@@ -146,21 +151,76 @@ def band_midpoint_lb(low_kg, high_kg):
     return kg_to_lb((float(low_kg) + float(high_kg)) / 2.0)
 
 
-def match_us_band(mid_lb, us_bands):
-    """The US bracket containing `mid_lb`, or None.
+def us_anchors(us_bands):
+    """[(weight_lb, price)] — one point per AMS bracket, at its own midpoint.
 
-    `us_bands` is [(low_lb, high_lb, avg_price)]. None rather than a nearest
-    match on purpose: a 828 lb Mexican band has no counterpart when AMS stops
-    at 800, and snapping it to 700-800 would compare a heavier calf to a
-    lighter quote and report the weight slide as a price gap.
+    AMS quotes a bracket, not a weight, so the price for "400-500 lb at $415"
+    is treated as the price of a 450 lb calf. That is the only reading that
+    lets the quotes be used as a slide.
+    """
+    pts = []
+    for low, high, price in us_bands or []:
+        if low is None or high is None or price is None:
+            continue
+        pts.append(((float(low) + float(high)) / 2.0, float(price)))
+    return sorted(pts)
+
+
+def us_coverage(us_bands):
+    """(lightest_lb, heaviest_lb) AMS quoted at all, or (None, None)."""
+    lows = [float(l) for l, h, _p in us_bands or [] if l is not None]
+    highs = [float(h) for l, h, _p in us_bands or [] if h is not None]
+    if not lows or not highs:
+        return None, None
+    return min(lows), max(highs)
+
+
+def interpolate_us(mid_lb, us_bands):
+    """The AMS price AT `mid_lb`, read off the quote slide, or None.
+
+    REPLACES BRACKET MATCHING, and the reason is that bracket matching had no
+    defensible rule. A 201-230 kg lot is 443-507 lb and straddles two AMS
+    brackets; calling it a four-weight gives $415 and 55%, calling it a
+    five-weight gives $385 and 60%. Same calf, same 229.68, and the answer came
+    down to which edge of the band you looked at.
+
+    Feeder prices slide with weight, so the quotes are points on a curve rather
+    than labels on bins: $415 at 450 lb, $385 at 550, $345 at 650, $315 at 750.
+    Reading the curve at the band's own weight gives every lot a price matched
+    to what it actually weighs, and removes the choice entirely.
+
+    Three rules, each of which matters:
+
+    * **Linear between adjacent anchors.** Four points over 450-750 lb is not
+      enough to fit a curve to, and a spline through four points would invent
+      shape USDA never published.
+    * **FLAT inside the end brackets, never extrapolated past them.** A 420 lb
+      calf sits below the 450 anchor but inside the 400-500 bracket, and AMS
+      genuinely quotes it at $415 -- so the flat segment is USDA's own number,
+      not an assumption. Past the covered range it returns None: a 828 lb lot
+      is outside anything AMS quoted, and running the slide on would price it
+      by projecting a trend off the end of the data.
+    * **None if fewer than two anchors.** One bracket is a point, not a slide.
+      It still prices anything inside that one bracket, flat, which is right.
     """
     if mid_lb is None:
         return None
-    for low, high, price in us_bands:
-        if low is None or high is None:
-            continue
-        if float(low) <= mid_lb <= float(high):
-            return (float(low), float(high), price)
+    pts = us_anchors(us_bands)
+    if not pts:
+        return None
+    lo_cov, hi_cov = us_coverage(us_bands)
+    if lo_cov is None or not (lo_cov <= mid_lb <= hi_cov):
+        return None
+
+    if mid_lb <= pts[0][0]:
+        return pts[0][1]
+    if mid_lb >= pts[-1][0]:
+        return pts[-1][1]
+    for (w0, p0), (w1, p1) in zip(pts, pts[1:]):
+        if w0 <= mid_lb <= w1:
+            if w1 == w0:
+                return p0
+            return p0 + (mid_lb - w0) / (w1 - w0) * (p1 - p0)
     return None
 
 
@@ -330,13 +390,14 @@ def compare(conn, sale_date=None, auction=AUCTION):
         b["us_class"] = US_CLASS_BY_SEX.get(b["sex"])
         b["us_date"] = us_date
         b["gap_days"] = gap
-        match = None if b["cnh"] else match_us_band(b["mid_lb"], us_list)
-        if match and b["usd"] is not None:
-            b["us_low_lb"], b["us_high_lb"], b["us_price"] = match
-            b["pct"] = b["usd"] / match[2] * 100.0 if match[2] else None
-            b["diff"] = b["usd"] - match[2]
+        price = None if b["cnh"] else interpolate_us(b["mid_lb"], us_list)
+        if price is not None and b["usd"] is not None:
+            b["us_price"] = price
+            b["us_at_lb"] = b["mid_lb"]
+            b["pct"] = b["usd"] / price * 100.0 if price else None
+            b["diff"] = b["usd"] - price
         else:
-            b["us_low_lb"] = b["us_high_lb"] = b["us_price"] = None
+            b["us_price"] = b["us_at_lb"] = None
             b["pct"] = b["diff"] = None
         out.append(b)
 
@@ -348,6 +409,8 @@ def compare(conn, sale_date=None, auction=AUCTION):
         "fx": rate,
         "rows": out,
         "us_dates": {s: us_cache[s][0] for s in us_cache},
+        # The slide itself, so the panel can show what it read the price off.
+        "us_slide": {s: us_anchors(us_cache[s][1]) for s in us_cache},
         "gaps": {s: us_cache[s][2] for s in us_cache},
         # Only populated for a sex whose quote is missing, so the panel can say
         # WHY rather than printing a column of dashes. See us_last_quoted().

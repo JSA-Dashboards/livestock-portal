@@ -86,39 +86,68 @@ US = [(400.0, 500.0, 415.0), (500.0, 600.0, 385.0),
       (600.0, 700.0, 345.0), (700.0, 800.0, 315.0)]
 
 
-def test_a_band_above_every_bracket_matches_nothing():
-    """351-400 kg is 774-882 lb and AMS stops at 800. Snapping it to 700-800
-    would compare a heavier calf to a lighter quote and report the weight slide
-    as a price gap -- a number that moves the right way for the wrong reason.
+def test_a_band_above_everything_quoted_gets_no_price():
+    """351-400 kg is 774-882 lb and AMS stops at 800. Running the slide on past
+    the end of its own data would price it by projecting a trend, which is how
+    a made-up number acquires two decimal places."""
+    assert mxp.interpolate_us(mxp.band_midpoint_lb(351, 400), US) is None
+
+
+def test_a_band_below_everything_quoted_gets_no_price():
+    assert mxp.interpolate_us(mxp.band_midpoint_lb(151, 180), US) is None
+
+
+def test_the_price_is_read_between_anchors_not_from_a_bracket():
+    """THE WHOLE POINT. A 201-230 kg lot is 443-507 lb, midpoint 475, and
+    straddles two AMS brackets: as a four-weight it is $415, as a five-weight
+    $385. Same calf, and the answer came down to which edge you looked at.
+    The slide reads 450->$415 and 550->$385, so 475 is a quarter of the way:
+    415 - 0.25*30 = $407.50.
     """
-    mid = mxp.band_midpoint_lb(351, 400)
-    assert mid > 800
-    assert mxp.match_us_band(mid, US) is None
+    assert mxp.interpolate_us(475.0, US) == pytest.approx(407.50)
+    assert mxp.interpolate_us(mxp.band_midpoint_lb(201, 230),
+                              US) == pytest.approx(407.44, abs=0.1)
 
 
-def test_a_band_below_every_bracket_matches_nothing():
-    assert mxp.match_us_band(mxp.band_midpoint_lb(151, 180), US) is None
+def test_the_anchors_sit_at_each_brackets_own_midpoint():
+    assert mxp.us_anchors(US) == [(450.0, 415.0), (550.0, 385.0),
+                                  (650.0, 345.0), (750.0, 315.0)]
 
 
-def test_the_heaviest_matched_band_lands_in_700_800():
-    """The page's own border headline is 700-800 lb, so the comparison's
-    headline has to be the band that lands there or the two panels quote
-    different brackets at each other."""
-    got = mxp.match_us_band(mxp.band_midpoint_lb(301, 350), US)
-    assert got == (700.0, 800.0, 315.0)
+def test_it_is_flat_inside_the_end_brackets_and_that_is_usdas_own_number():
+    """A 420 lb calf is below the 450 anchor but inside the 400-500 bracket,
+    which AMS quotes at $415. Flat there is USDA's figure, not an assumption --
+    whereas extrapolating the slide down would invent one."""
+    assert mxp.interpolate_us(420.0, US) == 415.0
+    assert mxp.interpolate_us(400.0, US) == 415.0
+    assert mxp.interpolate_us(790.0, US) == 315.0
+    assert mxp.interpolate_us(800.0, US) == 315.0
+    assert mxp.interpolate_us(399.0, US) is None, "below coverage"
+    assert mxp.interpolate_us(801.0, US) is None, "above coverage"
 
 
-def test_two_mexican_bands_may_share_one_bracket():
-    """181-200 and 201-230 kg both sit inside 400-500 lb. They are kept as
-    separate rows; averaging them with no head counts would print a figure no
-    lot ever traded at."""
-    a = mxp.match_us_band(mxp.band_midpoint_lb(181, 200), US)
-    b = mxp.match_us_band(mxp.band_midpoint_lb(201, 230), US)
-    assert a == b == (400.0, 500.0, 415.0)
+def test_the_slide_is_monotonic_across_the_quoted_range():
+    """Feeder prices fall as weight rises. A rule that produced a heavier calf
+    at a higher price would be visibly wrong on the page but not raise."""
+    prices = [mxp.interpolate_us(w, US) for w in range(400, 801, 10)]
+    assert all(b <= a for a, b in zip(prices, prices[1:])), prices
+
+
+def test_one_bracket_prices_only_inside_itself():
+    """One quote is a point, not a slide."""
+    one = [(400.0, 500.0, 415.0)]
+    assert mxp.interpolate_us(450.0, one) == 415.0
+    assert mxp.interpolate_us(410.0, one) == 415.0
+    assert mxp.interpolate_us(600.0, one) is None
+
+
+def test_no_quotes_at_all_price_nothing():
+    assert mxp.interpolate_us(475.0, []) is None
+    assert mxp.us_anchors([]) == []
 
 
 def test_a_missing_midpoint_never_matches():
-    assert mxp.match_us_band(None, US) is None
+    assert mxp.interpolate_us(None, US) is None
 
 
 # ── which rows are even eligible ────────────────────────────────────────────
