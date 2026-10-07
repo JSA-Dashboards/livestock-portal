@@ -138,6 +138,56 @@ def delta_html(val, suffix="", digits=0, invert=False, neutral=False):
             f'{abs(val):,.{digits}f}{suffix}</div>')
 
 
+def pct(new, base):
+    """
+    Percentage change, or None when there is no base to divide by.
+
+    None rather than 0.0 on a missing or zero base: "USDA is forecasting no
+    change" and "there is nothing to compare against" are different answers,
+    and a 0.0% would merge them. Same reason `Wasde.revision` returns None.
+    """
+    if new is None or base in (None, 0):
+        return None
+    return (new / base - 1.0) * 100.0
+
+
+def delta_pair(value, percent, suffix="", digits=0):
+    """
+    An absolute change and its percentage on one line: "+/- 130 . 2.1% vs Aug".
+
+    BOTH, because on this page they answer different questions and the
+    smaller one is not the less important. A 130 million lb revision to the
+    import forecast sounds like a rounding error beside a 6,262 total and is
+    2.1% -- and USDA has made several in a row the same way. The percentage
+    is what makes a run of them legible; the absolute is what nets against
+    production.
+
+    NO PARENTHESES AROUND THE PERCENTAGE, which is what the first version
+    used. **In USDA's own reports parentheses mean NEGATIVE** -- the trap
+    `letter/sterling.py` and `am_cutout` both document, where (2.23) is a
+    $2.23 fall -- so "+/- 130 (2.1%)" on a page of USDA figures is read by
+    exactly the audience most likely to get it backwards. A middle dot
+    separates them instead.
+
+    THE ARROW CARRIES THE SIGN, so neither figure after it is signed. The
+    first version printed the percentage with `:+` as well and produced
+    "v -0.8%", a double negative.
+    """
+    if value is None and percent is None:
+        return '<div class="tile-delta-neu">&mdash;</div>'
+    if value == 0 or (value is None and percent == 0):
+        return f'<div class="tile-delta-neu">unchanged{suffix}</div>'
+    ref = value if value is not None else percent
+    arrow = "▲" if ref > 0 else "▼"
+    bits = []
+    if value is not None:
+        bits.append(f"{abs(value):,.{digits}f}")
+    if percent is not None:
+        bits.append(f"{abs(percent):,.1f}%")
+    return (f'<div class="tile-delta-neu">{arrow} '
+            f'{" · ".join(bits)}{suffix}</div>')
+
+
 def fmt(v, digits=0, suffix=""):
     return f"{v:,.{digits}f}{suffix}" if v is not None else "—"
 
@@ -317,30 +367,48 @@ def wasde_panel(attribute: str, label: str, key: str):
         f"marketing year — the meats table runs January to December, "
         f"unlike the grain tables in the same report.")
 
+    # THE PERCENTAGE IS THE POINT, SO IT IS A VALUE AND NOT A FOOTNOTE.
+    # "What change is USDA forecasting" is the question this panel exists to
+    # answer, and it was previously answerable only by dividing two tiles in
+    # your head. The year-on-year move is now the headline figure of its own
+    # tile; every other change on the panel carries its percentage beside the
+    # absolute rather than instead of it.
+    rev_pct = pct(now, was)
+    nxt_vs_now = pct(nxt_val, now)
+    nxt_rev_pct = pct(nxt_val, nxt["prior"].get(attribute)) if nxt else None
+    yoy_abs = (now - base) if (now is not None and base is not None) else None
+
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.markdown(tile(
             f"WASDE {year} forecast", fmt(now),
-            delta_html(rev, " vs " + (s["prior_month"] or "last month"),
-                       neutral=True),
+            delta_pair(rev, rev_pct,
+                       " vs " + (s["prior_month"] or "last month")),
             sub="calendar year · million lb, carcass weight",
             cls="tile-wasde"),
             unsafe_allow_html=True)
     with c2:
         st.markdown(tile(
-            f"{year - 1} actual", fmt(base),
-            delta_html(yoy, f"% — the {year} forecast against it", 1,
-                       neutral=True),
-            sub="million lb", cls="tile-wasde"),
+            f"Forecast vs {year - 1}",
+            (f"{yoy:+,.1f}%" if yoy is not None else "—"),
+            delta_pair(yoy_abs, None, " million lb"),
+            sub=f"{year - 1} actual {fmt(base)}", cls="tile-wasde"),
             unsafe_allow_html=True)
     with c3:
+        nxt_sub = "WASDE adds the next year in May"
+        if nxt_val:
+            if nxt_rev_pct is None:
+                nxt_sub = "million lb"
+            elif nxt_rev_pct == 0:
+                nxt_sub = f"unchanged vs {nxt['prior_month']} · million lb"
+            else:
+                nxt_sub = (f"{nxt_rev_pct:+,.1f}% vs {nxt['prior_month']}"
+                           f" · million lb")
         st.markdown(tile(
             f"WASDE {year + 1} forecast" if nxt_val else "Next year",
             fmt(nxt_val),
-            delta_html(nxt_rev, " vs " + (nxt["prior_month"] if nxt else ""),
-                       neutral=True),
-            sub=("million lb" if nxt_val else
-                 "WASDE adds the next year in May"),
+            delta_pair(None, nxt_vs_now, f" vs {year}", ),
+            sub=nxt_sub,
             cls="tile-wasde"), unsafe_allow_html=True)
     with c4:
         st.markdown(tile(
@@ -441,7 +509,9 @@ def pace_panel(flow: str, forecast, year: int, through: int, cls: str):
     with c4:
         st.markdown(tile(
             "Seasonal projection", fmt(p["projection"]),
-            delta_html(p["implied_vs_forecast"], " vs WASDE", neutral=True),
+            delta_pair(p["implied_vs_forecast"],
+                       pct(p["projection"], forecast) if forecast else None,
+                       " vs WASDE"),
             sub="full year on the seasonal shape", cls=cls),
             unsafe_allow_html=True)
 
@@ -679,11 +749,13 @@ with tab_net:
             base_net = (bi - be) if (bi is not None and be is not None) else None
         c1, c2, c3, c4 = st.columns(4)
         with c1:
+            net_rev = ((n_net - p_net)
+                       if (n_net is not None and p_net is not None) else None)
             st.markdown(tile(f"WASDE {n_year} net imports", fmt(n_net),
-                             delta_html((n_net - p_net) if (n_net is not None and p_net is not None) else None,
-                                        " vs " + (nb["prior_month"] or "last month"),
-                                        neutral=True),
-                             sub="imports less exports", cls="tile-wasde"),
+                             delta_pair(net_rev, pct(n_net, p_net),
+                                        " vs " + (nb["prior_month"] or "last month")),
+                             sub="imports less exports · calendar year",
+                             cls="tile-wasde"),
                         unsafe_allow_html=True)
         with c2:
             st.markdown(tile(f"WASDE {n_year} imports", fmt(n_imp),
@@ -694,12 +766,15 @@ with tab_net:
                              sub="million lb", cls="tile-wasde"),
                         unsafe_allow_html=True)
         with c4:
-            st.markdown(tile(f"{n_year - 1} actual net", fmt(base_net),
-                             delta_html((n_net - base_net) if (n_net is not None and base_net is not None) else None,
-                                        f" — the {n_year} forecast against it",
-                                        neutral=True),
-                             sub="million lb", cls="tile-wasde"),
-                        unsafe_allow_html=True)
+            net_yoy = pct(n_net, base_net)
+            st.markdown(tile(
+                f"Forecast vs {n_year - 1}",
+                (f"{net_yoy:+,.1f}%" if net_yoy is not None else "—"),
+                delta_pair((n_net - base_net)
+                           if (n_net is not None and base_net is not None)
+                           else None, None, " million lb"),
+                sub=f"{n_year - 1} actual net {fmt(base_net)}",
+                cls="tile-wasde"), unsafe_allow_html=True)
         st.caption(
             "Net is computed from the two WASDE lines rather than taken from "
             "a published one — WASDE prints no net trade figure. Both "
@@ -749,8 +824,9 @@ with tab_net:
         ytd_prev = float(prev_y[prev_y["month"] <= THROUGH]["net"].sum()) if not prev_y.empty else None
         with c1:
             st.markdown(tile(f"{YEAR} YTD net imports", fmt(ytd_net),
-                             delta_html((ytd_net - ytd_prev) if ytd_prev else None,
-                                        f" vs {YEAR - 1}", neutral=True),
+                             delta_pair((ytd_net - ytd_prev) if ytd_prev else None,
+                                        pct(ytd_net, ytd_prev),
+                                        f" vs {YEAR - 1}"),
                              sub=f"Jan–{tf.month_name(THROUGH)}",
                              cls="tile-net"), unsafe_allow_html=True)
         with c2:

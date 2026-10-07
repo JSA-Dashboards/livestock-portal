@@ -557,3 +557,104 @@ def test_the_wasde_year_is_a_calendar_year_and_ers_proves_it():
 def test_the_page_says_the_year_is_a_calendar_year():
     page = (ROOT / "apps" / "beef_trade" / "app.py").read_text(encoding="utf-8")
     assert "calendar year" in page
+
+
+# -- the forecast percentages ------------------------------------------------
+
+def test_pct_returns_none_rather_than_zero_without_a_base():
+    """
+    "USDA is forecasting no change" and "there is nothing to compare against"
+    are different answers. A 0.0% merges them, and the panel would print a
+    confident "+0.0%" where it has nothing. Same rule as Wasde.revision.
+    """
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "_bt_page", ROOT / "apps" / "beef_trade" / "app.py")
+    assert spec is not None
+
+    # app.py runs Streamlit at import, so the helpers are exercised through a
+    # local re-definition check instead: assert they exist and are pure.
+    src = (ROOT / "apps" / "beef_trade" / "app.py").read_text(encoding="utf-8")
+    assert "def pct(new, base):" in src
+    assert "def delta_pair(" in src
+
+    ns = {}
+    body = src[src.index("def pct(new, base):"):src.index("def delta_pair(")]
+    exec(body, ns)                                      # noqa: S102
+    pct = ns["pct"]
+    assert pct(110.0, 100.0) == pytest.approx(10.0)
+    assert pct(90.0, 100.0) == pytest.approx(-10.0)
+    assert pct(100.0, 100.0) == 0.0
+    assert pct(100.0, 0) is None
+    assert pct(100.0, None) is None
+    assert pct(None, 100.0) is None
+
+
+def test_the_wasde_panel_shows_the_forecast_change_as_a_percentage():
+    """
+    What change USDA is forecasting is the question the panel exists to
+    answer, and it was previously answerable only by dividing two tiles in
+    your head. The year-on-year move is now a tile value in its own right.
+    """
+    src = (ROOT / "apps" / "beef_trade" / "app.py").read_text(encoding="utf-8")
+    assert 'f"Forecast vs {year - 1}"' in src
+    assert 'f"{yoy:+,.1f}%"' in src
+    # The month-over-month revision carries its percentage beside the absolute.
+    assert "delta_pair(rev, rev_pct," in src
+    # And the next calendar year is expressed against this one.
+    assert "nxt_vs_now = pct(nxt_val, now)" in src
+
+
+def test_the_forecast_percentages_are_right_for_the_fixture():
+    """
+    Arithmetic, against the figures the committed release actually carries:
+    2026 imports 6,262 against 2025's 5,388 actual is +16.2%, and the
+    month-over-month revision from August's 6,132 is +2.1%.
+    """
+    w = _parsed()
+    now = w.value("Beef", "imports")
+    base = w.value("Beef", "imports", 2025)
+    prior = w.get("Beef").prior["imports"]
+    nxt = w.value("Beef", "imports", 2027)
+
+    assert (now / base - 1.0) * 100.0 == pytest.approx(16.22, abs=0.01)
+    assert (now / prior - 1.0) * 100.0 == pytest.approx(2.12, abs=0.01)
+    assert (nxt / now - 1.0) * 100.0 == pytest.approx(-3.39, abs=0.01)
+
+    # Exports move the other way, which is the whole story of the page.
+    e_now = w.value("Beef", "exports")
+    e_base = w.value("Beef", "exports", 2025)
+    assert (e_now / e_base - 1.0) * 100.0 == pytest.approx(-9.15, abs=0.01)
+
+
+def test_delta_pair_does_not_wrap_a_percentage_in_parentheses():
+    """
+    IN USDA'S OWN REPORTS PARENTHESES MEAN NEGATIVE -- the trap
+    letter/sterling.py and am_cutout both document, where (2.23) is a $2.23
+    fall. A page of USDA figures that renders "130 (2.1%)" is read by exactly
+    the audience most likely to take the 2.1% as a cut.
+
+    Also pins that the arrow carries the sign and the figures after it do
+    not, which the first version got wrong and printed "v -0.8%".
+    """
+    src = (ROOT / "apps" / "beef_trade" / "app.py").read_text(encoding="utf-8")
+    body = src[src.index("def delta_pair("):src.index("def fmt(")]
+    ns = {}
+    exec(body, ns)                                      # noqa: S102
+    dp = ns["delta_pair"]
+
+    def text(html):
+        # The CSS class carries hyphens of its own ("tile-delta-neu"), so the
+        # sign check has to look at the rendered text and not the markup.
+        return re.sub(r"<[^>]+>", "", html).strip()
+
+    both = text(dp(130.0, 2.12, " vs Aug"))
+    assert "(" not in both and ")" not in both, both
+    assert "130" in both and "2.1%" in both and "▲" in both
+
+    down = text(dp(None, -0.77, " vs 2026"))
+    assert "-" not in down, f"double negative: {down}"
+    assert "▼" in down and "0.8%" in down
+
+    assert "unchanged" in dp(0.0, 0.0, " vs Aug")
+    assert "&mdash;" in dp(None, None)

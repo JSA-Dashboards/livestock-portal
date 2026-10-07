@@ -1616,6 +1616,32 @@ exercising the trap.
 - **The part year in progress is left OFF the annual chart.** A bar covering
   eight months beside twelve-month bars tells a true story wrongly.
 
+### The forecast percentages, and why there are no parentheses
+
+What change USDA is forecasting is the question the WASDE panel exists to
+answer, and for a few hours it was answerable only by dividing two tiles in
+your head. The year-on-year move is now a tile value in its own right
+(`Forecast vs 2025`, **+16.2%** for imports, **-9.2%** for exports), the
+month-over-month revision carries its percentage beside the absolute, and the
+following calendar year is expressed against this one.
+
+**NO PARENTHESES AROUND A PERCENTAGE.** The first version rendered
+`▲ 130 (2.1%)`, which is the one notation this audience cannot be given:
+**in USDA's own reports parentheses mean NEGATIVE** — the trap
+`letter/sterling.py` and `am_cutout` both document, where `(2.23)` is a $2.23
+fall. On a page of USDA figures that reads as a cut to exactly the people
+most likely to misread it. A middle dot separates them instead.
+
+**The arrow carries the sign, so no figure after it is signed.** The first
+version formatted the percentage with `:+` as well and printed `▼ -0.8%`.
+A standalone tile value with no arrow does keep its sign, which is why
+`Forecast vs 2025` reads `+16.2%` rather than `16.2%`.
+
+`pct()` returns None rather than 0.0 on a missing or zero base: "USDA is
+forecasting no change" and "there is nothing to compare against" are
+different answers, and the panel would otherwise print a confident `+0.0%`
+where it has nothing. Same rule as `Wasde.revision`.
+
 ### The forecast bar that rendered nowhere
 
 `annual_figure` forces `xaxis type="category"` and **that line is
