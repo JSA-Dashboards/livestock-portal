@@ -62,6 +62,15 @@ PREVIOUS_URL = "https://mexicoganadero.com/precios?subasta=anterior"
 SOURCES = (CURRENT_URL, PREVIOUS_URL)
 
 TABLE = "JSA.CME_FEEDER_CATTLE.MX_AUCTION_PRICES"
+FX_TABLE = "JSA.CME_FEEDER_CATTLE.FX_USDMXN"
+
+# ECB reference rates, via frankfurter.app. No key, history to 1999, and it
+# answers for a date rather than only for today -- which is the whole
+# requirement, because a sale has to be valued at the peso of its own day.
+FX_URL = "https://api.frankfurter.app/{date}?from=USD&to=MXN"
+FX_SOURCE = "ECB via frankfurter.app"
+
+LB_PER_KG = 2.2046226218
 
 # The auction this exists for. The others are parsed and stored because they
 # arrive in the same response, not because they answer the question.
@@ -81,6 +90,22 @@ DDL = (
         UNIT            STRING        NOT NULL,
         RECORDED_AT     TIMESTAMP_NTZ NOT NULL,
         RECORDED_BY     STRING
+    )""",
+)
+
+#: FX IS ITS OWN SERIES, NOT A COLUMN ON THE PRICE ROW, and that is deliberate.
+#: The peso moved 3% between the 24 Sep sale and 7 Oct (17.5841 to 18.0943), so
+#: a rate frozen onto a price row would either go stale or force a new price
+#: row every time the currency ticked -- banking a cattle correction and an FX
+#: move as the same kind of event. Kept apart, prices are banked when prices
+#: change, rates when rates change, and a sale is converted by joining on its
+#: own date.
+FX_DDL = (
+    f"""CREATE TABLE IF NOT EXISTS {FX_TABLE} (
+        RATE_DATE    DATE          NOT NULL,
+        MXN_PER_USD  NUMBER(12,6)  NOT NULL,
+        SOURCE       STRING,
+        RECORDED_AT  TIMESTAMP_NTZ NOT NULL
     )""",
 )
 
@@ -265,6 +290,76 @@ def parse(html: str):
 ENCODING = "cp1252"
 
 
+def usd_per_cwt(mxn_per_kg, mxn_per_usd):
+    """MXN/kg -> USD/cwt, the unit AMS 3486 quotes the border in.
+
+    Two conversions in one step, so the comparison is like for like: kilos to
+    pounds, then pesos to dollars, then per-pound to per-hundredweight. None
+    propagates rather than defaulting -- a missing rate must leave the cell
+    empty, never silently price a calf at an implied 1.0 peso.
+    """
+    if mxn_per_kg is None or not mxn_per_usd:
+        return None
+    return float(mxn_per_kg) / LB_PER_KG / float(mxn_per_usd) * 100.0
+
+
+def fx_for(when: date, timeout: int = 20):
+    """(rate_date, mxn_per_usd) for `when`, or (None, None).
+
+    RETURNS THE DATE ECB ACTUALLY PRICED, WHICH IS OFTEN NOT THE ONE ASKED FOR.
+    Rates publish on TARGET business days only, and a request for a weekend or
+    a holiday answers 200 with the previous business day's rate and that day's
+    date in the body -- a Saturday asked for on 2026-10-03 comes back stamped
+    2026-10-02. Storing it under the requested date would invent a rate for a
+    day the ECB never priced, and the error would be invisible because the
+    number itself is real.
+
+    A future date is a 404, which is correct and not an error worth raising:
+    an auction cannot be banked before it happens.
+    """
+    import requests
+    try:
+        r = requests.get(FX_URL.format(date=when.isoformat()), timeout=timeout)
+        if r.status_code == 404:
+            return None, None
+        r.raise_for_status()
+        body = r.json()
+        rate = (body.get("rates") or {}).get("MXN")
+        stamped = body.get("date")
+        if rate is None or not stamped:
+            return None, None
+        y, m, d = (int(x) for x in stamped.split("-"))
+        return date(y, m, d), float(rate)
+    except Exception:
+        return None, None
+
+
+def bank_fx(rates) -> tuple[int, str]:
+    """Insert rates not already held. `rates` is {rate_date: mxn_per_usd}."""
+    if not rates:
+        return 0, ""
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    try:
+        def go(cur):
+            n = 0
+            for rate_date, rate in sorted(rates.items()):
+                cur.execute(
+                    f"SELECT MXN_PER_USD FROM {FX_TABLE} WHERE RATE_DATE = %s "
+                    "ORDER BY RECORDED_AT DESC LIMIT 1", (rate_date,))
+                existing = cur.fetchone()
+                if existing is not None and round(float(existing[0]), 6) == round(rate, 6):
+                    continue
+                cur.execute(
+                    f"INSERT INTO {FX_TABLE} (RATE_DATE, MXN_PER_USD, SOURCE, "
+                    "RECORDED_AT) VALUES (%s,%s,%s,%s)",
+                    (rate_date, round(rate, 6), FX_SOURCE, now))
+                n += 1
+            return n
+        return _run(go) or 0, ""
+    except Exception as e:
+        return 0, f"Could not write FX to Snowflake: {e}"
+
+
 def fetch(url: str, timeout: int = 30) -> str:
     import requests  # imported here so the parser can be tested without it
     r = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0"})
@@ -341,7 +436,7 @@ def _round(v):
 
 def ensure_table() -> str:
     try:
-        _run(lambda cur: [cur.execute(s) for s in DDL])
+        _run(lambda cur: [cur.execute(s) for s in (*DDL, *FX_DDL)])
         return ""
     except Exception as e:
         return f"Could not reach Snowflake: {e}"
@@ -433,13 +528,32 @@ def main(argv=None) -> int:
                      if q.auction == a and q.sale_date == d and q.high_kg)
         print(f"{a} {d}: {n} classes, {banded} weight-banded")
 
+    # One lookup per distinct SALE DATE, not one per quote -- a sale of thirty
+    # classes shares one peso. Keyed by the date ECB stamped, so a Saturday
+    # sale and the Friday before it collapse to the one rate that exists.
+    rates = {}
+    for sale_date in sorted({q.sale_date for q in quotes}):
+        rate_date, rate = fx_for(sale_date)
+        if rate is not None:
+            rates[rate_date] = rate
+            rates[sale_date] = rates.get(sale_date, rate)
+    fx_of = {d: r for d, r in rates.items()}
+
     if args.dry_run:
-        for q in quotes[:8]:
-            print(f"   {q.clasificacion:<28} {q.low_kg or '':>4}-{q.high_kg or '':<4} "
-                  f"min {q.minimum} max {q.maximum} avg {q.average} {q.unit}")
+        for q in quotes[:10]:
+            fx = fx_of.get(q.sale_date)
+            usd = usd_per_cwt(q.average, fx) if q.unit == PER_KG else None
+            band = f"{q.low_kg or ''}-{q.high_kg or ''}"
+            print(f"   {q.clasificacion:<28} {band:>9}kg  "
+                  f"{(q.average if q.average is not None else 0):>7.2f} {q.unit:<8}"
+                  + (f"= ${usd:>6.2f}/cwt  @{fx:.4f} MXN/USD" if usd else ""))
         return 0
 
     err = ensure_table()
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    fn, err = bank_fx({d: r for d, r in rates.items()})
     if err:
         print(err, file=sys.stderr)
         return 1
@@ -447,7 +561,7 @@ def main(argv=None) -> int:
     if err:
         print(err, file=sys.stderr)
         return 1
-    print(f"banked {n} new or changed quote(s)")
+    print(f"banked {n} new or changed quote(s), {fn} new FX rate(s)")
     return 0
 
 

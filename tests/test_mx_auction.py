@@ -171,3 +171,55 @@ def test_the_primary_auction_is_the_one_with_weight_bands():
     banded = [q for q in mx.parse(PAGE)
               if q.auction == "TAMAULIPAS" and q.high_kg is not None]
     assert len(banded) >= 3
+
+
+# ── the USD equivalent ──────────────────────────────────────────────────────
+
+def test_mxn_per_kg_converts_to_usd_per_cwt():
+    """Two conversions in one step: kg->lb, then MXN->USD, then lb->cwt.
+
+    Pinned against a real quote: the 181-200 kg becerro averaged 95.86 MXN/kg
+    at the 24 Sep sale, and the ECB had the peso at 17.5841 that day.
+    """
+    assert mx.usd_per_cwt(95.86, 17.5841) == pytest.approx(247.28, abs=0.01)
+    assert mx.usd_per_cwt(105.67, 17.5841) == pytest.approx(272.58, abs=0.01)
+    # 1 kg = 2.2046226 lb, so a round 100 MXN/kg at a round 20 is easy to check
+    # by hand: 100/2.2046226 = 45.359 MXN/lb, /20 = 2.268 USD/lb, = 226.80/cwt
+    assert mx.usd_per_cwt(100.0, 20.0) == pytest.approx(226.80, abs=0.01)
+
+
+def test_a_missing_rate_leaves_the_cell_empty_rather_than_implying_one():
+    """None must propagate. A falsy rate treated as 1.0 prices a calf in pesos
+    and labels it dollars -- a number eighteen times too big that still looks
+    like a price."""
+    assert mx.usd_per_cwt(95.86, None) is None
+    assert mx.usd_per_cwt(95.86, 0) is None
+    assert mx.usd_per_cwt(None, 17.5841) is None
+
+
+def test_the_peso_moves_enough_that_the_rate_must_match_the_sale_date():
+    """17.5841 on 24 Sep against 18.0943 on 7 Oct -- about 3% in two weeks.
+
+    Converting an old sale at today's rate would move the spread by more than
+    most weeks of cattle trade do, so a single live rate applied to history
+    reports currency as though it were market.
+    """
+    at_sale = mx.usd_per_cwt(95.86, 17.5841)
+    at_today = mx.usd_per_cwt(95.86, 18.0943)
+    assert abs(at_sale - at_today) / at_sale > 0.025
+
+
+def test_fx_lives_in_its_own_table_not_on_the_price_row():
+    """Prices are banked when prices change, rates when rates change."""
+    assert mx.FX_TABLE != mx.TABLE
+    ddl = " ".join(mx.DDL)
+    assert "MXN_PER_USD" not in ddl and "FX" not in ddl
+    assert "RATE_DATE" in " ".join(mx.FX_DDL)
+
+
+def test_per_head_rows_are_not_converted_as_though_per_kilo():
+    """A 32,500 MXN cow run through a per-kg conversion reads as $84,000/cwt."""
+    q = [x for x in mx.parse(PAGE) if x.clasificacion == "VACA PARIDA"][0]
+    assert q.unit == mx.PER_HEAD
+    # the page only converts PER_KG rows; this asserts the flag it switches on
+    assert mx.usd_per_cwt(q.average, 17.5841) > 10_000
