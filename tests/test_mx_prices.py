@@ -262,18 +262,19 @@ def test_a_quote_further_away_than_the_limit_is_refused():
     than a spread measured across a month of market movement."""
     cur = _Cur({"ABS(DATEDIFF":
                 [(date(2026, 1, 1), mxp.MAX_GAP_DAYS + 1)]})
-    on, bands, gap = mxp.us_bands_near(_Conn(cur), date(2026, 9, 30), "Steers")
-    assert (on, bands, gap) == (None, [], None)
+    got = mxp.us_bands_near(_Conn(cur), date(2026, 9, 30), "Steers")
+    assert got == (None, [], None, None)
 
 
 def test_a_quote_inside_the_limit_is_taken():
     cur = _Cur({
         "ABS(DATEDIFF": [(date(2026, 9, 30), 0)],
         "SELECT weight_low, weight_high, avg_price":
-            [(700, 800, 315.0), (600, 700, 345.0)],
+            [(700, 800, 315.0, "Douglas"), (600, 700, 345.0, "Douglas")],
     })
-    on, bands, gap = mxp.us_bands_near(_Conn(cur), date(2026, 9, 30), "Steers")
-    assert on == date(2026, 9, 30) and gap == 0
+    on, bands, gap, cross = mxp.us_bands_near(_Conn(cur), date(2026, 9, 30),
+                                              "Steers")
+    assert on == date(2026, 9, 30) and gap == 0 and cross == "Douglas"
     assert (700, 800, 315.0) in bands
 
 
@@ -439,3 +440,69 @@ def test_bad_inputs_decompose_to_nothing_rather_than_raising():
     assert mxp.decompose(_raw(58, 75, 18, 320), _raw(58, 0, 18, 320)) is None
     assert mxp.decompose(_raw(58, 75, 18, 320), _raw(58, 75, None, 320)) is None
     assert mxp.dominant(None) is None
+
+
+# ── one crossing, never two ─────────────────────────────────────────────────
+
+def _two_crossing_day():
+    """The real 2026-09-30 rows: both crossings quote and they disagree at the
+    top bracket, $310 Douglas against $315 Santa Teresa."""
+    return _Cur({
+        "ABS(DATEDIFF": [(date(2026, 9, 30), 0)],
+        "SELECT weight_low, weight_high, avg_price": [
+            (400, 500, 415.0, "Douglas"), (500, 600, 385.0, "Douglas"),
+            (600, 700, 345.0, "Douglas"), (700, 800, 310.0, "Douglas"),
+            (400, 500, 415.0, "Santa Teresa"), (500, 600, 385.0, "Santa Teresa"),
+            (600, 700, 345.0, "Santa Teresa"), (700, 800, 315.0, "Santa Teresa"),
+        ],
+    })
+
+
+def test_two_crossings_on_one_day_do_not_build_one_slide():
+    """FOUND ON THE RENDERED PAGE, not by a test: the slide printed eight
+    anchors for four brackets, two at every weight, and the last pair
+    disagreed. Which price the interpolation used then fell out of sort order
+    -- an arbitrary choice between two real quotes, under a tile hard-coded
+    "Douglas" whichever way it went.
+    """
+    on, bands, gap, cross = mxp.us_bands_near(_Conn(_two_crossing_day()),
+                                              date(2026, 9, 30), "Steers")
+    assert cross == "Douglas", "the preference must decide, not row order"
+    assert len(bands) == 4, bands
+    anchors = mxp.us_anchors(bands)
+    assert len(anchors) == 4
+    assert [w for w, _p in anchors] == [450.0, 550.0, 650.0, 750.0]
+    assert anchors[-1][1] == 310.0, "Douglas' own price, not Santa Teresa's"
+
+
+def test_the_crossing_is_reported_so_the_label_cannot_lie():
+    cur = _Cur({
+        "ABS(DATEDIFF": [(date(2026, 9, 30), 0)],
+        "SELECT weight_low, weight_high, avg_price":
+            [(700, 800, 315.0, "Santa Teresa")],
+    })
+    *_, cross = mxp.us_bands_near(_Conn(cur), date(2026, 9, 30), "Steers")
+    assert cross == "Santa Teresa",         "a day only Santa Teresa quoted must not be labelled Douglas"
+
+
+def test_a_crossing_outside_the_preference_is_still_used():
+    """Nogales and Presidio quoted historically and may again. An unknown
+    crossing is a quote, not a reason to show nothing."""
+    cur = _Cur({
+        "ABS(DATEDIFF": [(date(2025, 5, 12), 0)],
+        "SELECT weight_low, weight_high, avg_price":
+            [(600, 700, 300.0, "Nogales"), (700, 800, 280.0, "Nogales")],
+    })
+    _on, bands, _g, cross = mxp.us_bands_near(_Conn(cur), date(2025, 5, 12),
+                                              "Steers")
+    assert cross == "Nogales" and len(bands) == 2
+
+
+def test_duplicate_anchors_are_collapsed_rather_than_sorted_through():
+    """Belt and braces: even if two rows for one crossing ever reached
+    us_anchors, a repeated weight makes the interpolation depend on sort order
+    rather than on anything meaningful."""
+    dupes = [(700, 800, 310.0), (700, 800, 320.0), (600, 700, 345.0)]
+    anchors = mxp.us_anchors(dupes)
+    assert len(anchors) == 2
+    assert dict(anchors)[750.0] == 315.0, "averaged, not whichever sorted first"

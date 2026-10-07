@@ -96,6 +96,16 @@ US_CLASS_BY_SEX = {"M": "Steers", "F": "Spayed Heifers"}
 #: AMS publishes 1-2 and 2-3; the page headlines 1-2, so the comparison does.
 US_GRADE = "1-2"
 
+#: ONE CROSSING, AND THE PAGE PRINTS WHICH. Douglas and Santa Teresa both quote
+#: on the same day and THEY DISAGREE -- 700-800 lb #1-2 steers on 2026-09-30
+#: were $310 at Douglas and $315 at Santa Teresa, and 4 of 2026's quoted days
+#: carry both. Taking every row built a slide with two anchors at the same
+#: weight, so which one the interpolation used fell out of sort order: an
+#: arbitrary choice between two real prices, with the tile labelled "Douglas"
+#: whichever it picked. Preferred first, then whatever quoted, and the crossing
+#: actually used is returned so the label cannot lie.
+US_CROSSING_PREFERENCE = ("Douglas", "Santa Teresa")
+
 #: How far apart a sale and a border quote may be and still be shown as a pair.
 #: Beyond this the panel prints the sale with no comparison rather than a
 #: spread across a fortnight of market movement.
@@ -107,6 +117,8 @@ MAX_GAP_DAYS = 21
 #: recorded in CLAUDE.md for leverage.SCHEMA and am_cutout.SCHEMA. Without it a
 #: new key renders "—" and nothing raises.
 #:
+#: 5 (2026-10-07): one crossing only, and compare() returns which. Every
+#: us_price on a two-crossing day can change.
 #: 4 (2026-10-07): load() carries ratio_series + the decomposition, so the
 #: panel can say WHICH driver moved the ratio. A cached dict from before
 #: this has neither key and the section renders empty.
@@ -120,7 +132,7 @@ MAX_GAP_DAYS = 21
 #: cannot see, so the deployed page would have gone on serving the old
 #: heifers-first ordering from a cached dict with nothing raising. Bump this
 #: for an ordering or content change, not only for a new key.
-SCHEMA = 4
+SCHEMA = 5
 
 
 def usd_per_cwt(mxn_per_kg, mxn_per_usd):
@@ -161,12 +173,17 @@ def us_anchors(us_bands):
     is treated as the price of a 450 lb calf. That is the only reading that
     lets the quotes be used as a slide.
     """
-    pts = []
+    by_w = {}
     for low, high, price in us_bands or []:
         if low is None or high is None or price is None:
             continue
-        pts.append(((float(low) + float(high)) / 2.0, float(price)))
-    return sorted(pts)
+        w = (float(low) + float(high)) / 2.0
+        by_w.setdefault(w, []).append(float(price))
+    # Two prices at one weight should be impossible once a single crossing is
+    # selected, but a duplicate anchor makes the interpolation depend on sort
+    # order rather than on anything meaningful, so it is collapsed here too
+    # rather than trusted not to happen.
+    return sorted((w, sum(v) / len(v)) for w, v in by_w.items())
 
 
 def us_coverage(us_bands):
@@ -340,11 +357,14 @@ def us_last_quoted(conn, us_class, grade=US_GRADE):
 
 
 def us_bands_near(conn, when, us_class, grade=US_GRADE, max_gap=MAX_GAP_DAYS):
-    """(quote_date, [(low_lb, high_lb, avg)], gap_days) nearest to `when`.
+    """(quote_date, [(low_lb, high_lb, avg)], gap_days, crossing) near `when`.
 
     Nearest in EITHER direction, because a sale can fall between two quoted
     border days and the closer one is the better comparator whichever side it
-    sits. Returns (None, [], None) when nothing is within `max_gap`.
+    sits. Returns (None, [], None, None) when nothing is within `max_gap`.
+
+    ONE CROSSING ONLY -- see US_CROSSING_PREFERENCE. Mixing Douglas and Santa
+    Teresa put two different prices at the same weight on one slide.
     """
     cur = conn.cursor()
     r = cur.execute(
@@ -354,14 +374,28 @@ def us_bands_near(conn, when, us_class, grade=US_GRADE, max_gap=MAX_GAP_DAYS):
         f"ORDER BY g ASC, report_date DESC LIMIT 1", (when, us_class, grade)
     ).fetchone()
     if not r or r[1] is None or int(r[1]) > max_gap:
-        return None, [], None
+        return None, [], None, None
     on, gap = r[0], int(r[1])
+
     rows = cur.execute(
-        f"SELECT weight_low, weight_high, avg_price FROM {US_TABLE} "
+        f"SELECT weight_low, weight_high, avg_price, crossing_point "
+        f"FROM {US_TABLE} "
         f"WHERE report_date = %s AND class_desc = %s AND muscle_grade = %s "
         f"  AND avg_price IS NOT NULL ORDER BY weight_low", (on, us_class, grade)
     ).fetchall()
-    return on, [(r[0], r[1], float(r[2])) for r in rows], gap
+    if not rows:
+        return on, [], gap, None
+
+    by_cross = {}
+    for lo, hi, price, cross in rows:
+        by_cross.setdefault(cross, []).append((lo, hi, float(price)))
+
+    pick = next((c for c in US_CROSSING_PREFERENCE if c in by_cross), None)
+    if pick is None:
+        # Whatever quoted the most brackets that day; ties broken by name so
+        # the choice is reproducible rather than dict-order dependent.
+        pick = max(sorted(by_cross), key=lambda c: len(by_cross[c]))
+    return on, by_cross[pick], gap, pick
 
 
 # ── the comparison ──────────────────────────────────────────────────────────
@@ -389,10 +423,12 @@ def compare(conn, sale_date=None, auction=AUCTION):
     for b in rows:
         b = dict(b)
         b["usd"] = usd_per_cwt(b["price_avg"], rate)
-        us_date, us_list, gap = us_cache.get(b["sex"], (None, [], None))
+        us_date, us_list, gap, cross = us_cache.get(
+            b["sex"], (None, [], None, None))
         b["us_class"] = US_CLASS_BY_SEX.get(b["sex"])
         b["us_date"] = us_date
         b["gap_days"] = gap
+        b["us_crossing"] = cross
         price = None if b["cnh"] else interpolate_us(b["mid_lb"], us_list)
         if price is not None and b["usd"] is not None:
             b["us_price"] = price
@@ -415,6 +451,10 @@ def compare(conn, sale_date=None, auction=AUCTION):
         # The slide itself, so the panel can show what it read the price off.
         "us_slide": {s: us_anchors(us_cache[s][1]) for s in us_cache},
         "gaps": {s: us_cache[s][2] for s in us_cache},
+        # Which border crossing each sex was priced against, so the tile can
+        # name it rather than hard-coding "Douglas" on a day only Santa Teresa
+        # quoted.
+        "us_crossings": {s: us_cache[s][3] for s in us_cache},
         # Only populated for a sex whose quote is missing, so the panel can say
         # WHY rather than printing a column of dashes. See us_last_quoted().
         "us_last": {s: us_last_quoted(conn, US_CLASS_BY_SEX[s])
