@@ -1,6 +1,7 @@
 ﻿import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+import traceback
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -433,13 +434,47 @@ def _fetch_us_recent() -> pd.DataFrame:
     return _pull_xb401(US_RECENT_REPORTS)
 
 
+def _archive_or_refetch() -> pd.DataFrame:
+    """The persisted archive, refetched if its cache entry cannot be read.
+
+    A DISK-PERSISTED ENTRY THAT WILL NOT UNPICKLE TAKES THE WHOLE PAGE DOWN,
+    and leaves no way back from the UI -- Refresh now re-runs the fetch, which
+    reads the same unreadable entry again. The only cure was deleting
+    ~/.streamlit/cache by hand, which requires knowing that is the problem,
+    which the page did not say.
+
+    Seen 2026-10-07 on a workstation: `pickle.loads` of the entry raised
+    `NotImplementedError: (dtype('<M8[us]'), array(...))` inside pandas'
+    `NDArrayBacked.__setstate__`, on a frame whose own columns are
+    datetime64[ns] and which pickles perfectly on its own. Something in the
+    persist layer round-trips it to microseconds, and this pandas/numpy pair
+    cannot read that back. The deployed app pins different versions and is
+    unaffected -- checked the same day, it was serving normally.
+
+    So this is NOT a fix for that incompatibility. It is a refusal to let a
+    cache, which exists only to save 29 seconds, be able to take the page off
+    the air. Clear the bad entry, fetch once uncached, carry on.
+    """
+    try:
+        return _fetch_us_archive()
+    except Exception:
+        try:
+            _fetch_us_archive.clear()
+        except Exception:
+            pass
+        # Uncached deliberately. Re-calling the cached function would write a
+        # fresh entry and read it straight back through the same broken path,
+        # which is how a "recovery" turns into a loop that still fails.
+        return _pull_xb401(US_ARCHIVE_REPORTS)
+
+
 def fetch_us_fresh90() -> pd.DataFrame:
     """Full daily US Chemical Lean, Fresh 90% — archive joined to the live tail.
 
     Not cached itself: both halves are, and the join is a dozen milliseconds.
     Caching here as well would add a third expiry rule to reason about.
     """
-    return qc.merge_history(_fetch_us_archive(), _fetch_us_recent())
+    return qc.merge_history(_archive_or_refetch(), _fetch_us_recent())
 
 
 # No persist="disk" here. Streamlit ignores a TTL on a disk-persisted cache --
@@ -951,7 +986,12 @@ with st.spinner("Loading full USDA beef trimmings history (US pull can take ~60-
         # Washington.
         load_ok = False
         load_was_network = isinstance(e, requests.exceptions.RequestException)
-        err_msg = f"{type(e).__name__}: {e}"
+        # The TRACEBACK, not just str(e). The expander used to show the message
+        # alone, and this exception's message is `(dtype('<M8[us]'), array(...))`
+        # -- a dtype and 5,619 dates, naming no file, no line and no function.
+        # It is unreadable without the frames, which is the other half of why
+        # this failure took twenty minutes to place.
+        err_msg = f"{type(e).__name__}: {e}\n\n{traceback.format_exc()}"
         us_hist, imp_hist = pd.DataFrame(), pd.DataFrame()
 
     # The weekly line is context, not the product. If LM_XB460 is down the page
