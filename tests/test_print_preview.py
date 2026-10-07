@@ -437,6 +437,42 @@ def test_the_single_image_skips_the_page_stamp_and_the_cutting():
     assert "cutNear" not in single
 
 
+def test_the_single_image_is_content_height_not_whole_sheets():
+    """
+    HALF THE HUBSPOT IMAGE WAS EMPTY WHITE. Measured on the 2026-10-07
+    afternoon report: scrollHeight 1161px against a 1056px sheet, 105px
+    over, rounded up to 2112 — so 951px of blank paper went into the email
+    under the letter. Reported by Ross.
+
+    The paged export still rounds up: each page has to read as a sheet, and
+    the splitter cuts on whole-sheet boundaries.
+    """
+    out = _compose()(LETTER)
+    assert "split ? Math.max(1, Math.ceil(el.scrollHeight / PAGE_H)) * PAGE_H" in out
+    assert ": el.scrollHeight;" in out
+
+
+def test_the_watermark_centres_because_the_capture_height_is_right():
+    """
+    The 50-years mark is `position: fixed; top: 46%`, and html2canvas lays
+    fixed elements out against the windowHeight it is handed. Rounding the
+    single image up to two sheets therefore put it at 46% of 2112 — down by
+    the signature rather than on the middle of the page.
+
+    So there is no watermark special-case anywhere, and there should not
+    be: capturing at the real height centres it by construction. Ross
+    reported the white band and the off-centre mark separately; they were
+    one cause. Verified on the export itself — the light-grey centroid
+    lands at 46.3% of image height, and horizontally within a pixel of
+    centre because `left: 50%` resolves against the captured sheet width.
+    """
+    out = _compose()(LETTER)
+    assert "windowHeight: h" in out, "fixed elements no longer see the capture height"
+    assert ".wm" not in out.split("_IMAGE_SCRIPT")[-1][:4000], (
+        "a watermark special-case appeared; the height fix should make one "
+        "unnecessary")
+
+
 def test_multiple_downloads_are_staggered():
     """
     Chrome drops some downloads fired in a tight loop from one gesture, and

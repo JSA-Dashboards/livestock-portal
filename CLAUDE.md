@@ -2136,6 +2136,23 @@ one image (HubSpot)** beside Print.
   before any of the splitting work — no stamp, no cut-finding, no page suffix
   on the filename.
 
+**THE TWO ALSO NEED DIFFERENT CAPTURE HEIGHTS**, found 2026-10-07. The
+paged export rounds up to whole sheets — each page has to read as a sheet,
+and the splitter cuts on those boundaries. The single image must NOT: on
+that day's afternoon report `scrollHeight` was 1161px against a 1056px
+sheet, 105px over, so it rounded to 2112 and **951px of blank paper went
+into the HubSpot email** under the letter.
+
+**The off-centre watermark was the same bug.** `.wm` is
+`position: fixed; top: 46%`, and html2canvas lays fixed elements out
+against the `windowHeight` it is handed — so 46% of a wrongly-doubled 2112
+put the 50-years mark down by the signature instead of on the middle of
+the page. Ross reported the white band and the watermark as two faults;
+they were one. Capturing at the real height centres it **by construction**,
+and there is deliberately no watermark special-case anywhere — a test
+asserts one has not appeared, because adding one would paper over the
+height being wrong again.
+
 **ONE CAPTURE, TWO SAVE PATHS**, and a test asserts `html2canvas(el, {`
 appears once. Capturing separately would let the two exports drift into
 different margins or line breaks, which nobody would notice until a client

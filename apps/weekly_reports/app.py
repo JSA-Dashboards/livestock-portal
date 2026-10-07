@@ -846,10 +846,29 @@ _IMAGE_SCRIPT = """<script
     document.head.appendChild(mode);
 
     var el = document.documentElement;
-    // WHOLE SHEETS, measured after page mode is applied, so a one-page brief
-    // comes out as a full 8.5x11 rather than cropped to its last line. That
-    // is what makes it read as the letter instead of as a screenshot.
-    var h = Math.max(1, Math.ceil(el.scrollHeight / PAGE_H)) * PAGE_H;
+    // WHOLE SHEETS FOR THE PAGED EXPORT, CONTENT HEIGHT FOR THE SINGLE ONE,
+    // and the difference fixes two things at once.
+    //
+    // Paged: rounding up is what makes each page read as a letter rather
+    // than a screenshot, and the splitter needs whole sheets to cut on.
+    //
+    // Single: rounding up is a bug. Measured on the 2026-10-07 afternoon
+    // report, scrollHeight was 1161px against a 1056px sheet -- 105px over
+    // -- so it rounded to 2112 and HALF THE IMAGE WAS EMPTY WHITE. It goes
+    // into a HubSpot email at that size, trailing band and all.
+    //
+    // The watermark is the same bug wearing a different hat. `.wm` is
+    // position:fixed at top:46%, and html2canvas lays fixed elements out
+    // against the windowHeight it is given -- so 46% of 2112 put the
+    // 50-years mark down by the signature instead of centred on the page.
+    // Capturing at the real height centres it by construction, with no
+    // special case for it anywhere. Reported together by Ross, and they
+    // were one cause.
+    //
+    // scrollHeight already includes the body's 0.90in bottom padding, so
+    // the letter does not come out cropped to its last line.
+    var h = split ? Math.max(1, Math.ceil(el.scrollHeight / PAGE_H)) * PAGE_H
+                  : el.scrollHeight;
 
     // THE SHEET AS THE VIEWPORT. The frame and watermark are position:fixed,
     // so they lay out against whatever window html2canvas is told about; at
