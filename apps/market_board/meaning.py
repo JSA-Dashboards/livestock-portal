@@ -76,6 +76,8 @@ def fmt(value, how: str) -> str:
     if how == "head":         return f"{v:,.0f}"
     if how == "lb":           return f"{v:,.0f} lb"
     if how == "lb_signed":    return f"{v:+,.0f} lb"
+    if how == "mil_lb":        return f"{v:,.0f}M lb"
+    if how == "mil_lb_signed": return f"{v:+,.0f}M lb"
     if how == "ratio":        return f"{v:,.2f}"
     return f"{v:,.2f}"
 
@@ -235,24 +237,23 @@ RULES = {
         requires=("forward_book",),
     ),
 
-    "weight_vs_trend": Rule(
-        key="weight_vs_trend",
-        direction=lambda b: _sign(_g(b, "weight", "vs_trend")),
-        up="Cattle are heavier than the eight-year trend says they should be "
-           "for this week. Animals held past their window put on weight, so "
-           "the showlist is carrying more pounds than a head count suggests "
-           "and feedyards are behind. It is also tonnage that arrives whether "
-           "or not the kill grows.",
-        down="Cattle are lighter than the eight-year trend for this week. "
-             "Feedyards are current or ahead, which means less standing "
-             "inventory behind the showlist than a head count implies.",
-        flat="Weights are on their eight-year trend for this week.",
-        requires=("weight_vs_trend",),
+    "weight_vs_year": Rule(
+        key="weight_vs_year",
+        direction=lambda b: _sign(_g(b, "weight", "vs_year_ago")),
+        up="Cattle are heavier than the same week a year ago. Animals held past "
+           "their window put on weight, so the showlist is carrying more pounds "
+           "than a head count suggests and feedyards are behind. It is also "
+           "tonnage that arrives whether or not the kill grows.",
+        down="Cattle are lighter than the same week a year ago. Feedyards are "
+             "current or ahead, which means less standing inventory behind the "
+             "showlist than a head count implies.",
+        flat="Weights are level with the same week a year ago.",
+        requires=("weight_vs_year",),
     ),
 
     "feeder_index": Rule(
         key="feeder_index",
-        direction=lambda b: _sign(_g(b, "fci", "change")),
+        direction=lambda b: _sign(_g(b, "fci", "published", "change")),
         up="Buyers paid more for replacement cattle day on day. The index is "
            "the settlement reference the whole feeder complex prices against, "
            "so this is the number a feeder contract marks to.",
@@ -287,6 +288,56 @@ RULES = {
              "lower average is a different market from selling fewer.",
         flat="Fed cattle were level with the previous week.",
         requires=("cash_5area",),
+    ),
+    "exports_yoy": Rule(
+        key="exports_yoy",
+        direction=lambda b: _sign(_g(b, "exports", "yoy_pct")),
+        up="More beef is leaving the country than a year ago. Export demand "
+           "competes with domestic buyers for the same middle meats and the "
+           "same variety meats, so it lifts the cutout from outside the "
+           "domestic market entirely.",
+        down="Less beef is leaving the country than a year ago. Product that "
+             "would have shipped has to clear at home instead, which is "
+             "cutout pressure that no domestic demand number will show.",
+        flat="Exports are level with a year ago.",
+        requires=("exports_yoy",),
+    ),
+    "imports_yoy": Rule(
+        key="imports_yoy",
+        direction=lambda b: _sign(_g(b, "imports", "yoy_pct")),
+        up="More beef is coming in than a year ago. Imports are overwhelmingly "
+           "lean trimmings, so a rise says domestic lean is tight and the "
+           "grinding trade is sourcing abroad rather than bidding up cull "
+           "cows — supportive for cows, and a ceiling on 90s.",
+        down="Less beef is coming in than a year ago. Grinders are covering "
+             "from domestic lean, which bids the cow market rather than the "
+             "import offer.",
+        flat="Imports are level with a year ago.",
+        requires=("imports_yoy",),
+    ),
+    "exports_vs_forecast": Rule(
+        key="exports_vs_forecast",
+        direction=lambda b: _sign(_g(b, "exports", "implied_vs_forecast")),
+        up="The year is running AHEAD of USDA's own full-year export forecast. "
+           "A forecast the market is beating is one that gets revised up, and "
+           "the revision is what moves deferred expectations.",
+        down="The year is running BEHIND USDA's full-year export forecast. "
+             "Either the back half has to accelerate or the forecast comes "
+             "down, and the second is the more common resolution.",
+        flat="Exports are tracking USDA's forecast.",
+        requires=("exports_vs_forecast",),
+    ),
+    "imports_vs_forecast": Rule(
+        key="imports_vs_forecast",
+        direction=lambda b: _sign(_g(b, "imports", "implied_vs_forecast")),
+        up="Imports are running AHEAD of USDA's full-year forecast. More "
+           "foreign lean than expected is more total beef on the domestic "
+           "market than the supply numbers alone imply.",
+        down="Imports are running BEHIND USDA's full-year forecast. Less "
+             "foreign lean than expected tightens the grinding trade further "
+             "than the domestic kill suggests.",
+        flat="Imports are tracking USDA's forecast.",
+        requires=("imports_vs_forecast",),
     ),
 }
 
@@ -398,14 +449,14 @@ def _leverage_tension(r, b):
     gauge would hide precisely the fact worth knowing — which is why this board
     carries no bull/bear needle anywhere.
     """
-    w, f = r["weight_vs_trend"], r["forward_book"]
+    w, f = r["weight_vs_year"], r["forward_book"]
     wv, fv = _f(w.value), _f(f.value)
     if wv is None or fv is None:
         return "Not enough to say — one side of the tension is missing."
     heavy, short_book = wv > 0, fv < 0
     lines = [
-        f"**Weights {fmt(wv, 'lb_signed')} against their eight-year same-week "
-        f"trend** ({short(w.as_of)}) — "
+        f"**Weights {fmt(wv, 'lb_signed')} against the same week a year ago** "
+        f"({short(w.as_of)}) — "
         + ("cattle are backing up, so the packer can wait rather than raise his bid."
            if heavy else
            "feedyards are current, so there is less standing inventory to lean on."),
@@ -441,13 +492,51 @@ def _kill_vs_cutout(r, b):
             "rather than a volume decision.")
 
 
+def _demand_vs_supply(r, b):
+    """
+    The question the board could not ask before the demand card existed.
+
+    A cutout firming because exports are strong is a different market from one
+    firming because the kill shrank, and every other panel here reads supply.
+    """
+    ex, im = _f(r["exports_yoy"].value), _f(r["imports_yoy"].value)
+    if ex is None or im is None:
+        return "Not enough to say — one side of the trade picture is missing."
+    lines = [
+        f"**Exports {fmt(ex, 'pct_signed')} on the year** — "
+        + ("foreign buyers are taking more product off the domestic market."
+           if ex > 0 else
+           "product that would have shipped is clearing at home instead."),
+        f"**Imports {fmt(im, 'pct_signed')} on the year** — "
+        + ("more foreign lean is arriving, so the grinding trade is sourcing "
+           "abroad rather than bidding domestic cows."
+           if im > 0 else
+           "less foreign lean is arriving, which tightens the grind at home."),
+    ]
+    if ex < 0 < im:
+        lines.append("**Net, the trade account is working against the domestic "
+                     "market**: less going out and more coming in is more beef "
+                     "to clear here than the kill alone implies. Read the "
+                     "cutout against that rather than against supply only.")
+    elif ex > 0 > im:
+        lines.append("**Net, the trade account is tightening domestic supply**: "
+                     "more leaving and less arriving. That is support the "
+                     "slaughter figures do not show.")
+    else:
+        lines.append("Both moved the same way, so trade is not the swing factor "
+                     "in domestic availability this year.")
+    return "\n\n".join(lines)
+
+
 CROSSES = (
     Cross("packer_margin", "Is the packer's margin widening or compressing?",
           ("choice_cutout", "cash_5area"), _packer_margin),
     Cross("leverage_tension", "These two disagree, and that is the market",
-          ("weight_vs_trend", "forward_book"), _leverage_tension),
+          ("weight_vs_year", "forward_book"), _leverage_tension),
     Cross("kill_vs_cutout", "Is the week demand-led or volume-led?",
           ("weekly_kill", "choice_cutout"), _kill_vs_cutout),
+    Cross("demand_vs_supply", "Is trade adding to the domestic market or taking from it?",
+          ("exports_yoy", "imports_yoy"), _demand_vs_supply),
 )
 
 

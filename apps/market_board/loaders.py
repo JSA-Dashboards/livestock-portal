@@ -69,12 +69,15 @@ APPS = REPO / "apps"
 # module -- does not help, because the bare import is inside corn_cost itself.
 sys.path.insert(0, str(APPS / "cash_trade"))
 sys.path.insert(0, str(APPS / "fed_cattle_crush"))
+sys.path.insert(0, str(APPS / "beef_trade"))
 
 import leverage                      # noqa: E402
+import trade_flows                   # noqa: E402
 import corn_cost                     # noqa: E402
 
 sys.path.insert(0, str(REPO))
 from letter import sources           # noqa: E402
+import wasde                         # noqa: E402
 
 #: LM_CT150. Named here rather than imported because `leverage` does not define
 #: it and `apps/cash_trade/app.py` is a page, not an importable module.
@@ -85,7 +88,7 @@ CT150_ID = 2477
 BOARD_SCHEMA = 1
 
 #: The full key. Every cached function takes it, and a test asserts that.
-SCHEMA = (BOARD_SCHEMA, leverage.SCHEMA)
+SCHEMA = (BOARD_SCHEMA, leverage.SCHEMA, trade_flows.SCHEMA)
 
 TIMEOUT = 60
 
@@ -239,6 +242,55 @@ def load_corn(_schema=SCHEMA) -> dict:
         return _err(e)
 
 
+@st.cache_data(ttl=21600, show_spinner=False)  # ERS publishes monthly
+def load_trade(_schema=SCHEMA) -> dict:
+    """
+    US beef exports and imports against USDA's own full-year forecast.
+
+    SIX HOURS, NOT FIFTEEN MINUTES. ERS republishes once a month and runs about
+    six weeks behind, so a short ttl would re-fetch a 43,000-row CSV all day to
+    find the same August figure.
+
+    THE RECONCILIATION IS NOT DECORATION. "World total" is a ROW in the ERS
+    file, not something to derive -- summing every country double-counts the
+    total by exactly 100%, which produces a monthly export figure around 390
+    million lb against a true 195 and still looks like a perfectly reasonable
+    beef trade number. `reconciles()` checks the countries against the published
+    total and this block refuses to return anything if they disagree.
+
+    WASDE IS FETCHED FOR THE FORECAST ONLY, and its failure is contained. If it
+    does not parse, the levels and the year-on-year tiles still render and only
+    the two vs-forecast tiles go MISSING -- which is the right degradation,
+    because those are the only two that need it.
+    """
+    try:
+        df = trade_flows.fetch()
+        if df is None or df.empty:
+            return {"error": "ERS returned no trade rows"}
+        audit = trade_flows.reconciles(df)
+        if not audit.get("ok"):
+            return {"error": "ERS countries do not sum to the published World "
+                             "total (worst %s)" % audit.get("worst")}
+        forecasts = {"Exports": None, "Imports": None}
+        try:
+            w = wasde.load()
+            forecasts = {"Exports": w.value("Beef", "exports"),
+                         "Imports": w.value("Beef", "imports")}
+        except Exception:                           # noqa: BLE001
+            pass
+        out = {"reconciles": True}
+        for flow, key in (("Exports", "exports"), ("Imports", "imports")):
+            got = trade_flows.latest_month(df, flow)
+            if not got:
+                continue
+            year, month = got
+            out[key] = trade_flows.pace(df, flow, year, month, forecasts.get(flow))
+            out["asof"] = date(year, month, 1)
+        return out
+    except Exception as e:                          # noqa: BLE001
+        return _err(e)
+
+
 # ── the bundle ───────────────────────────────────────────────────────────────
 
 def bundle(today: date | None = None) -> dict:
@@ -258,12 +310,12 @@ def bundle(today: date | None = None) -> dict:
     # concurrent, which is the difference between a page you wait for and one
     # you abandon. Each is separately cached on its own feed's cadence, so this
     # cost is paid once an hour for the weekly blocks rather than per view.
-    with ThreadPoolExecutor(max_workers=7) as ex:
+    with ThreadPoolExecutor(max_workers=8) as ex:
         jobs = {k: ex.submit(f) for k, f in (
             ("lev", load_leverage), ("weights", load_weights),
             ("cutout", load_cutout), ("cash", load_cash),
             ("slaughter", load_slaughter), ("fci", load_fci),
-            ("corn", load_corn))}
+            ("corn", load_corn), ("trade", load_trade))}
         # A thread that raises must not take the page down, so the result is
         # collected the same way a failed fetch is: as an error dict.
         done = {}
@@ -275,6 +327,7 @@ def bundle(today: date | None = None) -> dict:
     lev, weights = done["lev"], done["weights"]
     cutout, cash = done["cutout"], done["cash"]
     slaughter, fci, corn = done["slaughter"], done["fci"], done["corn"]
+    trade = done["trade"]
 
     errors = {}
     for name, blk in (("packer leverage (LM_CT153/142)", lev),
@@ -283,7 +336,8 @@ def bundle(today: date | None = None) -> dict:
                       ("cash trade (LM_CT150/154)", cash),
                       ("weekly slaughter (SJ_LS712)", slaughter),
                       ("feeder index (Snowflake)", fci),
-                      ("delivered corn (Snowflake)", corn)):
+                      ("delivered corn (Snowflake)", corn),
+                      ("beef trade (USDA ERS + WASDE)", trade)):
         if isinstance(blk, dict) and blk.get("error"):
             errors[name] = blk["error"]
 
@@ -301,6 +355,9 @@ def bundle(today: date | None = None) -> dict:
         "slaughter": slaughter if not slaughter.get("error") else {},
         "fci": fci if not fci.get("error") else {},
         "corn": corn if not corn.get("error") else {},
+        "exports": (trade.get("exports") or {}),
+        "imports": (trade.get("imports") or {}),
+        "trade_asof": trade.get("asof"),
         # Corn rows carry no observation date of their own -- the query window
         # is "the last ten days" -- so the as-of is the run, and the tile says
         # so rather than implying a quote date it does not have.

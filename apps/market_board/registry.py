@@ -52,11 +52,17 @@ from typing import Callable
 # all three. Ordering the cards any other way -- alphabetically, or by how
 # interesting the number is -- breaks the only through-line the page has.
 Q_BEEF = "What is beef worth?"
+Q_DEMAND = "What is demand doing?"
 Q_PACKER = "What is the packer's position?"
 Q_FEEDER = "What is a feeder worth?"
 Q_SUPPLY = "What is supply doing?"
 
-QUESTIONS = (Q_BEEF, Q_PACKER, Q_FEEDER, Q_SUPPLY)
+# DEMAND SITS SECOND, between what beef is worth and what the packer earns,
+# because it is the reason the cutout moves rather than a consequence of it. A
+# cutout firming because Japan is buying is a different market from one firming
+# because the kill shrank, and until this card existed the board could not tell
+# those apart -- its entire demand side was the cutout itself.
+QUESTIONS = (Q_BEEF, Q_DEMAND, Q_PACKER, Q_FEEDER, Q_SUPPLY)
 
 FULL, PARTIAL, NONE = "full", "partial", "none"
 
@@ -164,6 +170,108 @@ SIGNALS: tuple = (
         page="Beef Cutout",
     ),
 
+    # -- Q_DEMAND -------------------------------------------------------------
+    #
+    # A DIFFERENT CLOCK FROM EVERYTHING ELSE ON THIS BOARD, and the basis
+    # strings say so on every tile. ERS publishes monthly and runs about six
+    # weeks behind -- August data on 7 October -- where the cutout is same-day
+    # and the purchase mix is a week. That is not staleness, it is customs
+    # data, and a `max_age_days` written against a weekly cadence would mark
+    # the whole card stale every day of its life.
+    #
+    # WHY ERS AND NOT FAS ESR, which JSA already publishes at
+    # jpsi.com/export-sales-dashboard: ESR is weekly and far timelier, but it
+    # is EXPORTS ONLY, it reports SALES rather than customs-cleared trade, and
+    # it is product weight in metric tons. None of that can be set against a
+    # WASDE forecast. ERS is the series WASDE forecasts, exactly -- for 2025
+    # its world totals are 2,579.1 and 5,388.0 against the September 2026
+    # WASDE's 2,579 and 5,388 -- which is the only reason an
+    # actual-versus-forecast tile here means anything.
+    Signal(
+        key="exports_ytd",
+        label="Beef exports, year to date",
+        question=Q_DEMAND,
+        basis="USDA ERS · customs-cleared, CARCASS weight, million lb · "
+              "monthly, about six weeks behind · NOT the weekly FAS sales "
+              "figure the Export Sales dashboard shows",
+        source="USDA ERS",
+        pick=lambda b: _g(b, "exports", "ytd"),
+        fmt="mil_lb", cadence="monthly", max_age_days=80,
+        as_of=lambda b: _g(b, "trade_asof"),
+        depth=FULL,
+        depth_note="ERS monthly to 1989. The countries sum to the published "
+                   "World total with zero error across 904 month/flow pairs.",
+        page="US Beef Trade",
+    ),
+    Signal(
+        key="exports_yoy",
+        label="Beef exports, year on year",
+        question=Q_DEMAND,
+        basis="USDA ERS · the same months a year earlier, so the comparison is "
+              "like for like rather than against a part year",
+        source="USDA ERS",
+        pick=lambda b: _g(b, "exports", "yoy_pct"),
+        fmt="pct_signed", cadence="monthly", max_age_days=80,
+        as_of=lambda b: _g(b, "trade_asof"),
+        depth=FULL, depth_note="ERS monthly to 1989.",
+        page="US Beef Trade",
+    ),
+    Signal(
+        key="imports_ytd",
+        label="Beef imports, year to date",
+        question=Q_DEMAND,
+        basis="USDA ERS · customs-cleared, CARCASS weight, million lb · the "
+              "other half of the demand picture, and the larger one",
+        source="USDA ERS",
+        pick=lambda b: _g(b, "imports", "ytd"),
+        fmt="mil_lb", cadence="monthly", max_age_days=80,
+        as_of=lambda b: _g(b, "trade_asof"),
+        depth=FULL, depth_note="ERS monthly to 1989.",
+        page="US Beef Trade",
+    ),
+    Signal(
+        key="imports_yoy",
+        label="Beef imports, year on year",
+        question=Q_DEMAND,
+        basis="USDA ERS · imports rise when domestic lean is tight, so this "
+              "reads as a SUPPLY signal as much as a demand one",
+        source="USDA ERS",
+        pick=lambda b: _g(b, "imports", "yoy_pct"),
+        fmt="pct_signed", cadence="monthly", max_age_days=80,
+        as_of=lambda b: _g(b, "trade_asof"),
+        depth=FULL, depth_note="ERS monthly to 1989.",
+        page="US Beef Trade",
+    ),
+    Signal(
+        key="exports_vs_forecast",
+        label="Exports vs USDA's full-year forecast",
+        question=Q_DEMAND,
+        basis="ERS actuals projected on the five-year SEASONAL shape, less the "
+              "WASDE forecast · million lb · a flat YTD x 12/n would be wrong "
+              "in a direction that changes with the month you ask in",
+        source="USDA ERS + WASDE",
+        pick=lambda b: _g(b, "exports", "implied_vs_forecast"),
+        fmt="mil_lb_signed", cadence="monthly", max_age_days=80,
+        as_of=lambda b: _g(b, "trade_asof"),
+        depth=PARTIAL,
+        depth_note="ESMIS serves 25 WASDE releases, August 2024 forward, and "
+                   "October 2025 is absent — that release was not published.",
+        page="US Beef Trade",
+    ),
+    Signal(
+        key="imports_vs_forecast",
+        label="Imports vs USDA's full-year forecast",
+        question=Q_DEMAND,
+        basis="ERS actuals on the five-year seasonal shape, less the WASDE "
+              "forecast · million lb · imports run heavy in the first quarter",
+        source="USDA ERS + WASDE",
+        pick=lambda b: _g(b, "imports", "implied_vs_forecast"),
+        fmt="mil_lb_signed", cadence="monthly", max_age_days=80,
+        as_of=lambda b: _g(b, "trade_asof"),
+        depth=PARTIAL, depth_note="As exports vs forecast.",
+        page="US Beef Trade",
+    ),
+
     # -- Q_PACKER -------------------------------------------------------------
     Signal(
         key="negotiated_share",
@@ -233,33 +341,69 @@ SIGNALS: tuple = (
         depth=FULL, depth_note="2008-07-21, 950 wks.",
         page="Cash Cattle Trade",
     ),
+    # AGAINST THE SAME WEEK A YEAR AGO, Ross's call on 2026-10-07.
+    #
+    # `weight_context` returns both this and `vs_trend`, a fit on the same ISO
+    # week of the prior eight years. The trend figure reads larger -- +85.7 lb
+    # against +67.3 on 2026-10-05 -- because fed cattle have got heavier for two
+    # decades at roughly +6.9 lb/yr on this series, so a raw year-ago delta
+    # carries about 7 lb of secular drift inside it. That is the argument for
+    # the trend version and it is recorded here rather than argued in the UI.
+    #
+    # The year-ago figure is what the trade quotes and what every other weight
+    # comparison on this portal uses, and a number nobody states the same way
+    # twice is worse than a slightly noisier one. Same ISO week either way, so
+    # the season is removed without a separate adjustment.
     Signal(
-        key="weight_vs_trend",
-        label="Live weight vs 8-yr same-week trend",
+        key="weight_vs_year",
+        label="Live weight vs year ago",
         question=Q_PACKER,
-        basis="LM_CT150 · head-weighted steer+heifer live weight · against a fit "
-              "on the SAME ISO WEEK of the prior 8 years, NOT against last year",
+        basis="LM_CT150 · head-weighted steer+heifer live weight · against the "
+              "SAME ISO WEEK a year ago, so the season is removed",
         source="LM_CT150",
-        pick=lambda b: _g(b, "weight", "vs_trend"),
+        pick=lambda b: _g(b, "weight", "vs_year_ago"),
         fmt="lb_signed", cadence="weekly", max_age_days=11,
         as_of=lambda b: _g(b, "weight", "week"),
         depth=FULL,
-        depth_note="LM_CT150 runs to 2004-05-03, but the 8-yr trend needs eight "
-                   "prior same-week points, so fitted values start ~2012.",
+        depth_note="LM_CT150 runs to 2004-05-03, 1,169 wks. A year-ago "
+                   "comparison needs only the prior year, so it reaches "
+                   "back further than the fitted version would.",
         page="Cash Cattle Trade",
     ),
 
     # -- Q_FEEDER -------------------------------------------------------------
+    # THE SETTLED INDEX, NEVER THE FORWARD ESTIMATE. Both tiles read the
+    # `published` block, which is the newest COMPLETED session -- CME's own
+    # printed figure when they have one (`from_cme`), our estimate for a
+    # finished day when they have not. It is never the unfinished day.
+    #
+    # `fetch_feeder_index`'s top-level `value` is the index CME will print
+    # NEXT. That is right for the CME Feeder Cattle Index dashboard and for the
+    # morning brief, which both label it an estimate -- the AM block's heading
+    # is literally "JSA FCI Estimate". It is wrong here for the same reason it
+    # was wrong in the evening letter on 2026-10-07: this board prints a figure
+    # with a label and no qualifier, so a reader takes it for the index as it
+    # stands. On that date the forward estimate read 335.86 off 228 locations
+    # and 17,524 head with the day still running, while CME had that morning
+    # published 10/06 at 337.87 -- a figure our own estimate had already agreed
+    # with to the cent (337.869294).
+    #
+    # `render.fci_published()` reads the same block for the two evening
+    # rundowns and the rundown slide, so the letter, the slide and this board
+    # quote one number and cannot drift. CLAUDE.md records three mornings lost
+    # to this figure disagreeing across surfaces.
     Signal(
         key="feeder_index",
         label="CME Feeder Cattle Index",
         question=Q_FEEDER,
         basis="Pound-weighted 12-state #1 and #1-2 M&L steers 700–899 lb · "
-              "rolling 7-day window · $/cwt",
-        source="JSA.CME_FEEDER_CATTLE",
-        pick=lambda b: _g(b, "fci", "value"),
+              "rolling 7-day window · $/cwt · the newest COMPLETED session, "
+              "CME's published figure where they have printed one — never the "
+              "estimate for a day still running",
+        source="JSA.CME_FEEDER_CATTLE (cme_ftp_daily)",
+        pick=lambda b: _g(b, "fci", "published", "value"),
         fmt="money", cadence="daily", max_age_days=4,
-        as_of=lambda b: _g(b, "fci", "date"),
+        as_of=lambda b: _g(b, "fci", "published", "date"),
         depth=FULL,
         depth_note="CME_FTP_DAILY 2015-01-01, 11.75 yrs. RESTATED values only — "
                    "one row per date, no as-of column. Point-in-time starts "
@@ -268,14 +412,14 @@ SIGNALS: tuple = (
     ),
     Signal(
         key="feeder_index_change",
-        label="Feeder index, day on day",
+        label="Feeder index, session on session",
         question=Q_FEEDER,
-        basis="Values rounded first, THEN differenced — so a reader holding two "
-              "days' prints can subtract them and get this",
-        source="JSA.CME_FEEDER_CATTLE",
-        pick=lambda b: _g(b, "fci", "change"),
+        basis="Two COMPLETED sessions · values rounded first, THEN differenced "
+              "— so a reader holding two prints can subtract them and get this",
+        source="JSA.CME_FEEDER_CATTLE (cme_ftp_daily)",
+        pick=lambda b: _g(b, "fci", "published", "change"),
         fmt="money_signed", cadence="daily", max_age_days=4,
-        as_of=lambda b: _g(b, "fci", "date"),
+        as_of=lambda b: _g(b, "fci", "published", "date"),
         depth=FULL, depth_note="As the index.",
         page="CME Feeder Cattle Index",
     ),

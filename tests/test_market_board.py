@@ -82,9 +82,17 @@ def bundle():
                       "beef_production": {"value": 487.0,
                                           "week_ending": "2026-10-03",
                                           "ytd_chg_pct": -5.2}},
-        "fci": {"value": 337.87, "date": "2026-10-06", "change": 0.65,
-                "cme_last_published": "2026-10-05"},
+        "fci": {"value": 335.86, "date": "2026-10-07", "change": -2.01,
+                "cme_last_published": "2026-10-06",
+                "published": {"value": 337.87, "date": "2026-10-06",
+                              "change": 0.65, "from_cme": True,
+                              "source": "CME published (cme_ftp_daily)"}},
         "corn": {"NE": {"price": 4.9889, "bid": 4.7389, "n": 703}},
+        "exports": {"ytd": 1574.33, "ytd_prior": 1497.0, "yoy_pct": 5.16,
+                    "implied_vs_forecast": -29.0, "months_left": 4},
+        "imports": {"ytd": 4358.48, "ytd_prior": 3812.34, "yoy_pct": 14.33,
+                    "implied_vs_forecast": 156.0, "months_left": 4},
+        "trade_asof": date(2026, 8, 1),
         "asof": {"corn": date(2026, 10, 7)},
         "errors": {},
     }
@@ -259,7 +267,7 @@ def test_the_leverage_tension_is_never_averaged(bundle):
                 for s in registry.SIGNALS}
     body = next(b for c, b, _ in meaning.crosses(readings, bundle)
                 if c.key == "leverage_tension")
-    assert "+86 lb" in body or "+85" in body
+    assert "+67 lb" in body
     assert "-38.2%" in body or "−38.2%" in body
     assert "disagree" in body.lower()
     src = _src(MEANING_PY)
@@ -353,3 +361,58 @@ def test_the_page_is_admin_gated_before_anything_renders():
     src = _src(APP_PY)
     assert "portal_auth.require_admin(" in src
     assert src.index("require_admin(") < src.index("import loaders")
+
+
+def test_the_index_tile_never_shows_the_forward_estimate(bundle):
+    """Ross, 2026-10-07: the board was quoting 335.86 -- our estimate for an
+    index date still running -- when CME had that morning published 10/06 at
+    337.87. The same defect the evening letter had, and the same fix: read the
+    `published` block, which is the newest COMPLETED session and can never be
+    the unfinished forward day."""
+    fci = registry.BY_KEY["feeder_index"]
+    assert fci.pick(bundle) == 337.87, "the tile must show CME's settled print"
+    assert fci.pick(bundle) != bundle["fci"]["value"], "that is the forward estimate"
+    assert fci.as_of(bundle) == "2026-10-06"
+    chg = registry.BY_KEY["feeder_index_change"]
+    assert chg.pick(bundle) == 0.65, "the move must be between two settled sessions"
+
+
+def test_the_weight_tile_compares_to_a_year_ago(bundle):
+    """Ross's call, 2026-10-07. weight_context returns both; the board takes
+    vs_year_ago. The eight-year fit reads larger (+85.7 against +67.3) because
+    the series drifts about +6.9 lb/yr, and that difference is recorded in the
+    registry rather than argued in the UI."""
+    w = registry.BY_KEY["weight_vs_year"]
+    assert w.pick(bundle) == bundle["weight"]["vs_year_ago"]
+    assert w.pick(bundle) != bundle["weight"]["vs_trend"]
+    assert "weight_vs_trend" not in registry.ALL_KEYS, "the old key must be gone"
+    assert "year ago" in w.basis.lower()
+
+
+def test_the_demand_card_exists_and_is_second(bundle):
+    """Demand sits between what beef is worth and what the packer earns,
+    because it is the REASON the cutout moves rather than a consequence."""
+    assert registry.Q_DEMAND in registry.QUESTIONS
+    assert registry.QUESTIONS.index(registry.Q_DEMAND) == 1
+    assert len(registry.for_question(registry.Q_DEMAND)) >= 4
+
+
+def test_the_demand_card_says_it_is_on_a_different_clock(bundle):
+    """ERS is monthly and about six weeks behind, where the cutout is same-day.
+    A max_age_days written against a weekly cadence would mark the whole card
+    stale every day of its life."""
+    for s in registry.for_question(registry.Q_DEMAND):
+        assert s.max_age_days >= 70, f"{s.key} would read stale on arrival"
+        assert "monthly" in s.cadence
+    r = meaning.read(registry.BY_KEY["imports_yoy"], bundle, date(2026, 10, 7))
+    assert r.state == meaning.OK, "August data on 7 October is normal, not stale"
+
+
+def test_the_demand_card_never_claims_the_weekly_export_figure(bundle):
+    """JSA already publishes FAS ESR weekly at jpsi.com/export-sales-dashboard.
+    That is a different figure -- sales not customs entries, product weight not
+    carcass -- and two JSA surfaces quoting different export numbers without
+    saying why is the failure this whole board is built to avoid."""
+    ex = registry.BY_KEY["exports_ytd"]
+    assert "carcass" in ex.basis.lower()
+    assert "ers" in ex.source.lower()
