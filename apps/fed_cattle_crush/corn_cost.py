@@ -40,9 +40,28 @@ defaults are lower because the crop grows next to the yard -- but they are
 estimates, and a feeder who knows their own delivered basis should overwrite
 them.
 """
-from datetime import date
+from datetime import date, timedelta
 
 import snowflake_db as db
+
+
+def _nearby_months(today=None) -> tuple:
+    """
+    ('oct', 'nov') -- the month fragments a nearby-delivery quote may carry.
+
+    Lowercase three-letter abbreviations, matched case-insensitively and
+    UNANCHORED, which is what makes "Sept", "September" and "FH Sept 26" all
+    fall out of the one fragment: `sep` is a substring of every spelling the
+    feed uses. See `_jsa` for the measurement that settled it.
+
+    Current month and the next, because a quote written late in a month is
+    routinely for delivery early in the following one -- "By Oct 2" appears in
+    September data. Two months is the window `delivered_corn` has always meant
+    by "nearby"; it was simply spelled as two literals.
+    """
+    today = today or date.today()
+    nxt = (today.replace(day=1) + timedelta(days=32)).replace(day=1)
+    return (today.strftime("%b").lower(), nxt.strftime("%b").lower())
 
 # 110+ nearby quotes each in the 2026-09-11 comparison.
 JSA_DEEP_STATES = {"IA", "SD", "NE", "MN", "ND", "MO", "KS", "CO"}
@@ -72,7 +91,32 @@ def _jsa_bids(conn, days=10):
 
     Nearby delivery only. A December bid is not what a feeder pays in September,
     and the curve between them is real money.
+
+    THE MONTHS ARE DERIVED AND THE MATCH IS UNANCHORED. Both halves of that were
+    wrong until 2026-10-07, and each was wrong on its own.
+
+    It read `ILIKE 'Sep%' OR ILIKE 'Oct%'` -- two literal months, correct for
+    two months of the year. From November it would have matched nothing and
+    `delivered_corn` would have fallen through to the thinner AMS path while
+    still labelling the figure "USDA AMS".
+
+    The anchor was the larger defect and it was costing rows every day.
+    DELIVERY_MONTH is free text as the elevator typed it, so a nearby October
+    quote is spelled "FH Oct 2026", "By Oct 9th", "Delv by Oct 10th",
+    "LH October 2026" or "10/02/2026 - 10/09/2026" at least as often as it is
+    spelled "Oct ...". Measured over the ten days to 2026-10-07: the anchored
+    filter returned 5,062 corn rows where an unanchored current-plus-next-month
+    filter returns 7,377. A THIRD of the nearby quotes were being dropped, and
+    which third depended on how each elevator writes a date -- so the per-state
+    average was taken over a biased subset, with the right number of states and
+    nothing to show anything was missing.
+
+    NAMES ONLY, NOT NUMERIC FORMS. `%10/%` would add the "10/02/2026 -
+    10/09/2026" spellings, worth 42 rows of the 7,377, and would also match the
+    "10/" inside a date like 1/10/2027. Names alone carry 7,347 of the 7,377 --
+    99.6% of the gain for none of the false-positive surface.
     """
+    near = _nearby_months()
     rows = conn.cursor().execute(f"""
         SELECT m.STATE, r.FUTURES_SYMBOL, r.BASIS_CENTS
         FROM JSA.BASIS_TRACKER.SNAPSHOT_ROWS r
@@ -81,8 +125,8 @@ def _jsa_bids(conn, days=10):
           ON m.PROVIDER = s.PROVIDER AND m.LOCATION = s.LOCATION
         WHERE r.GRAIN = 'Corn' AND r.BASIS_CENTS IS NOT NULL
           AND s.TIMESTAMP >= DATEADD(day, -{int(days)}, CURRENT_DATE())
-          AND (r.DELIVERY_MONTH ILIKE 'Sep%' OR r.DELIVERY_MONTH ILIKE 'Oct%')
-    """).fetchall()
+          AND (r.DELIVERY_MONTH ILIKE %s OR r.DELIVERY_MONTH ILIKE %s)
+    """, [f"%{near[0]}%", f"%{near[1]}%"]).fetchall()
     fut = dict(conn.cursor().execute("""
         SELECT SYMBOL, PRICE_CENTS FROM JSA.BASIS_TRACKER.FUTURES_PRICES
         WHERE DATE = (SELECT MAX(DATE) FROM JSA.BASIS_TRACKER.FUTURES_PRICES)
