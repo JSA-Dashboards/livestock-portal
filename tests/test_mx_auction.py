@@ -15,7 +15,7 @@ from datetime import date
 import pytest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(_HERE, "..", "scripts"))
+sys.path.insert(0, os.path.join(_HERE, "..", "deploy"))
 
 import mx_auction as mx  # noqa: E402
 
@@ -223,3 +223,61 @@ def test_per_head_rows_are_not_converted_as_though_per_kilo():
     assert q.unit == mx.PER_HEAD
     # the page only converts PER_KG rows; this asserts the flag it switches on
     assert mx.usd_per_cwt(q.average, 17.5841) > 10_000
+
+
+# ── the droplet contract, read off the host on 2026-10-07 ───────────────────
+# These pin facts about the machine, not about this code, and every one of them
+# is a way the job installs cleanly and then does nothing.
+
+_DEPLOY = os.path.join(_HERE, "..", "deploy")
+_INSTALLER = os.path.join(_DEPLOY, "install_mx_auction_cron.sh")
+_WRAPPER = os.path.join(_DEPLOY, "run_mx_auction.sh")
+
+
+def test_the_cron_line_never_invokes_python_directly():
+    """cron gives a job almost no environment and this host keeps its Snowflake
+    block in a .env FILE beside the code. A crontab line calling python gets no
+    credentials and writes nothing, every run, looking installed.
+    """
+    src = open(_INSTALLER, encoding="utf-8").read()
+    line = next(l for l in src.splitlines() if l.startswith("CRON_LINE="))
+    assert "/bin/python" not in line and "python3" not in line, line
+    assert "run_mx_auction.sh" in line, line
+
+
+def test_the_cron_line_goes_through_the_alert_wrapper():
+    """The droplet's crontab header, verbatim: "cron here has no MAILTO and the
+    box has no MTA, so a bare entry fails silently." The exit code reaching
+    /opt/alerting/cron-alert is the entire alerting contract.
+    """
+    src = open(_INSTALLER, encoding="utf-8").read()
+    line = next(l for l in src.splitlines() if l.startswith("CRON_LINE="))
+    assert "/opt/alerting/cron-alert" in line or "$ALERT" in line, line
+    assert "ALERT=\"/opt/alerting/cron-alert\"" in src
+
+
+def test_the_installer_refuses_without_the_alert_wrapper():
+    src = open(_INSTALLER, encoding="utf-8").read()
+    assert '[ ! -x "$ALERT" ]' in src, "a missing cron-alert must be a hard stop"
+
+
+def test_the_installer_sources_dotenv_rather_than_the_shell():
+    """An earlier version checked exported variables only, so a correctly
+    configured droplet reported every one MISSING and the installer refused to
+    run on a host that was ready."""
+    src = open(_INSTALLER, encoding="utf-8").read()
+    assert '. "$DEST/.env"' in src or 'source "$DEST/.env"' in src
+
+
+def test_the_wrapper_sources_dotenv_and_exits_nonzero_on_failure():
+    src = open(_WRAPPER, encoding="utf-8").read()
+    assert "source .env" in src
+    assert 'exit "$rc"' in src, "cron-alert keys on the exit code"
+
+
+def test_the_wrapper_handles_a_missing_flock_explicitly():
+    """`if ! flock -n 9` reads as "could not take the lock" when flock is simply
+    absent -- command-not-found is 127 and `!` makes that true -- so the job
+    exits 0 having done nothing."""
+    src = open(_WRAPPER, encoding="utf-8").read()
+    assert "command -v flock" in src

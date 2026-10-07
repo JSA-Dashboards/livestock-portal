@@ -31,8 +31,22 @@ PY="$DEST/.venv/bin/python"
 # finds nothing new costs two small requests and writes nothing. That is what
 # lets this be a blunt schedule instead of a guess at when an auction posts,
 # and it means no DST arithmetic and no Mexican holiday calendar to maintain.
-CRON_LINE="30 13,23 * * * cd $DEST && .venv/bin/python scripts/mx_auction.py >> $LOG"
-CRON_TAG="scripts/mx_auction.py"
+#
+# TIMES ARE AMERICA/CHICAGO. The host reports CDT -0500 and its crontab header
+# says so; an earlier version of this file printed UTC and would have had a
+# reader reasoning about the wrong clock. The schedule is blunt enough that it
+# does not matter, which is not a reason to state it wrongly.
+#
+# IT GOES THROUGH /opt/alerting/cron-alert, AND THAT IS NOT DECORATION. The
+# crontab's own header on that box reads: "cron here has no MAILTO and the box
+# has no MTA, so a bare entry fails silently." All ~25 jobs on the host use the
+# wrapper; it mails on a non-zero exit, attaches the matching log, and kills a
+# run that hangs past ALERT_TIMEOUT. A bare line would mean nobody ever hears
+# that this job died -- the exact outcome the dry run below exists to prevent,
+# arriving a week later instead.
+ALERT="/opt/alerting/cron-alert"
+CRON_LINE="30 13,23 * * * $ALERT \"Mexican auction prices\" \"$DEST/logs/mx_auction_*.log\" $DEST/deploy/run_mx_auction.sh"
+CRON_TAG="deploy/run_mx_auction.sh"
 
 CHECK_ONLY=0
 [ "${1:-}" = "--check" ] && CHECK_ONLY=1
@@ -41,7 +55,7 @@ say() { printf '  %s\n' "$*"; }
 
 echo "== what is already here =="
 say "host:    $(hostname)"
-say "date:    $(date -u '+%Y-%m-%d %H:%M:%SZ') (UTC)"
+say "date:    $(date '+%Y-%m-%d %H:%M:%S %Z') (host local; crontab is America/Chicago)"
 say "checkout: $([ -d "$DEST/.git" ] && echo "$DEST" || echo 'absent')"
 if crontab -l 2>/dev/null | grep -qF "$CRON_TAG"; then
   say "cron:    already installed"
@@ -52,8 +66,21 @@ echo "  existing crontab:"
 crontab -l 2>/dev/null | sed 's/^/    /' || echo "    (none)"
 
 # -- credentials, by presence only; never print a secret ----------------------
+#
+# SOURCED FROM $DEST/.env, NOT FROM THE SHELL. Every other repo on this host
+# keeps its Snowflake block in a .env beside the code -- that is what
+# beef-trimmings-dashboard's deploy/run_fetch.sh does -- and root's environment
+# carries none of it. An earlier version of this check read exported variables
+# only, so a correctly configured droplet reported every one MISSING and the
+# installer refused to run on a host that was ready.
 echo
 echo "== snowflake environment =="
+if [ -f "$DEST/.env" ]; then
+  say "reading $DEST/.env"
+  set -a; . "$DEST/.env"; set +a
+else
+  say "no $DEST/.env yet (it is created with the checkout below on a new host)"
+fi
 MISSING=""
 for v in USE_SNOWFLAKE SNOWFLAKE_ACCOUNT SNOWFLAKE_USER SNOWFLAKE_ROLE \
          SNOWFLAKE_WAREHOUSE SNOWFLAKE_DATABASE; do
@@ -78,8 +105,18 @@ fi
 if [ -n "$MISSING" ]; then
   echo
   echo "STOPPING: missing env:$MISSING" >&2
-  echo "Export these (the same block the am_cutout job uses) and re-run." >&2
+  echo "Put these in $DEST/.env (the same block the am_cutout job uses)." >&2
   echo "Nothing was changed." >&2
+  exit 1
+fi
+
+# A job whose failures nobody hears about is worse than one that is not
+# installed, so this is a hard stop rather than a warning.
+if [ ! -x "$ALERT" ]; then
+  echo
+  echo "STOPPING: $ALERT is missing or not executable." >&2
+  echo "Every job on this host is wrapped in it; cron here mails nothing on" >&2
+  echo "its own, so an unwrapped job fails silently. Nothing was changed." >&2
   exit 1
 fi
 
@@ -108,11 +145,13 @@ say "installing deps"
 # -- prove it works BEFORE installing the schedule ----------------------------
 echo
 echo "== dry run (writes nothing) =="
-"$PY" "$DEST/scripts/mx_auction.py" --dry-run
+"$PY" "$DEST/deploy/mx_auction.py" --dry-run
 
 echo
 echo "== first real run =="
-"$PY" "$DEST/scripts/mx_auction.py"
+"$PY" "$DEST/deploy/mx_auction.py"
+
+chmod +x "$DEST/deploy/run_mx_auction.sh"
 
 # -- crontab: append, never replace -------------------------------------------
 echo
