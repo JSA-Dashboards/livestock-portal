@@ -18,7 +18,12 @@ set -euo pipefail
 
 REPO_URL="https://github.com/JSA-Dashboards/livestock-portal.git"
 DEST="${DEST:-/opt/livestock-portal}"
-LOG="${LOG:-/var/log/am_cutout.log}"
+# No LOG= here any more. It used to default to /var/log/am_cutout.log,
+# left over from when cron redirected stdout itself. The wrapper writes
+# timestamped logs inside the checkout now, so a stale path would hand
+# cron-alert a glob for a file nothing writes -- a failure mail arriving
+# with nothing in it. LOGGLOB below is derived from $DEST and is the only
+# log path in this file.
 PY="$DEST/.venv/bin/python"
 
 # stdout to the log, stderr deliberately NOT redirected: cron mails stderr and

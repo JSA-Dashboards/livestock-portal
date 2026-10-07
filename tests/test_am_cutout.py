@@ -425,3 +425,56 @@ def test_the_installer_reads_the_crontab_back_after_writing():
     # and the failure must be loud and non-zero, not a printed warning
     tail = src[src.index("installed=$(crontab -l"):]
     assert "exit 1" in tail
+
+
+def _strip_sh_comments(src: str) -> str:
+    """
+    Shell source with comment lines removed.
+
+    NEEDED BECAUSE THE COMMENTS EXPLAIN THE RULES THE TESTS CHECK, and a
+    plain substring search then matches the explanation and fails in the
+    direction that looks like a real finding. Third time in this file; see
+    the AST notes above and tests/test_rundown.py.
+    """
+    return "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#"))
+
+
+def test_the_alerting_glob_matches_the_log_the_wrapper_writes():
+    """
+    cron-alert is handed a glob and attaches whatever matches it to the
+    failure mail. If the wrapper writes somewhere else, the mail arrives
+    EMPTY — the alerting path itself reporting success it has not earned,
+    which is the same bug as a job that installs and does nothing.
+    """
+    inst = _strip_sh_comments(
+        (REPO / "deploy" / "install_am_cutout_cron.sh").read_text(encoding="utf-8"))
+    wrap = _strip_sh_comments(WRAPPER.read_text(encoding="utf-8"))
+
+    assert 'LOGGLOB="$DEST/logs/am_cutout_*.log"' in inst
+    # the wrapper must write into <app>/logs with that same prefix
+    assert 'LOG_DIR="$APP_DIR/logs"' in wrap
+    assert 'LOG="$LOG_DIR/am_cutout_' in wrap
+    # and the 30-day prune must target the files it actually creates
+    assert "-name 'am_cutout_*.log'" in wrap
+
+
+def test_no_stale_var_log_path_survives_anywhere():
+    """
+    The wrapper writes inside the checkout. A leftover /var/log default is a
+    glob for a file nothing writes.
+    """
+    for f in ("deploy/install_am_cutout_cron.sh", "deploy/run_am_cutout.sh"):
+        src = _strip_sh_comments((REPO / f).read_text(encoding="utf-8"))
+        assert "/var/log" not in src, f
+
+
+def test_the_read_back_count_is_exact_not_a_lower_bound():
+    """
+    `-gt 0` would wave through a line that landed TWICE from a re-run that
+    appended again, and a doubled entry on a job with a 90-minute
+    ALERT_TIMEOUT is not harmless.
+    """
+    src = _strip_sh_comments(
+        (REPO / "deploy" / "install_am_cutout_cron.sh").read_text(encoding="utf-8"))
+    assert '[ "$installed" -ne 2 ]' in src
+    assert "-gt 0" not in src and "-ge 1" not in src
