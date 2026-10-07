@@ -406,3 +406,22 @@ def test_the_installer_refuses_to_write_a_bare_crontab_entry():
     for line in src.splitlines():
         if line.startswith("CRON_LINE"):
             assert "bin/python" not in line, line
+
+
+def test_the_installer_reads_the_crontab_back_after_writing():
+    """
+    AN INSTALLER THAT CLAIMS SUCCESS IT HAS NOT EARNED is the same silent
+    failure as the job it installs, moved one level up.
+
+    The earlier version printed "appending", piped into `crontab -`, and went
+    straight to "done" — the only thing resembling a check was a cosmetic
+    grep whose empty output looked exactly like a successful one. A sibling
+    installer copied from this one reported "cron installed" on a host where
+    nothing had been installed, which is how this was found.
+    """
+    src = (REPO / "deploy" / "install_am_cutout_cron.sh").read_text(encoding="utf-8")
+    assert "installed=$(crontab -l" in src, "no read-back after the write"
+    assert '[ "$installed" -ne 2 ]' in src, "read-back does not assert a count"
+    # and the failure must be loud and non-zero, not a printed warning
+    tail = src[src.index("installed=$(crontab -l"):]
+    assert "exit 1" in tail

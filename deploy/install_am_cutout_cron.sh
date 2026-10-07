@@ -155,6 +155,14 @@ echo "== first real run =="
 "$PY" "$DEST/deploy/bank_am_cutout.py"
 
 # -- crontab: append, never replace -------------------------------------------
+#
+# AND THEN READ IT BACK. The previous version printed "appending", piped into
+# `crontab -`, and went straight to "== done ==" -- the only thing resembling
+# a check was a cosmetic `grep` whose empty output looked identical to a
+# successful one. A sibling installer copied from this one reported "cron
+# installed" on a host where nothing had been installed. An installer that
+# claims success it has not earned is the same silent failure as the job it
+# installs, moved one level up.
 echo
 echo "== cron =="
 if crontab -l 2>/dev/null | grep -qF "$CRON_TAG"; then
@@ -168,9 +176,23 @@ else
     echo "$CRON_LINE2"
   } | crontab -
 fi
-touch "$LOG"
+
+# The verification, and it is not optional: count OUR lines in the crontab as
+# it now reads. Two expected, and anything else is a failure to report, not a
+# cosmetic difference.
+installed=$(crontab -l 2>/dev/null | grep -cF "$CRON_TAG" || true)
+if [ "$installed" -ne 2 ]; then
+  echo
+  echo "FAILED: expected 2 crontab lines matching '$CRON_TAG', found $installed." >&2
+  echo "The crontab did not take. Nothing is scheduled; do not assume it is." >&2
+  crontab -l 2>/dev/null | sed 's/^/    /' >&2 || echo "    (crontab unreadable)" >&2
+  exit 1
+fi
+say "verified: $installed lines present"
+
+mkdir -p "$DEST/logs"
 
 echo
 echo "== done =="
-crontab -l | grep -A2 'morning boxed beef' | sed 's/^/  /'
-say "log: $LOG"
+crontab -l | grep -B1 -A1 "$CRON_TAG" | sed 's/^/  /'
+say "logs: $DEST/logs/am_cutout_*.log  (cron-alert mails on a non-zero exit)"

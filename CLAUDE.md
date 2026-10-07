@@ -1090,9 +1090,18 @@ or `SNOWFLAKE_PRIVATE_KEY`. **Not `SNOWFLAKE_SCHEMA`** — `am_cutout` names
 its table in full and takes no part in the five-module collision at the top
 of this file.
 
-The installer is idempotent: it pulls rather than re-clones and **appends to
-the crontab rather than replacing it**, so the ~25 jobs already on that host
-survive. `--check` reports and changes nothing. It stops before cloning or
+**The installer reads the crontab back after writing it**, counts its own two
+lines, and exits non-zero if they are not there. That is not belt-and-braces:
+the first version printed "appending", piped into `crontab -`, and went
+straight to "done", with only a cosmetic `grep` whose empty output looked
+exactly like a successful one. A sibling installer copied from it reported
+"cron installed" on a host where nothing had been. **An installer that claims
+success it has not earned is the same silent failure as the job it installs,
+one level up.**
+
+The installer is otherwise idempotent: it pulls rather than re-clones and
+**appends to the crontab rather than replacing it**, so the ~25 jobs already
+on that host survive. `--check` reports and changes nothing. It stops before cloning or
 touching cron when the Snowflake block or the alerting wrapper is missing,
 because **a job installed without credentials fails silently once a day for
 ever**, which is the one outcome worse than not installing it.
