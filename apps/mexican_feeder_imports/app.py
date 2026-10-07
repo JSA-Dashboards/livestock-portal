@@ -1460,10 +1460,19 @@ with tab_prices:
             f"{C['auction'].title()}, against the AMS border quote for "
             f"**{fmt_date(C['us_dates'].get('M'))}**" + _gapwords + _fxwords)
 
+        # DERIVED, NOT TYPED. This sentence carried a hard-coded "60%" and the
+        # headline moved to 59% the moment the AMS price started being read off
+        # the slide instead of a bracket -- so the tile and the sentence six
+        # inches below it disagreed about the same figure. That is the
+        # letter-vs-dashboard failure CLAUDE.md records twice, in miniature:
+        # both numbers defensible, neither raising. The Packer Leverage tab's
+        # honesty check is computed live for the same reason.
+        _pct = steer["pct"] if steer else None
         st.caption(
             "This is a **level, not a margin**. Nothing here nets out freight, "
-            "the test, the crossing fee, shrink or the buyer's margin, so a "
-            "calf worth 60% of the Douglas price is not 40% of profit."
+            "the test, the crossing fee, shrink or the buyer's margin"
+            + (f", so a calf worth {_pct:.0f}% of the Douglas price is not "
+               f"{100 - _pct:.0f}% of profit." if _pct else ".")
         )
 
         st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
