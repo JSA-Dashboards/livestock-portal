@@ -33,8 +33,26 @@ PY="$DEST/.venv/bin/python"
 # reports UTC, and the job is idempotent, so a sweep that covers both readings
 # costs a few no-op PDF fetches and removes the guess. The installer prints
 # the host's actual timezone below; tighten this once it is known.
-CRON_LINE="0 11-22 * * 1-6 $DEST/scripts/run_am_cutout.sh"
-CRON_TAG="run_am_cutout.sh"
+# EVERY LINE ON THIS HOST GOES THROUGH /opt/alerting/cron-alert, and that is
+# not decoration. The droplet's crontab says so in its own header: cron here
+# has no MAILTO and the box has no MTA, so a BARE ENTRY FAILS SILENTLY. The
+# wrapper emails on a non-zero exit, attaches the matching log, and kills a
+# job that hangs past ALERT_TIMEOUT. An earlier version of this installer
+# wrote a bare entry and asserted that cron mails stderr -- it does not, here.
+#
+# TIMES ARE AMERICA/CHICAGO. Confirmed 2026-10-07: the host reports CDT -0500
+# and the crontab header states it outright. The earlier 11-22 sweep was
+# hedging a timezone that is now known, so it is gone.
+#
+# 11:15 against a ~10:55 CT release, plus an afternoon catch-up for the days
+# USDA runs late -- the primary-plus-catch-up shape the beef-trimmings fetch
+# already uses (Fri 16:30 + Mon 07:00). Mon-Fri: there is no weekend morning
+# cutout, and bank() would no-op anyway.
+ALERT="/opt/alerting/cron-alert"
+LOGGLOB="$DEST/logs/am_cutout_*.log"
+CRON_LINE="15 11 * * 1-5 $ALERT 'Beef cutout morning bank' '$LOGGLOB' $DEST/deploy/run_am_cutout.sh"
+CRON_LINE2="0 14 * * 1-5 $ALERT 'Beef cutout morning bank (catch-up)' '$LOGGLOB' $DEST/deploy/run_am_cutout.sh"
+CRON_TAG="deploy/run_am_cutout.sh"
 
 CHECK_ONLY=0
 [ "${1:-}" = "--check" ] && CHECK_ONLY=1
@@ -89,6 +107,15 @@ if [ "$CHECK_ONLY" = "1" ]; then
   exit 0
 fi
 
+if [ ! -x "$ALERT" ]; then
+  echo
+  echo "STOPPING: $ALERT is missing or not executable." >&2
+  echo "Every job on this host is alerted through it; cron here has no" >&2
+  echo "MAILTO and the box has no MTA, so a bare entry fails SILENTLY." >&2
+  echo "Nothing was changed." >&2
+  exit 1
+fi
+
 if [ -n "$MISSING" ]; then
   echo
   echo "STOPPING: missing env:$MISSING" >&2
@@ -117,15 +144,15 @@ say "installing deps"
   requests pypdf pandas snowflake-connector-python
 
 # -- prove it works BEFORE installing the schedule ----------------------------
-chmod +x "$DEST/scripts/run_am_cutout.sh"
+chmod +x "$DEST/deploy/run_am_cutout.sh"
 
 echo
 echo "== dry run (writes nothing) =="
-"$PY" "$DEST/scripts/bank_am_cutout.py" --dry-run
+"$PY" "$DEST/deploy/bank_am_cutout.py" --dry-run
 
 echo
 echo "== first real run =="
-"$PY" "$DEST/scripts/bank_am_cutout.py"
+"$PY" "$DEST/deploy/bank_am_cutout.py"
 
 # -- crontab: append, never replace -------------------------------------------
 echo
@@ -134,13 +161,16 @@ if crontab -l 2>/dev/null | grep -qF "$CRON_TAG"; then
   say "already present, leaving it alone"
 else
   say "appending"
-  { crontab -l 2>/dev/null || true; \
-    echo "# USDA morning boxed beef cutout -> JSA.BOXED_BEEF.CUTOUT_AM"; \
-    echo "$CRON_LINE"; } | crontab -
+  {
+    crontab -l 2>/dev/null || true
+    echo "# USDA morning boxed beef cutout -> JSA.BOXED_BEEF.CUTOUT_AM (times are CT)"
+    echo "$CRON_LINE"
+    echo "$CRON_LINE2"
+  } | crontab -
 fi
 touch "$LOG"
 
 echo
 echo "== done =="
-crontab -l | grep -A1 'morning boxed beef' | sed 's/^/  /'
+crontab -l | grep -A2 'morning boxed beef' | sed 's/^/  /'
 say "log: $LOG"

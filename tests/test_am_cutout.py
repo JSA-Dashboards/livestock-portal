@@ -331,7 +331,10 @@ def test_it_never_imports_snowflake_db_by_bare_name():
 
 # -- The droplet cron script --------------------------------------------------
 
-CRON = REPO / "scripts" / "bank_am_cutout.py"
+# deploy/, not scripts/: the droplet runs every job as
+# /opt/<repo>/deploy/run_<x>.sh, which its crontab shows ten times over.
+CRON = REPO / "deploy" / "bank_am_cutout.py"
+WRAPPER = REPO / "deploy" / "run_am_cutout.sh"
 
 
 def test_the_cron_script_exists_and_parses():
@@ -379,3 +382,27 @@ def test_the_cron_never_hardcodes_a_schedule_or_a_holiday_list():
             if len(low) < 200:
                 assert "america/" not in low, "the cron should need no timezone"
                 assert "holiday" not in low, "the cron should need no holiday list"
+
+
+def test_the_wrapper_sources_env_and_exits_nonzero_on_failure():
+    """
+    The two things the droplet's own crontab header makes non-negotiable:
+    credentials live in a .env file beside the code, and this box has no
+    MAILTO and no MTA, so /opt/alerting/cron-alert keys on the EXIT CODE.
+    A wrapper that swallowed either would install cleanly and record nothing.
+    """
+    src = WRAPPER.read_text(encoding="utf-8")
+    assert "source .env" in src
+    assert 'exit "$rc"' in src
+
+
+def test_the_installer_refuses_to_write_a_bare_crontab_entry():
+    """A bare entry fails silently on this host — see the crontab header."""
+    src = (REPO / "deploy" / "install_am_cutout_cron.sh").read_text(encoding="utf-8")
+    assert "/opt/alerting/cron-alert" in src
+    assert 'if [ ! -x "$ALERT" ]; then' in src
+    # and it must schedule the WRAPPER, never python directly
+    assert "deploy/run_am_cutout.sh" in src
+    for line in src.splitlines():
+        if line.startswith("CRON_LINE"):
+            assert "bin/python" not in line, line

@@ -13,10 +13,9 @@
 # It is otherwise deliberately the same shape as run_fetch.sh -- same
 # /opt/<repo> clone, same .venv, same flock, same logs/ directory and 30-day
 # prune. A second job inventing its own conventions on a host that already has
-# one is how the next person finds two half-documented mechanisms. It lives in
-# scripts/ rather than deploy/ because that is where THIS repo already keeps
-# its droplet jobs (see scripts/mx_auction.py); if the two repos are ever
-# reconciled, move them together.
+# one is how the next person finds two half-documented mechanisms. The
+# droplet's crontab, read 2026-10-07, shows ten jobs on exactly this pattern:
+# /opt/<repo>/deploy/run_<x>.sh writing /opt/<repo>/logs/<x>_*.log.
 #
 # IDEMPOTENT, so the schedule can be blunt. am_cutout.bank() inserts only when
 # the report date is absent or its figures changed. A weekend run is a no-op:
@@ -62,14 +61,16 @@ set -a; source .env; set +a
 rc=0
 {
     echo "=== am cutout start $(date -Is) ==="
-    "$VENV/bin/python3" scripts/bank_am_cutout.py
+    "$VENV/bin/python3" deploy/bank_am_cutout.py
     rc=$?
     echo "=== am cutout finished $(date -Is) rc=$rc ==="
 } >>"$LOG" 2>&1
 
-# The python script's own stderr went into the log above, so re-surface a
-# failure where cron can mail it. A silent daily failure is the one outcome
-# worse than no job at all.
+# Re-surface a failure on stderr, and EXIT NON-ZERO, because that is what
+# /opt/alerting/cron-alert keys on -- see the crontab's own header: this box
+# has no MAILTO and no MTA, so plain cron mails nothing and a bare entry fails
+# SILENTLY. The exit code is the entire alerting contract here; the wrapper
+# emails on it and attaches the matching log.
 if [ "$rc" -ne 0 ]; then
     echo "am_cutout failed rc=$rc — see $LOG" >&2
     tail -n 5 "$LOG" >&2

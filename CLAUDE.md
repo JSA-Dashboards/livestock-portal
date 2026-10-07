@@ -1023,6 +1023,185 @@ fails looks exactly like a page nobody has opened, and months later there
 would be no history and no clue why. Same reasoning as the letter page's
 autosave banner.
 
+### The droplet cron — `deploy/run_am_cutout.sh`
+
+Written 2026-10-07 to close the holes the opportunistic write leaves. It
+**imports `apps/beef_cutout/am_cutout.py` by path rather than reimplementing
+anything**, so the cron and the page can never disagree about what a morning
+report says — a second copy of a PDF parser, running unattended where nobody
+would see it drift, is the `snowflake_db.py`-times-five problem with no
+renderer to catch it. A test asserts by AST that it defines none of
+`parse_am`, `_num`, `_after`, `bank`, `history` or `fetch_am`.
+
+    deploy/bank_am_cutout.py   the job (also `--dry-run`)
+    deploy/run_am_cutout.sh    the cron wrapper
+    deploy/install_am_cutout_cron.sh   installer, `--check` to report only
+
+#### Read the droplet's crontab before writing a job for it
+
+The first two versions of this were wrong in ways that would have installed
+cleanly and then failed silently for ever. Both were settled by one read-only
+`--check` run on the host, 2026-10-07, and neither was guessable from here.
+
+- **Cron on that box mails NOTHING.** Its crontab header says so: there is no
+  `MAILTO` and the machine has no MTA, so **a bare entry fails silently**.
+  Every one of its ~25 jobs runs through `/opt/alerting/cron-alert "<name>"
+  "<log glob>" <script>`, which emails on a non-zero exit, attaches the
+  matching log, and kills a job that hangs past `ALERT_TIMEOUT` (90m). The
+  installer refuses to write a bare entry. An earlier draft of this section
+  asserted "cron mails stderr, and a non-zero exit is the whole alerting
+  story" — the second half is right and the first is false here.
+- **The host runs America/Chicago, not UTC** (`CDT -0500`, and the crontab
+  header states it). An earlier wide 11–22 sweep was hedging that unknown.
+- **Credentials live in `$DEST/.env`**, not root's environment — the
+  convention `beef-trimmings-dashboard`'s `deploy/run_fetch.sh` has used
+  since 2026-10-04. A crontab line calling `.venv/bin/python` directly gets
+  no environment under cron, so `am_cutout.enabled()` returns False and the
+  job records nothing while looking installed. Sourcing `.env` is the whole
+  reason the wrapper exists.
+- **`deploy/`, not `scripts/`.** Ten jobs on that host are
+  `/opt/<repo>/deploy/run_<x>.sh` writing `/opt/<repo>/logs/<x>_*.log`.
+
+The schedule, times CT:
+
+    15 11 * * 1-5  cron-alert ... deploy/run_am_cutout.sh   # ~20m after release
+    0  14 * * 1-5  cron-alert ... (catch-up)                # for a late USDA
+
+Primary plus catch-up is the shape the beef-trimmings fetch already uses
+(Fri 16:30 + Mon 07:00). Mon–Fri only: there is no weekend morning cutout.
+
+**The job is idempotent, which is what makes a blunt schedule safe.**
+`bank()` inserts only when the report date is absent or its figures changed,
+so the catch-up costs one PDF fetch and writes nothing, and a run on a day
+USDA did not publish is a no-op because the PDF still serves the last
+session. No holiday calendar to maintain and none to get wrong.
+
+Two details in the wrapper that look like paranoia and are not. **A missing
+`flock` is handled explicitly**, because `if ! flock -n 9` reads as "could not
+get the lock" when the binary is simply absent — command-not-found is 127,
+`!` makes it true, and the job exits 0 having done nothing while looking
+healthy. And it **`cd`s before creating anything**, so a wrong `APP_DIR`
+fails instead of scattering a `logs/` directory elsewhere.
+
+Needs `requests`, `pypdf`, `pandas`, `snowflake-connector-python`, and the
+Snowflake block in `$DEST/.env`: `USE_SNOWFLAKE=1`, `SNOWFLAKE_ACCOUNT` /
+`USER` / `ROLE` / `WAREHOUSE` / `DATABASE`, and either `SNOWFLAKE_PASSWORD`
+or `SNOWFLAKE_PRIVATE_KEY`. **Not `SNOWFLAKE_SCHEMA`** — `am_cutout` names
+its table in full and takes no part in the five-module collision at the top
+of this file.
+
+The installer is idempotent: it pulls rather than re-clones and **appends to
+the crontab rather than replacing it**, so the ~25 jobs already on that host
+survive. `--check` reports and changes nothing. It stops before cloning or
+touching cron when the Snowflake block or the alerting wrapper is missing,
+because **a job installed without credentials fails silently once a day for
+ever**, which is the one outcome worse than not installing it.
+
+**Claude cannot run it.** SSH to the droplet is blocked by the harness as a
+production action, and the user saying "go ahead" does not clear it — nor can
+Claude grant itself the rule, which is the point of the gate. Hand over the
+command; the same applies to merging PRs.
+
+**As of 2026-10-07 it is NOT installed**: `/opt/livestock-portal` does not
+exist on that host, there is no `.env` for it, and no livestock-portal job is
+in the crontab.
+
+### Four things that look wrong and are not
+
+- **Negotiated grid is NOT folded into the headline.** Its base is negotiated
+  in the week, so for "did the packer have to transact" it belongs with cash;
+  for "what share discovered a cash price" the convention is cash alone. They
+  differ by a third — 19.7% against 29.1% for w/e 2026-09-28 — so the page
+  prints the strict one, shows grid as its own band, and picks neither.
+- **The denominator is USDA's published total, not the four parts summed.**
+  They agree exactly today (0 head across 12 weeks). If USDA ever adds a fifth
+  category, a derived total would keep the shares summing to 100% while
+  describing less than the whole kill; the published one makes that visible.
+- **Coverage divides the committed book by a FOUR-WEEK shipping pace.** A
+  holiday week halves the denominator and prints a coverage spike that is only
+  the calendar.
+- **Imported head are counted as committed supply.** An imported formula steer
+  is still an animal nobody had to bid for.
+
+**It is the share of the REPORTED kill, not of US fed slaughter.** Plants
+outside mandatory reporting are not in the denominator, so read it as a ratio
+over time — which is how it is published — not as a national head count. And
+LM_CT153 reports the PRIOR week, so the tab is one week behind the daily cash
+prices on the other tabs. That is USDA's schedule, not staleness.
+
+A share is a number between 0 and 1 whether or not it is right, so none of the
+above fails loudly. `tests/test_packer_leverage.py` pins all of it.
+
+## The morning cutout — LM_XB402
+
+Added 2026-10-06. The Beef Cutout page now reads **both** daily cutout
+reports, behind a session switch at the top: `Morning (9:30am) | Afternoon
+(close)`. Fetching, parsing and the Snowflake banking are in
+`apps/beef_cutout/am_cutout.py`; the panel is in `app.py` next to the brand
+helpers it needs, the same split as `cof_recap` and `leverage`.
+
+**They are TWO REPORTS, not one report published twice**, and the sidebar used
+to say otherwise. LM_XB403 goes out once, in the afternoon. The morning
+figures are LM_XB402 — a separate report, a separate slug, and the gap between
+them is the point: on 2026-10-06 the morning said Choice 382.46, **+4.20**,
+and the close printed 378.93, **+0.67**. A $3.53 fade the portal could not
+show.
+
+### There is no feed for it and no history anywhere — do not go looking again
+
+Established by probe on 2026-10-06. Every avenue is closed:
+
+- The datamart catalog (`GET /services/v1.1/reports`, 151 reports) **does not
+  list slug 2452 at all**. 2453 is the only daily boxed beef cutout in it.
+- Slug 2452 answers HTTP **200** with the body `"No Results Found. "` to every
+  query shape — bare, `lastReports`, `allSections`, and an explicit
+  `report_date` range. A named section instead returns "Unable to find this
+  subreport", so the service knows the slug and has no rows for it. A 200 that
+  means "nothing here" is the trap `direct_reports.py` documents for MARS.
+- MARS v1.2 refuses it: `"Slug Id is invalid / Report has no data"`. MARS
+  carries **no boxed beef reports of any kind** — five titles match "beef" and
+  they are trimmings, variety meats and retail features.
+- The only live copy is `www.ams.usda.gov/mnreports/ams_2452.pdf`,
+  **overwritten in place every morning**. A `?date=` parameter is accepted and
+  silently ignored, returning today's bytes whatever you ask for.
+
+So the look-back **cannot be back-filled**. It accrues from the first day the
+page records one, and the panel says so rather than letting an empty table
+read as a broken one.
+
+**It costs no new secret and no new host.** `www.ams.usda.gov/mnreports/` is
+already fetched from the deployed app by `letter/sources.AMS_3208_PDF` with
+the same `pypdf`, so unlike `marsapi.ams.usda.gov` this path works on
+Community Cloud.
+
+### Banking is opportunistic, and that is a known gap
+
+`JSA.BOXED_BEEF.CUTOUT_AM`, append-only and newest-wins per `REPORT_DATE`, the
+same shape as `JSA.LETTER.DRAFTS` and for the same reasons: USDA issues
+corrections, an INSERT needs no UPDATE grant, and no write can bury the figure
+that was actually published.
+
+Community Cloud has no scheduler — the constraint `letter/rundown.py` records
+— so **the page itself is the only thing that writes**, on whichever days
+somebody opens it after the morning release. Days nobody opens it are holes.
+A cron on the droplet that already writes `JSA.BEEF_TRIMMINGS.IMPORT_COW90`
+can take the same table over without changing the page.
+
+**The portal created the schema itself on first run, which was not the
+expectation.** It was expected to sit dead until an admin created
+`JSA.BOXED_BEEF`, on the assumption that the deployed identity is scoped the
+way Ross's CME_INGEST_ROLE is — read-only plus one schema. It is not: on the
+first live run, 2026-10-07, `ensure_table()` created schema and table and
+banked Oct 06 straight away (Choice AM 382.46 / PM 378.93, fade −3.53). That
+is the same CREATE SCHEMA capability `letter/draft_store.py` relied on for
+`JSA.LETTER`. **Do not assume the deployed app cannot create what it needs.**
+
+If the write ever does fail, the page prints `⚠️ Morning cutout is not being
+recorded` with the reason. That banner is deliberate: a write that silently
+fails looks exactly like a page nobody has opened, and months later there
+would be no history and no clue why. Same reasoning as the letter page's
+autosave banner.
+
 ### The droplet cron — `scripts/bank_am_cutout.py`
 
 Written 2026-10-07 to close the holes the opportunistic write leaves. It
