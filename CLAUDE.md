@@ -1046,12 +1046,41 @@ nothing. Two things fall out:
   is no list to maintain and none to get wrong.
 
     # USDA morning boxed beef cutout -> JSA.BOXED_BEEF.CUTOUT_AM
-    0 16-22 * * 1-6 cd /opt/livestock-portal && .venv/bin/python scripts/bank_am_cutout.py >> /var/log/am_cutout.log
+    0 11-22 * * 1-6 /opt/livestock-portal/scripts/run_am_cutout.sh
 
-16–22 UTC is 11:00–17:00 CDT / 10:00–16:00 CST, against a ~10:55 CT release.
+**CRON CALLS THE WRAPPER, NOT PYTHON, AND THAT IS NOT STYLE.** The Snowflake
+block on the droplet lives in a `.env` FILE beside the code — the convention
+`beef-trimmings-dashboard`'s `deploy/run_fetch.sh` has used there since
+2026-10-04 — and cron gives a job almost no environment. A crontab line
+calling `.venv/bin/python` directly therefore gets no credentials,
+`am_cutout.enabled()` returns False, and the job installs cleanly and records
+nothing, every run, for ever. Sourcing `.env` is the whole reason
+`scripts/run_am_cutout.sh` exists. It also takes a `flock` so two runs cannot
+overlap, writes a timestamped log under `logs/` and prunes at 30 days, all
+matching `run_fetch.sh`.
+
+Two things in that wrapper that look like paranoia and are not. **A missing
+`flock` is handled explicitly**, because `if ! flock -n 9` reads as "could not
+get the lock" when the binary is simply absent — command-not-found is 127,
+`!` makes it true, and the job exits 0 having done nothing while looking
+healthy. And it **`cd`s before creating anything**, so a wrong `APP_DIR`
+fails instead of scattering a `logs/` directory somewhere else.
+
+**The window is wide because the droplet's timezone is not assumed.**
+`run_fetch.sh` documents its schedule in CT while the installer reports UTC,
+and nobody here has read the droplet's clock. Idempotency makes the ambiguity
+cheap: 11–22 in either reading covers the ~10:55 CT release, at the price of
+a few no-op PDF fetches. The installer prints the host's actual timezone —
+tighten the line once it is known.
+
 **stdout goes to the log and stderr deliberately does not** — cron mails
 stderr, and a non-zero exit is the whole alerting story. Redirecting `2>&1`
 would silence it.
+
+It lives in `scripts/` rather than `deploy/` because that is where THIS repo
+already keeps its droplet jobs (`scripts/mx_auction.py` and its installer).
+`beef-trimmings-dashboard` uses `deploy/`; the two repos disagree and were
+left that way deliberately rather than moved unilaterally.
 
 Needs `requests`, `pypdf`, `pandas`, `snowflake-connector-python`, and the
 Snowflake env `snowflake_db.get_conn()` reads: `USE_SNOWFLAKE=1`,

@@ -24,8 +24,17 @@ PY="$DEST/.venv/bin/python"
 # stdout to the log, stderr deliberately NOT redirected: cron mails stderr and
 # a non-zero exit is the whole alerting story. A 2>&1 here would silence every
 # failure this job can have.
-CRON_LINE="0 16-22 * * 1-6 cd $DEST && .venv/bin/python scripts/bank_am_cutout.py >> $LOG"
-CRON_TAG="scripts/bank_am_cutout.py"
+# Calls the WRAPPER, not python directly: the Snowflake block on that host is
+# in $DEST/.env, and cron gives a job almost no environment. A bare python
+# line installs cleanly and then records nothing, every run, for ever.
+#
+# The window is wide because the droplet's own timezone is not assumed --
+# beef-trimmings-dashboard documents its schedule in CT while this script
+# reports UTC, and the job is idempotent, so a sweep that covers both readings
+# costs a few no-op PDF fetches and removes the guess. The installer prints
+# the host's actual timezone below; tighten this once it is known.
+CRON_LINE="0 11-22 * * 1-6 $DEST/scripts/run_am_cutout.sh"
+CRON_TAG="run_am_cutout.sh"
 
 CHECK_ONLY=0
 [ "${1:-}" = "--check" ] && CHECK_ONLY=1
@@ -35,6 +44,7 @@ say() { printf '  %s\n' "$*"; }
 echo "== what is already here =="
 say "host:    $(hostname)"
 say "date:    $(date -u '+%Y-%m-%d %H:%M:%SZ') (UTC)"
+say "host tz: $(date '+%Z %z')  <- the crontab window assumes nothing; tighten it once known"
 say "checkout: $([ -d "$DEST/.git" ] && echo "$DEST" || echo 'absent')"
 if crontab -l 2>/dev/null | grep -qF "$CRON_TAG"; then
   say "cron:    already installed"
@@ -47,6 +57,17 @@ crontab -l 2>/dev/null | sed 's/^/    /' || echo "    (none)"
 # -- credentials, by presence only; never print a secret ----------------------
 echo
 echo "== snowflake environment =="
+# SOURCE $DEST/.env FIRST. Checking only exported variables was wrong: this
+# host keeps the block in a .env file beside the code (the convention
+# beef-trimmings-dashboard's deploy/run_fetch.sh has used since 2026-10-04),
+# so a properly set up droplet reported every variable MISSING and this
+# refused to install.
+if [ -f "$DEST/.env" ]; then
+  say "sourcing $DEST/.env"
+  set -a; . "$DEST/.env"; set +a
+else
+  say "no $DEST/.env yet -- checking the exported environment instead"
+fi
 MISSING=""
 for v in USE_SNOWFLAKE SNOWFLAKE_ACCOUNT SNOWFLAKE_USER SNOWFLAKE_ROLE \
          SNOWFLAKE_WAREHOUSE SNOWFLAKE_DATABASE; do
@@ -96,6 +117,8 @@ say "installing deps"
   requests pypdf pandas snowflake-connector-python
 
 # -- prove it works BEFORE installing the schedule ----------------------------
+chmod +x "$DEST/scripts/run_am_cutout.sh"
+
 echo
 echo "== dry run (writes nothing) =="
 "$PY" "$DEST/scripts/bank_am_cutout.py" --dry-run
