@@ -38,11 +38,15 @@ are the same kind of loss: typed by hand, kept only in out/, and gone on the
 next reboot. Anything else hand-entered that lands in out/ can join them
 without a schema change; see WEEK_BASE_KIND for the one rule about KIND.
 
-IT NEVER READS SNOWFLAKE_SCHEMA. CLAUDE.md records that five bundled modules
+IT NEVER READS SNOWFLAKE_SCHEMA. CLAUDE.md records that NINE bundled modules
 each default that variable to the schema they own, so setting it for one
-silently empties the other four. This module takes no part in that: every
+silently empties the other eight. This module takes no part in that: every
 statement names JSA.LETTER.DRAFTS in full, so the session's schema is
 irrelevant to it.
+
+(This said "five" until 2026-10-07 and CLAUDE.md said "six"; the real count was
+nine. Three numbers for one fact is what happens when a count is copied into a
+docstring -- prefer pointing at the section over restating its arithmetic.)
 """
 from __future__ import annotations
 
