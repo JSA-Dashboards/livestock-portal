@@ -327,3 +327,55 @@ def test_it_never_imports_snowflake_db_by_bare_name():
         elif isinstance(node, ast.ImportFrom):
             assert node.module != "snowflake_db"
     assert "_am_cutout_db" in src
+
+
+# -- The droplet cron script --------------------------------------------------
+
+CRON = REPO / "scripts" / "bank_am_cutout.py"
+
+
+def test_the_cron_script_exists_and_parses():
+    import ast
+    ast.parse(CRON.read_text(encoding="utf-8"))
+
+
+def test_the_cron_reuses_the_parser_rather_than_copying_it():
+    """
+    THE WHOLE POINT OF LOADING am_cutout BY PATH. A second copy of this
+    parser, running unattended on a droplet where nobody would see it drift,
+    is the failure CLAUDE.md records for snowflake_db.py existing five times
+    -- except worse, because nothing renders it.
+    """
+    import ast
+    tree = ast.parse(CRON.read_text(encoding="utf-8"))
+    defined = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+    for owned in ("parse_am", "_num", "_after", "bank", "history", "fetch_am"):
+        assert owned not in defined, f"{owned} is am_cutout's; the cron must not redefine it"
+    assert "am_cutout.py" in CRON.read_text(encoding="utf-8")
+
+
+def test_the_cron_never_hardcodes_a_schedule_or_a_holiday_list():
+    """
+    Idempotency is what lets the crontab be a blunt hourly sweep: no DST
+    arithmetic, and a weekend run is a no-op because the PDF still holds the
+    last session, which is already banked. A calendar in here would be a
+    thing to maintain and a thing to get wrong.
+
+    CHECKED ON EXECUTABLE CODE, NOT THE SOURCE TEXT -- the first version of
+    this test searched the whole file and failed on the docstring explaining
+    the rule, which is the third time that exact mistake has been made in
+    this repo (see the AST note above and tests/test_rundown.py).
+    """
+    import ast
+    tree = ast.parse(CRON.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute):
+            assert node.attr not in ("weekday", "isoweekday"), \
+                f"the cron should not branch on {node.attr}"
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            low = node.value.lower()
+            # A docstring is a bare string expression; anything else is data
+            # the code actually uses.
+            if len(low) < 200:
+                assert "america/" not in low, "the cron should need no timezone"
+                assert "holiday" not in low, "the cron should need no holiday list"

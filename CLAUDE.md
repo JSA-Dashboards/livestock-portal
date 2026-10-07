@@ -980,6 +980,46 @@ fails looks exactly like a page nobody has opened, and months later there
 would be no history and no clue why. Same reasoning as the letter page's
 autosave banner.
 
+### The droplet cron — `scripts/bank_am_cutout.py`
+
+Written 2026-10-07 to close the holes the opportunistic write leaves. It
+**imports `apps/beef_cutout/am_cutout.py` by path rather than reimplementing
+anything**, so the cron and the page can never disagree about what a morning
+report says — a second copy of a PDF parser running unattended, where nobody
+would see it drift, is the `snowflake_db.py`-times-five problem with no
+renderer to catch it. A test asserts by AST that it defines none of
+`parse_am`, `_num`, `_after`, `bank`, `history` or `fetch_am`.
+
+**The crontab is a blunt hourly sweep, not one pinned minute**, and that is
+the design rather than laziness. `bank()` inserts only when the date is absent
+or its figures changed, so the extra runs cost a PDF fetch each and write
+nothing. Two things fall out:
+
+- **No DST arithmetic.** USDA publishes on Central and droplets run on UTC, so
+  a single pinned minute is wrong for half the year unless somebody remembers
+  to move it twice a year. A window spans the shift.
+- **No holiday calendar.** On a day USDA does not publish, the PDF still
+  serves the previous session — already banked, so the run is a no-op. There
+  is no list to maintain and none to get wrong.
+
+    # USDA morning boxed beef cutout -> JSA.BOXED_BEEF.CUTOUT_AM
+    0 16-22 * * 1-6 cd /opt/livestock-portal && .venv/bin/python scripts/bank_am_cutout.py >> /var/log/am_cutout.log
+
+16–22 UTC is 11:00–17:00 CDT / 10:00–16:00 CST, against a ~10:55 CT release.
+**stdout goes to the log and stderr deliberately does not** — cron mails
+stderr, and a non-zero exit is the whole alerting story. Redirecting `2>&1`
+would silence it.
+
+Needs `requests`, `pypdf`, `pandas`, `snowflake-connector-python`, and the
+Snowflake env `snowflake_db.get_conn()` reads: `USE_SNOWFLAKE=1`,
+`SNOWFLAKE_ACCOUNT` / `USER` / `ROLE` / `WAREHOUSE` / `DATABASE`, and either
+`SNOWFLAKE_PASSWORD` or `SNOWFLAKE_PRIVATE_KEY`. **Not `SNOWFLAKE_SCHEMA`** —
+`am_cutout` names its table in full and takes no part in the five-module
+collision at the top of this file, so there is nothing for it to set.
+
+`--dry-run` fetches and prints without writing; run that first on a new host.
+`ensure_table()` runs every time, so a fresh host needs no manual DDL step.
+
 ### Four things that look wrong and are not
 
 - **Parentheses are negative.** USDA prints a down day as `(2.23)`, not
