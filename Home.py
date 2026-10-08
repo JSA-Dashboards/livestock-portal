@@ -1,9 +1,10 @@
 """
-JSA Livestock Portal — shared shell combining thirteen livestock dashboards
-(CME Feeder Cattle Index, Seasonal Futures & Spreads, Cattle on Feed, US Cow
-Herd, Mexican Feeder Imports, Cattle Weights, Beef Cutout, Beef Trimmings,
-Livestock Inventory, Cash Cattle Trade, Fed Cattle Crush, Backgrounding Crush,
-US Beef Trade) into one app with top-navigation tabs.
+JSA Livestock Portal — shared shell combining fourteen livestock dashboards
+(CME Feeder Cattle Index, Seasonal Futures & Spreads, Commitment of Traders,
+Cattle on Feed, US Cow Herd, Mexican Feeder Imports, Cattle Weights, Beef
+Cutout, Beef Trimmings, Livestock Inventory, Cash Cattle Trade, Fed Cattle
+Crush, Backgrounding Crush, US Beef Trade) into one app with top-navigation
+tabs.
 
 Makes the single set_page_config call allowed per multi-page run, then
 hands off to st.navigation (top nav, no sidebar, no login gate — matches
@@ -13,7 +14,7 @@ A shared-passphrase gate is written and ready in portal_auth.py but is NOT
 wired in — deferred 2026-09-22. To enable it, set PORTAL_PASSPHRASE in the
 app's secrets FIRST, then call portal_auth.require_passphrase() immediately
 after set_page_config below. It fails closed, so wiring it without the secret
-in place takes all thirteen dashboards down.
+in place takes all fourteen dashboards down.
 """
 from pathlib import Path
 
@@ -81,6 +82,10 @@ DASHBOARDS = [
      "desc": "12-state feeder steer index trend, weekly rundown, and basis by sale location."},
     {"title": "Seasonal Futures & Spreads", "page": "apps/livestock_seasonal/app.py", "url_path": "seasonal-futures-spreads",
      "desc": "CME Live Cattle, Feeder Cattle, and Lean Hogs seasonal futures, spreads, and spread matrix."},
+    # Beside Seasonal rather than at the end of the list: the two futures-market
+    # pages belong together, and the grid is 4/4/4/2 at fourteen either way.
+    {"title": "Commitment of Traders", "page": "apps/cot_report/app.py", "url_path": "commitment-of-traders",
+     "desc": "Managed money net futures position in Live Cattle and Feeder Cattle — CFTC's weekly Disaggregated report, with twenty years of context."},
     {"title": "Cash Cattle Trade", "page": "apps/cash_trade/app.py", "url_path": "cash-trade",
      "desc": "Combined Steer/Heifer FOB & Dressed prices, plus national negotiated cash trade volume."},
     {"title": "Beef Cutout", "page": "apps/beef_cutout/app.py", "url_path": "beef-cutout",
