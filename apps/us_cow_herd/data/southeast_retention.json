@@ -1,0 +1,167 @@
+{
+ "panel": [
+  "Calhoun, GA",
+  "Carrollton, GA",
+  "Athens, GA",
+  "Saluda, SC",
+  "Orangeburg, SC"
+ ],
+ "series": [
+  {
+   "year": 2008,
+   "ratio": 1.0168,
+   "n": 135,
+   "months": 12,
+   "barns": 4,
+   "source": "legacy"
+  },
+  {
+   "year": 2009,
+   "ratio": 1.0832,
+   "n": 150,
+   "months": 12,
+   "barns": 5,
+   "source": "legacy"
+  },
+  {
+   "year": 2010,
+   "ratio": 1.0459,
+   "n": 109,
+   "months": 12,
+   "barns": 4,
+   "source": "legacy"
+  },
+  {
+   "year": 2011,
+   "ratio": 1.0052,
+   "n": 116,
+   "months": 12,
+   "barns": 3,
+   "source": "legacy"
+  },
+  {
+   "year": 2012,
+   "ratio": 1.0408,
+   "n": 168,
+   "months": 12,
+   "barns": 5,
+   "source": "legacy"
+  },
+  {
+   "year": 2013,
+   "ratio": 1.0941,
+   "n": 180,
+   "months": 12,
+   "barns": 5,
+   "source": "legacy"
+  },
+  {
+   "year": 2014,
+   "ratio": 1.091,
+   "n": 208,
+   "months": 12,
+   "barns": 5,
+   "source": "legacy"
+  },
+  {
+   "year": 2015,
+   "ratio": 1.281,
+   "n": 197,
+   "months": 12,
+   "barns": 5,
+   "source": "legacy"
+  },
+  {
+   "year": 2016,
+   "ratio": 1.3365,
+   "n": 224,
+   "months": 12,
+   "barns": 5,
+   "source": "legacy"
+  },
+  {
+   "year": 2017,
+   "ratio": 1.1828,
+   "n": 199,
+   "months": 12,
+   "barns": 5,
+   "source": "legacy"
+  },
+  {
+   "year": 2018,
+   "ratio": 1.283,
+   "n": 225,
+   "months": 12,
+   "barns": 5,
+   "source": "legacy"
+  },
+  {
+   "year": 2019,
+   "ratio": 1.1586,
+   "n": 208,
+   "months": 12,
+   "barns": 5,
+   "source": "both"
+  },
+  {
+   "year": 2020,
+   "ratio": 1.0961,
+   "n": 181,
+   "months": 12,
+   "barns": 5,
+   "source": "mars"
+  },
+  {
+   "year": 2021,
+   "ratio": 1.0219,
+   "n": 188,
+   "months": 12,
+   "barns": 5,
+   "source": "mars"
+  },
+  {
+   "year": 2022,
+   "ratio": 0.9393,
+   "n": 184,
+   "months": 12,
+   "barns": 5,
+   "source": "mars"
+  },
+  {
+   "year": 2023,
+   "ratio": 0.9513,
+   "n": 188,
+   "months": 12,
+   "barns": 4,
+   "source": "mars"
+  },
+  {
+   "year": 2024,
+   "ratio": 0.9531,
+   "n": 180,
+   "months": 12,
+   "barns": 4,
+   "source": "mars"
+  },
+  {
+   "year": 2025,
+   "ratio": 1.0677,
+   "n": 176,
+   "months": 12,
+   "barns": 5,
+   "source": "mars"
+  },
+  {
+   "year": 2026,
+   "ratio": 1.1945,
+   "n": 170,
+   "months": 10,
+   "barns": 5,
+   "source": "mars",
+   "span": [
+    "Jan",
+    "Oct"
+   ]
+  }
+ ]
+}

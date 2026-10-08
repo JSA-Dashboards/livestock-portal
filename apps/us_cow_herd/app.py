@@ -38,6 +38,7 @@ from herd import (BASELINE_YEARS, LEGACY_LAST_GOOD_WEEK, YTD_CUT, annual_ratio,
                   receipts_volume_annual,
                   latest_date,
                   receipts_yoy)
+import southeast
 from dairy_mix import (ASSUMED_DAIRY_NOW, ASSUMED_DAIRY_THEN,
                        ASSUMED_HEIFER_FRAC)
 from dairy_mix import adjust as dm_adjust
@@ -312,21 +313,55 @@ st.markdown('<div class="sec-header">Retention Incentive by Year</div>',
             unsafe_allow_html=True)
 
 _ann = D["annual"]
-_span = D.get("span")
-_last = _ann[-1][0] if _ann else None
+
+# A SWITCH, NOT ELEVEN MORE BARS ON THE SAME CHART. The twelve plains markets
+# above did not report a bred cow to USDA before 2019 -- the legacy auction
+# archive holds zero Oklahoma, zero Missouri and zero Texas bred-cow rows across
+# 2000-2019 -- so their 2019 floor is permanent. Five southeastern barns did
+# report throughout, and carry the measure back to 2008.
+#
+# They are kept on separate axes deliberately. The southeast-to-plains offset is
+# tight over the overlap (about +0.25, sd 0.013) and looks subtractable; the one
+# pre-2019 test of it has it wandering +0.085 to +0.312, wider than the plains
+# series' whole modern range. Shifting one onto the other would be invented
+# precision, and two ratio lines 0.25 apart on one axis is the
+# letter-versus-dashboard failure this file records three times. The switch is
+# the Cold Storage shape, and it is cheap here because the southeastern series
+# is a 2KB precomputed file rather than a fetch.
+_SE = southeast.load()
+_PLAINS_VIEW = "Southern plains · 2019–2026"
+_SE_VIEW = "Southeastern · 2008–2026"
+_view = _PLAINS_VIEW
+if _SE:
+    _view = st.segmented_control(
+        "Panel", [_PLAINS_VIEW, _SE_VIEW], default=_PLAINS_VIEW,
+        label_visibility="collapsed", key="herd_ratio_panel") or _PLAINS_VIEW
+
+if _view == _SE_VIEW:
+    _rows = [{"year": r["year"], "ratio": r["ratio"], "months": r["months"],
+              "barns": r["barns"], "n": r["n"]} for r in _SE["series"]]
+    _base_ratio = southeast.baseline(_SE["series"])
+    _span = southeast.span(_SE["series"])
+else:
+    _rows = [{"year": int(a[0]), "ratio": a[1], "months": a[5], "barns": a[6],
+              "n": a[4]} for a in _ann]
+    _base_ratio = cur["base_ratio"]
+    _span = D.get("span")
+
+_last = _rows[-1]["year"] if _rows else None
 
 # A TEN-MONTH BAR BESIDE TWELVE-MONTH BARS is a true number telling a false
 # story. This ratio has close to a full point of swing inside a single year, so
 # the part year is labelled with the months it actually covers rather than with
 # its number alone -- the same reason YTD_CUT exists for the heifer-share chart
 # further down this page.
-_labels = [(f"{a[0]}<br><span style='font-size:0.72em'>{_span[0]}–{_span[1]}</span>"
-            if (_span and a[0] == _last) else str(a[0])) for a in _ann]
+_labels = [(f"{r['year']}<br><span style='font-size:0.72em'>{_span[0]}–{_span[1]}</span>"
+            if (_span and r["year"] == _last) else str(r["year"])) for r in _rows]
 
 _fig = go.Figure()
 _fig.add_trace(go.Bar(
-    x=_labels, y=[a[1] for a in _ann],
-    marker_color=[JPSI_BLUE if a[0] == _last else "#9fb8c8" for a in _ann],
+    x=_labels, y=[r["ratio"] for r in _rows],
+    marker_color=[JPSI_BLUE if r["year"] == _last else "#9fb8c8" for r in _rows],
     # INSIDE, not outside. Every year within a few points of normal puts its
     # value label at exactly the height of the dotted normal line, and the two
     # are then unreadable -- 1.22 read as 1.77 in a screenshot of this chart.
@@ -334,15 +369,14 @@ _fig.add_trace(go.Bar(
     # instead of fighting it with z-order, which does not help when the
     # collision is positional. Text colour is per bar because the highlighted
     # year is dark and the rest are light; one colour is illegible on one of them.
-    text=[f"{a[1]:.2f}" for a in _ann], textposition="inside",
+    text=[f"{r['ratio']:.2f}" for r in _rows], textposition="inside",
     insidetextanchor="end",
-    textfont=dict(color=["#ffffff" if a[0] == _last else TEXT for a in _ann],
+    textfont=dict(color=["#ffffff" if r["year"] == _last else TEXT for r in _rows],
                   size=12),
-    customdata=[(a[5], a[6], a[4]) for a in _ann],
+    customdata=[(r["months"], r["barns"], r["n"]) for r in _rows],
     hovertemplate="%{x}<br>ratio %{y:.2f}<br>"
                   "%{customdata[0]} months · %{customdata[1]} markets · "
                   "%{customdata[2]} barn sales<extra></extra>", name="ratio"))
-_base_ratio = cur["base_ratio"]
 # layer="below" so the dotted line passes BEHIND the bar labels. Any year
 # sitting within a few points of normal puts its value label right on this
 # line, and with the line drawn on top the digits are unreadable -- 1.22 read
@@ -368,21 +402,37 @@ _fig.update_layout(height=300, margin=dict(l=0, r=0, t=24, b=0),
 # signal this chart exists to show, and it would have been drawn as a zero-height
 # bar. It adapts now.
 _fig.update_yaxes(showgrid=True, gridcolor="#f1f5f9",
-                  range=[min(1.0, min(a[1] for a in _ann) - 0.05),
-                         max(a[1] for a in _ann) * 1.12])
+                  range=[min(1.0, min(r["ratio"] for r in _rows) - 0.05),
+                         max(r["ratio"] for r in _rows) * 1.12])
 st.plotly_chart(_fig, use_container_width=True)
 _lo_sal = min(_ann, key=lambda a: a[3])
-st.caption(
-    f"Median of every barn sale in the year, with the bred and the salvage side "
-    f"taken from the **same market**. Coverage begins {_ann[0][0]} — the first "
-    f"year AMS's feed carries these reports; there is nothing earlier to show. "
-    + (f"**{_last} covers {_span[0]}–{_span[1]} only** and is not a whole-year "
-       f"figure. " if _span else "")
-    + f"The lowest salvage year is **{_lo_sal[0]}**, at ${_lo_sal[3]:,.0f} a head: "
-    f"a high ratio in a year like that says what packers were paying, not what "
-    f"producers wanted, which is why the banner above always names the side that "
-    f"moved."
-)
+_part = (f"**{_last} covers {_span[0]}–{_span[1]} only** and is not a whole-year "
+         f"figure. " if _span else "")
+if _view == _SE_VIEW:
+    st.caption(
+        f"**Five southeastern barns — {', '.join(_SE['panel'])} — not the twelve "
+        f"markets above.** Median of every barn sale in the year, bred and salvage "
+        f"from the same market. {_part}"
+        f"These are different cattle in a different region, so **read the shape, "
+        f"not the level**: do not compare a number here with a number on the "
+        f"southern-plains view. The gap between the two panels is not a constant — "
+        f"measured before 2019 it runs anywhere from 0.09 to 0.31 — so no single "
+        f"offset puts them on one axis. What this view is for is the years the "
+        f"plains feed cannot reach: 2010–2012 is the trough of the whole record "
+        f"and 2015–2016 ran above today. 2008–2018 is USDA's legacy auction "
+        f"archive, 2019 onward is the live feed, and the two share no sale date."
+    )
+else:
+    st.caption(
+        f"Median of every barn sale in the year, with the bred and the salvage side "
+        f"taken from the **same market**. Coverage begins {_rows[0]['year']} — these "
+        f"twelve markets reported no bred cows to USDA before then, so there is "
+        f"nothing earlier to show. {_part}"
+        f"The lowest salvage year is **{_lo_sal[0]}**, at ${_lo_sal[3]:,.0f} a head: "
+        f"a high ratio in a year like that says what packers were paying, not what "
+        f"producers wanted, which is why the banner above always names the side that "
+        f"moved."
+    )
 
 with st.expander("ℹ️  How to read the retention incentive"):
     # THE BACKSLASHES BEFORE EACH $ ARE LOAD-BEARING. Streamlit renders $...$ as

@@ -433,7 +433,7 @@ arithmetic and now delegates to `herd.py`. It pooled on `report_date` too, so
 `--show` and the dashboard computed the same published figure two ways off one
 table and agreed only while nobody touched either.
 
-### Coverage begins 2019 and cannot go earlier — do not go looking again
+### 2019 is the floor for THESE barns, and the long view is a second panel
 
 Probed exhaustively 2026-10-07. MARS serves these twelve barns from about
 **2019-04** (Ozarks 1651 from 2018-10-03) and nothing before; that is a
@@ -450,31 +450,70 @@ MO, zero TX**, KS 208. At the twelve barns on this page it holds essentially no
 cow-class rows at all (Springfield 149 bred, Farmers & Ranchers 3 slaughter,
 every other barn none). The existing line cannot be extended backwards.
 
-A 2008–2026 series **is** buildable on a different, balanced panel of eight
-southeastern barns — Calhoun GA, Carrollton GA, Huntingdon TN, Norwood NC,
-Saluda SC, Savannah TN, Turnersburg NC, Williamston SC — and was costed and
-**rejected** rather than missed:
+**IT WAS REJECTED ON 2026-10-07 AND BUILT ON 2026-10-08, and the reversal is
+the useful part.** The rejection rested on my own finding that the legacy
+archive could not support the page's method at those barns. That finding was
+wrong: bred cows pair with a cull class on **98.8%** of the archive's barn-dates,
+so the same-barn statistic computes there exactly as it does on the live feed.
+Three other calls in the same pass were also wrong -- the price-unit split I
+called a shaky heuristic is cleanly bimodal (20,491 rows under $250, **78**
+between $250 and $300, 104,583 above, so the threshold moves any annual ratio by
+at most 0.002); the MARS catalogue search looked at report TITLES when bred cows
+are a CLASS inside general auction reports, which hid every barn whose title
+says nothing about replacements; and the archive is not purely southeastern --
+Nebraska, Kansas and South Dakota are in it, thinly.
 
-- It sits ~0.2 below this panel (2026: 1.25 against 1.44) and **its peak year is
-  2015, not 2026**. The live page tells clients 1.44 is the series maximum; a
-  second chart saying 2015 was higher is the letter-versus-dashboard failure by
-  a new route, and a label cannot fix two charts disagreeing about where the top
-  is.
-- It tracks the national replacement-heifer ratio **three times worse** than the
-  current panel and one-sidedly (below it in all 19 years), in states that lost
-  20–26% of their beef cows since 2008 against OK's 4%.
-- The legacy archive has **no `Bred Heifers` class at all** — 15–21% of MARS bred
-  head at +16% price — so any splice silently redefines the numerator.
-- Its 2019 seam cannot be read at annual resolution: legacy runs Jan–Sep and
-  MARS Apr–Dec while the ratio falls through the year, so an annual comparison
-  measures the window, not the sources. On a 16-barn panel that coincidence
-  produced a 0.002 "agreement" that meant nothing. Only five paired barn-dates
-  exist, agreeing to +0.0010.
-- **The long-run question is already answered on this page.** NASS replacement
-  heifers ÷ beef cows runs **1920–2026** in `inventory.py`, directly below. It
-  correlates with the price ratio at r=+0.02 — a different signal, whose value
-  is that it *leads* (it turned 2025, NASS 2026). Extending a leading indicator
-  backwards spends effort on its weakest job.
+What survived the re-examination, and is why the two panels stay apart:
+
+- **The offset is not transferable.** Southeast-to-plains is tight over
+  2019-2026 (about +0.25, sd 0.013) and looks subtractable. The one pre-2019
+  plains-versus-southeast comparison available has it wandering **+0.085 to
+  +0.312**, wider than the plains series' entire modern range of 0.247.
+  Calibrating a shift on recent years and extrapolating back was tested on ten
+  matched state pairs inside the archive: median back-window error 0.092,
+  maximum 0.264. A small calibration-window sd does not buy out-of-window
+  stability.
+- **The southeast is a different cattle business**, not a longer view of the
+  plains: 62.6% of its cows sit in herds under 100 head against 35.1% in the
+  plains states, average herd 32 against 62, and it lost 20-26% of its cows
+  since 2008 against Oklahoma's 4%. Against the national
+  replacement-heifer ratio it misses three times as badly as the plains panel,
+  and misses low in all nineteen years.
+- **Its peak year is 2015-2016, not 2026.** Two lines on one axis disagreeing
+  about where the maximum is would be the letter-versus-dashboard failure by a
+  new route, and a label cannot fix it.
+- **The legacy archive has no `Bred Heifers` class at all** -- 15-21% of MARS
+  bred head at about +16% -- so the pre-2019 half is a slightly narrower
+  definition. Left as-is rather than discarding real modern data to match an
+  archive's omission, but it is why the join is exact in dates and only
+  approximate in level.
+
+So it ships as **its own toggle**, the Cold Storage shape:
+`Southern plains . 2019-2026 | Southeastern . 2008-2026`, each on its own
+baseline, with a caption naming the five barns and saying read the shape, not
+the level. The plains view is the default and is unchanged.
+
+`apps/us_cow_herd/southeast.py` reads
+`apps/us_cow_herd/data/southeast_retention.json` (2KB, 19 rows). The arithmetic
+is NOT in the page: the archive is 960MB of CSV and static, so
+`scripts/build_southeast_retention.py` precomputes it. That script **refuses to
+write when the two sources share a barn-date** -- they are CONCATENATED, not
+spliced, and that is only legitimate because legacy's last bred sale at each
+barn (2019-04-15..04-29) falls before MARS's first (2019-04-22..05-08) with zero
+shared dates. If USDA ever back-fills the archive, the build must stop rather
+than double-count the shared weeks into a median.
+
+`tests/test_southeast_retention.py` pins the shipped file: contiguous years, it
+actually reaches 2010, every year has >=6 months and >=3 barns and >=50 sales, a
+part year declares its months, ratios in a sane band (the $/cwt mix computes to
+~0.11 instead of ~1.1 and charts plausibly), the source handover happens once,
+the panel contains no plains barn, the baseline is this panel's own, and the
+generator's overlap check is fatal rather than cosmetic.
+
+**What the long view is actually for**, since it is not a level: 2010-2012 is
+the trough of the whole record and 2015-2016 ran above today. Over the overlap
+the two panels move together at first-difference r=0.964, which is the licence
+to read its shape and nothing more.
 
 ### Three rendering traps, two of them this file's own, caught only in a browser
 
