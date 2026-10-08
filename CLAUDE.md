@@ -11,6 +11,53 @@ label changed — the folder is still `apps/beef_weight/` and the `url_path` is
 still `beef-weight`, deliberately, so existing bookmarks keep working. Do not
 "tidy" either one.
 
+## The SCHEMA cache guard has TWO halves and I got both wrong
+
+`st.cache_data` keys on the decorated function and never on the modules it
+calls, so every page that caches a shared module's output passes that
+module's `SCHEMA` constant in purely to be part of the key. Recorded above
+for `leverage.SCHEMA`, `am_cutout.SCHEMA` and the rest.
+
+**IT WAS INERT IN EVERY PLACE I ADDED IT**, 2026-10-07 — four cached fetches
+across US Beef Trade, Cattle Weights, Cash Cattle Trade and Fed Cattle
+Crush. Two separate mistakes, either enough on its own:
+
+- **`_schema`, with a leading underscore.** Streamlit treats an
+  underscore-prefixed argument as deliberately unhashable and leaves it out
+  of the key — that is the documented way to pass a database connection into
+  a cached function. Naming it `_schema` asks Streamlit to ignore the one
+  thing it was added for.
+- **A default the caller never overrides.** `st.cache_data` hashes the
+  arguments it is CALLED with. A parameter sitting at its default does not
+  vary, so even spelled right it contributes nothing unless the call site
+  passes it.
+
+The correct form was already in the repo and I copied its shape without its
+substance: `fetch_am_cutout(schema: int = am_cutout.SCHEMA)` called as
+`fetch_am_cutout(am_cutout.SCHEMA)`. Both halves.
+
+**The test that was meant to cover it read `assert "wasde.SCHEMA" in page`
+— a string match the broken form satisfies perfectly.** It passed
+throughout. `tests/test_cache_schema.py` now walks the AST of every
+`apps/*/app.py`, finds each `st.cache_data` function with an argument
+defaulting to a `*.SCHEMA` attribute, and asserts the name carries no
+underscore and that every call site passes it. Verified against the broken
+commit: it flags all three functions on both counts.
+
+It is scoped to arguments whose DEFAULT is a `*.SCHEMA` attribute on
+purpose — an underscore prefix is correct and necessary for the unhashable
+connection and dataframe arguments several pages pass.
+
+Two smaller things worth keeping:
+
+- **`beef_trimmings/app.py` and `cattle_on_feed/app.py` start with a UTF-8
+  BOM.** `ast.parse` rejects it as "invalid non-printable character U+FEFF",
+  which reads as a syntax error in the page rather than a codec choice in
+  the reader. Anything walking these files must read `utf-8-sig`.
+- **A guard test that cannot fail is the thing it guards against.**
+  `test_cache_schema.py` ends by asserting its own detector rejects the
+  broken form and accepts the fixed one.
+
 ## Every headline must read on its own — a standing rule
 
 Asked for directly on 2026-10-07, and it governs every page, not the one it
@@ -347,6 +394,128 @@ Three rules hold it together, all in `herd.py`:
 The coverage guard (`MIN_PANEL_STATES`) still counts **auction** states only: it
 exists for the auction archive's thin early years, which is a property of that
 archive. `tests/test_heifer_share_channel.py` pins all of it.
+
+## The retention incentive is paired BY BARN, and the history stops at 2019
+
+Added 2026-10-07. `herd.retention_incentive()` keyed its accumulator on
+`report_date` alone, with no barn in it, so the numerator and the denominator
+were head-weighted averages over whatever markets happened to report that day.
+
+**Five of the twelve slugs are Replacement Specials carrying bred females and
+NO slaughter side at all** — Salina 1893, Billings 2257, Tina 3648, the Joplin
+special 1798, Palmyra 1816, between them **179,481 of 354,109 bred head,
+50.7%**. Half the bred head on the page was priced against some other state's
+cull cows, under a caption promising "sell her bred to a neighbour, or ship her
+to the packer": one animal, one market.
+
+Nothing raised and nothing could — a plausible bred price over a plausible cull
+price is a plausible ratio whichever barns they came from. Correcting it moved
+the annual series by **−0.034 to +0.020**, non-drifting, and the trailing
+headline from 1.44 to 1.58.
+
+`BARN_OF_SLUG` maps slug to market. Four companion slaughter slugs were added
+to `REPLACEMENT_SLUGS` to give the specials a denominator at their own yard:
+**1774/1776 Billings, 3635 Tina, 1789 Palmyra**. Salina has none — 1892 carries
+neither cows nor bred females — so it is in `UNPAIRABLE_BARNS`, out of the
+ratio, and the page names it.
+
+**SAME BARN IS NOT SAME DATE, and a strict rule would have deleted what it was
+meant to rescue.** A Replacement Special is not held on sale day: Billings,
+Tina and the Joplin special pair on the exact date **zero times out of 90**,
+and every one of them within a week (median gap 2, 3 and 1 days). Palmyra is
+the only one that lands on the day, 93% of the time. Hence nearest salvage at
+the same barn within `MAX_PAIR_GAP_DAYS = 7`, with `gap_days` carried on the
+row — the convention `mx_prices.compare()` already uses. 96% of paired
+observations still come out same-day.
+
+`replacement_reports.retention_incentive()` carried its own second copy of this
+arithmetic and now delegates to `herd.py`. It pooled on `report_date` too, so
+`--show` and the dashboard computed the same published figure two ways off one
+table and agreed only while nobody touched either.
+
+### Coverage begins 2019 and cannot go earlier — do not go looking again
+
+Probed exhaustively 2026-10-07. MARS serves these twelve barns from about
+**2019-04** (Ozarks 1651 from 2018-10-03) and nothing before; that is a
+platform floor, not a per-report one. `MIN_ANNUAL_MONTHS = 6` drops 2018,
+which is October–December at one barn, 13 observations, and medians to **1.61**
+— it would have printed as the tallest bar on the chart under a label saying
+2018.
+
+**A southern-plains long history is impossible by construction.** The USDA
+legacy auction archive (`mymarketnews.ams.usda.gov/legacydata/lpgmn.`, the
+zips `feeder_sex_mix.py` documents) carries Bred Cows by state as GA 34,864 /
+KY 25,991 / NC 16,094 / SC 15,480 / IL 14,420 / TN 13,141 — and **zero OK, zero
+MO, zero TX**, KS 208. At the twelve barns on this page it holds essentially no
+cow-class rows at all (Springfield 149 bred, Farmers & Ranchers 3 slaughter,
+every other barn none). The existing line cannot be extended backwards.
+
+A 2008–2026 series **is** buildable on a different, balanced panel of eight
+southeastern barns — Calhoun GA, Carrollton GA, Huntingdon TN, Norwood NC,
+Saluda SC, Savannah TN, Turnersburg NC, Williamston SC — and was costed and
+**rejected** rather than missed:
+
+- It sits ~0.2 below this panel (2026: 1.25 against 1.44) and **its peak year is
+  2015, not 2026**. The live page tells clients 1.44 is the series maximum; a
+  second chart saying 2015 was higher is the letter-versus-dashboard failure by
+  a new route, and a label cannot fix two charts disagreeing about where the top
+  is.
+- It tracks the national replacement-heifer ratio **three times worse** than the
+  current panel and one-sidedly (below it in all 19 years), in states that lost
+  20–26% of their beef cows since 2008 against OK's 4%.
+- The legacy archive has **no `Bred Heifers` class at all** — 15–21% of MARS bred
+  head at +16% price — so any splice silently redefines the numerator.
+- Its 2019 seam cannot be read at annual resolution: legacy runs Jan–Sep and
+  MARS Apr–Dec while the ratio falls through the year, so an annual comparison
+  measures the window, not the sources. On a 16-barn panel that coincidence
+  produced a 0.002 "agreement" that meant nothing. Only five paired barn-dates
+  exist, agreeing to +0.0010.
+- **The long-run question is already answered on this page.** NASS replacement
+  heifers ÷ beef cows runs **1920–2026** in `inventory.py`, directly below. It
+  correlates with the price ratio at r=+0.02 — a different signal, whose value
+  is that it *leads* (it turned 2025, NASS 2026). Extending a leading indicator
+  backwards spends effort on its weakest job.
+
+### Three rendering traps, two of them this file's own, caught only in a browser
+
+`py_compile` passed, 1,118 portal tests passed, and the Snowflake read matched
+SQLite exactly. All three of these were visible only by loading the page.
+
+- **`xaxis type="category"` is load-bearing** — the trap `beef_trade.annual_figure`
+  already documents, arriving here the moment the part year got a month-span
+  label. Plotly type-sniffs the axis; `"2019".."2025"` are numeric strings, so it
+  built a LINEAR axis and the `2026 / Jan–Oct` bar **was never drawn**. It is not
+  dropped either: the trace still stretched the y-axis, so the chart reserved
+  headroom for a bar nobody could see.
+- **Streamlit renders `$...$` as inline LaTeX.** Two unescaped dollar amounts in
+  one markdown block open a math span — the dollar signs vanish and the `**`
+  markers between them are stranded. The explainer read "a bred female brings
+  2,430\*\* while the same animal's salvage value is \*\*1,603" **on the live
+  page**, and had done for as long as that paragraph existed. Escape every `$`
+  in a multi-dollar block as `\\$` in the source. A single `$` in a block is
+  safe, which is why the captions get away with it.
+- **Bar value labels go inside the bars.** Any year within a few points of the
+  dotted "normal" line puts its label at exactly that height; 1.22 read as 1.77
+  in a screenshot. `layer="below"` does not help, because the collision is
+  positional rather than z-order.
+
+### The part year
+
+The ratio has close to a full point of seasonal swing inside a year, so a
+ten-month bar beside twelve-month bars is a true number telling a false story.
+`annual_span()` labels the incomplete year with the months it covers. This is
+the same rule `YTD_CUT` enforces for the heifer-share chart; the retention chart
+was the one place neither was applied.
+
+`herd.SCHEMA` exists because the cache serves shape, not freshness — the
+`leverage.SCHEMA` trap. It is passed into `load_all()` purely to land in the
+cache key. Bump it whenever `retention_incentive()`, `decompose()` or
+`annual_ratio()` changes the shape of what it returns.
+
+`tests/test_retention_pairing.py` (in the cme-feeder-cattle-index repo, beside
+the other herd.py tests) pins the cross-barn regression, the nearest-date rule,
+the window refusal, the tie-break, the unpairable barn, the stub year, and that
+every ingested slug is mapped to a barn — an unmapped slug is dropped silently.
 
 ## `@st.cache_data` does not notice that an imported module changed
 

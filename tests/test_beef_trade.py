@@ -417,6 +417,14 @@ def test_both_modules_carry_a_cache_schema():
     assert isinstance(tf.SCHEMA, int)
     page = (ROOT / "apps" / "beef_trade" / "app.py").read_text(encoding="utf-8")
     assert "wasde.SCHEMA" in page and "tf.SCHEMA" in page
+    # A STRING MATCH IS NOT A CHECK, and this one proved it: it passed
+    # happily while every guard on the page was inert, because `_schema:
+    # int = wasde.SCHEMA` contains the substring and keys nothing.
+    # tests/test_cache_schema.py reads the code instead; this line only
+    # asserts the constants are referenced at all.
+    assert "_schema" not in page, (
+        "underscore-prefixed cache args are dropped from the key -- see "
+        "tests/test_cache_schema.py")
 
 
 def test_the_page_is_registered_in_the_portal():
