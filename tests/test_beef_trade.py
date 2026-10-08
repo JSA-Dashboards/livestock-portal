@@ -841,18 +841,38 @@ def test_cash_trade_imports_the_shared_wasde_and_does_not_copy_it():
     assert "wasde.SCHEMA" in page, "the cached fetch must key on the schema"
 
 
-def test_the_cash_trade_panel_renders_above_the_lmr_guard():
+def test_the_cash_trade_panel_is_not_behind_the_lmr_outage_guard():
     """
-    WASDE comes from ESMIS over a different host from LMR. Below the outage
-    guard the whole panel would vanish on exactly the days a reader most
-    wants a reference price -- the same four-line shape the Saturday
-    Slaughter view and the morning cutout panel use.
+    WASDE comes from ESMIS over a different host from LMR. Behind the outage
+    guard the whole panel would vanish on exactly the days a reader most wants
+    a reference price.
+
+    It used to sit above that guard at the top of the Weekly tab. On
+    2026-10-07 it moved to its own tab, which KEEPS that property rather than
+    losing it: a tab body is outside the Weekly tab's `if not load_ok` branch
+    entirely. Dropping it anywhere inside that branch instead would quietly
+    undo the thing this test exists for, and nothing would raise -- the panel
+    would simply be missing on an outage day, which is the one day it matters.
     """
     page = (ROOT / "apps" / "cash_trade" / "app.py").read_text(encoding="utf-8")
-    body = page[page.index("with tab_weekly:"):]
-    call = body.index("wasde_steer_panel()")
-    guard = body.index("if not load_ok:")
-    assert call < guard, "the WASDE panel moved below the LMR outage guard"
+    lines = page.splitlines()
+
+    # called exactly once, and from its own tab
+    assert page.count("wasde_steer_panel()") == 2            # the def + one call
+    i = next(n for n, ln in enumerate(lines) if ln.strip() == "with tab_wasde:")
+    nxt = next(ln.strip() for ln in lines[i + 1:] if ln.strip())
+    assert nxt == "wasde_steer_panel()", (
+        "the WASDE tab no longer opens with the panel: " + nxt)
+
+    # and nowhere inside the Weekly tab, whose body is LMR-gated
+    weekly = page[page.index("with tab_weekly:"):page.index("with tab_daily:")]
+    assert "wasde_steer_panel()" not in weekly, (
+        "the WASDE panel is back inside the LMR-gated Weekly tab")
+
+    # the tab itself is not gated on the LMR load either
+    tab = page[page.index("with tab_wasde:"):]
+    cut = tab.find(chr(10) + "# ")
+    assert "load_ok" not in (tab[:cut] if cut > 0 else tab)
 
 
 def test_the_projection_tile_is_quoted_year_on_year_like_usdas_forecast():
