@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import snowflake_db as db
 from herd import (BASELINE_YEARS, LEGACY_LAST_GOOD_WEEK, YTD_CUT, annual_ratio,
+                  annual_span, MAX_PAIR_GAP_DAYS, SCHEMA as HERD_SCHEMA,
                   class_prices, decompose, heifer_share_annual,
                   heifer_share_rolling, heifer_share_summary, heifer_share_thin,
                   receipts_volume_annual,
@@ -133,10 +134,23 @@ def pt_delta(val, suffix=""):
 # ── Data ─────────────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def load_all():
+def load_all(schema=HERD_SCHEMA):
     """
     Everything the page needs, in one connection. Returns None on any failure
     so the page can say so plainly rather than half-rendering.
+
+    `schema` is never read. It is herd.SCHEMA, passed in purely so that a change
+    to herd.py lands in this function's cache key -- st.cache_data keys on this
+    function's own code and arguments and is blind to the module it calls, so
+    without it a reshaped return value is served from a cache built before the
+    reshape, and the page renders the old numbers with nothing raising.
+
+    IT HAS TO BE PASSED AT THE CALL SITE, which it was not until 2026-10-07.
+    Only arguments the caller actually supplies are hashed; a DEFAULT is not
+    part of the key at all, so `load_all()` against `schema=HERD_SCHEMA` keyed
+    nothing and bumping herd.SCHEMA did nothing. The name was right here from
+    the start -- it is the call that was missing, which is the harder half to
+    notice.
     """
     if not db.use_snowflake() and not DB_PATH.exists():
         return None
@@ -146,6 +160,7 @@ def load_all():
             "latest": latest_date(conn),
             "current": decompose(conn),
             "annual": annual_ratio(conn),
+            "span": annual_span(conn, (latest_date(conn) or "0")[:4]),
             "classes": class_prices(conn),
             "receipts": receipts_yoy(conn),
         }
@@ -219,7 +234,7 @@ def load_heifer_share():
 
 
 with st.spinner("Loading replacement-cattle reports…"):
-    D = load_all()
+    D = load_all(HERD_SCHEMA)
 
 if not D or not D.get("current"):
     st.error("Could not load the replacement-cattle data.")
@@ -252,7 +267,8 @@ st.markdown("<hr style='margin:10px 0 18px;'>", unsafe_allow_html=True)
 st.markdown('<div class="sec-header">Retention Incentive</div>', unsafe_allow_html=True)
 st.caption(
     f"What a bred female is worth against what the packer would pay for the same "
-    f"animal. Trailing **{cur['weeks']} weeks** ({cur['n_current']} sale dates, "
+    f"animal **at the same market**. Trailing **{cur['weeks']} weeks** "
+    f"({cur['n_dates']} sale dates across {cur['n_barns']} markets, "
     f"{cur['bred_head']:,} bred head) — a single sale can swing the ratio 25 points "
     f"on quality mix alone, so the headline is a window rather than the latest print."
 )
@@ -296,50 +312,116 @@ st.markdown('<div class="sec-header">Retention Incentive by Year</div>',
             unsafe_allow_html=True)
 
 _ann = D["annual"]
+_span = D.get("span")
+_last = _ann[-1][0] if _ann else None
+
+# A TEN-MONTH BAR BESIDE TWELVE-MONTH BARS is a true number telling a false
+# story. This ratio has close to a full point of swing inside a single year, so
+# the part year is labelled with the months it actually covers rather than with
+# its number alone -- the same reason YTD_CUT exists for the heifer-share chart
+# further down this page.
+_labels = [(f"{a[0]}<br><span style='font-size:0.72em'>{_span[0]}–{_span[1]}</span>"
+            if (_span and a[0] == _last) else str(a[0])) for a in _ann]
+
 _fig = go.Figure()
 _fig.add_trace(go.Bar(
-    x=[a[0] for a in _ann], y=[a[1] for a in _ann],
-    marker_color=[JPSI_BLUE if a[0] == _ann[-1][0] else "#9fb8c8" for a in _ann],
-    text=[f"{a[1]:.2f}" for a in _ann], textposition="outside",
-    hovertemplate="%{x}<br>ratio %{y:.2f}<extra></extra>", name="ratio"))
+    x=_labels, y=[a[1] for a in _ann],
+    marker_color=[JPSI_BLUE if a[0] == _last else "#9fb8c8" for a in _ann],
+    # INSIDE, not outside. Every year within a few points of normal puts its
+    # value label at exactly the height of the dotted normal line, and the two
+    # are then unreadable -- 1.22 read as 1.77 in a screenshot of this chart.
+    # Drawing the labels inside the bars moves them off the line entirely
+    # instead of fighting it with z-order, which does not help when the
+    # collision is positional. Text colour is per bar because the highlighted
+    # year is dark and the rest are light; one colour is illegible on one of them.
+    text=[f"{a[1]:.2f}" for a in _ann], textposition="inside",
+    insidetextanchor="end",
+    textfont=dict(color=["#ffffff" if a[0] == _last else TEXT for a in _ann],
+                  size=12),
+    customdata=[(a[5], a[6], a[4]) for a in _ann],
+    hovertemplate="%{x}<br>ratio %{y:.2f}<br>"
+                  "%{customdata[0]} months · %{customdata[1]} markets · "
+                  "%{customdata[2]} barn sales<extra></extra>", name="ratio"))
 _base_ratio = cur["base_ratio"]
-_fig.add_hline(y=_base_ratio, line_dash="dot", line_color=MUTED,
+# layer="below" so the dotted line passes BEHIND the bar labels. Any year
+# sitting within a few points of normal puts its value label right on this
+# line, and with the line drawn on top the digits are unreadable -- 1.22 read
+# as 1.77 in a screenshot of this very chart. The years nearest normal are the
+# ones a reader most wants to read.
+_fig.add_hline(y=_base_ratio, line_dash="dot", line_color=MUTED, layer="below",
                annotation_text=f"{BASELINE_YEARS[0]}–{BASELINE_YEARS[1]} normal "
                                f"{_base_ratio:.2f}",
-               annotation_position="top left")
+               annotation_position="bottom left")
+# type="category" IS LOAD-BEARING -- the same trap beef_trade.annual_figure
+# documents. Plotly type-sniffs the axis, and "2019".."2025" are all numeric
+# strings, so it builds a LINEAR axis and the part-year label ("2026" plus a
+# month span) has no numeric position: its bar is simply never drawn. It is not
+# dropped either, which is what makes it nasty -- the trace still stretches the
+# y-axis, so the chart reserves headroom for a bar nobody can see. Caught by
+# loading the page; the data check and py_compile both passed.
 _fig.update_layout(height=300, margin=dict(l=0, r=0, t=24, b=0),
                    plot_bgcolor="white", paper_bgcolor="white",
+                   xaxis=dict(type="category"),
                    yaxis_title="bred value ÷ salvage value", showlegend=False)
-_fig.update_yaxes(showgrid=True, gridcolor="#f1f5f9", range=[1.0, max(a[1] for a in _ann) * 1.12])
+# The floor was a hard 1.0. The ratio has no rule keeping it above parity -- a
+# year where a bred female is worth less than her own salvage is exactly the
+# signal this chart exists to show, and it would have been drawn as a zero-height
+# bar. It adapts now.
+_fig.update_yaxes(showgrid=True, gridcolor="#f1f5f9",
+                  range=[min(1.0, min(a[1] for a in _ann) - 0.05),
+                         max(a[1] for a in _ann) * 1.12])
 st.plotly_chart(_fig, use_container_width=True)
+_lo_sal = min(_ann, key=lambda a: a[3])
 st.caption(
-    "Median of every sale date in the year. Flat through the liquidation years, "
-    "then two consecutive rises. Note **2020 is not a comparable signal** — its "
-    "ratio was high because salvage value was the lowest in the series, not "
-    "because bred values were strong."
+    f"Median of every barn sale in the year, with the bred and the salvage side "
+    f"taken from the **same market**. Coverage begins {_ann[0][0]} — the first "
+    f"year AMS's feed carries these reports; there is nothing earlier to show. "
+    + (f"**{_last} covers {_span[0]}–{_span[1]} only** and is not a whole-year "
+       f"figure. " if _span else "")
+    + f"The lowest salvage year is **{_lo_sal[0]}**, at ${_lo_sal[3]:,.0f} a head: "
+    f"a high ratio in a year like that says what packers were paying, not what "
+    f"producers wanted, which is why the banner above always names the side that "
+    f"moved."
 )
 
 with st.expander("ℹ️  How to read the retention incentive"):
+    # THE BACKSLASHES BEFORE EACH $ ARE LOAD-BEARING. Streamlit renders $...$ as
+    # inline LaTeX, so two unescaped dollar amounts in one markdown block open a
+    # math span: the dollar signs vanish and the ** bold markers between them are
+    # left stranded in the text. It read "a bred female brings 2,430** while the
+    # same animal's salvage value is **1,603" on the live page. A single dollar
+    # sign in a block is safe, which is why the captions elsewhere get away with
+    # it -- but do not rely on that when adding a second.
     st.markdown(f"""
 **The question it answers.** A producer holding a cow can sell her bred to a
 neighbour, or ship her to the packer. Whichever pays more is what tends to
 happen, in aggregate, and that decision is what grows or shrinks the national
 herd. This ratio prices that choice every week.
 
-**Today:** a bred female brings **${cur['bred']:,.0f}** while the same animal's
-salvage value is **${cur['salvage']:,.0f}** — a ratio of **{cur['ratio']:.2f}**
+**Today:** a bred female brings **\\${cur['bred']:,.0f}** while the same animal's
+salvage value is **\\${cur['salvage']:,.0f}** — a ratio of **{cur['ratio']:.2f}**
 against a {BASELINE_YEARS[0]}–{BASELINE_YEARS[1]} normal of
 **{cur['base_ratio']:.2f}**.
 
-**Why the ratio and not the premium.** Both sides roughly tripled between 2020
-and 2026, so the dollar premium mostly measures the bull market. The ratio
-controls for the level — and still rose from 1.21 to 1.44, which is a real
-change in the incentive rather than in the price of cattle.
+**Why the ratio and not the premium.** Bred values are {_ann[-1][2] / _ann[0][2]:.1f}×
+their {_ann[0][0]} level and salvage {_ann[-1][3] / _ann[0][3]:.1f}×, so the dollar
+premium mostly measures the bull market. The ratio controls for that level, and it
+still ran from {min(a[1] for a in _ann):.2f} to {max(a[1] for a in _ann):.2f} across
+the same span — a real change in the incentive rather than in the price of cattle.
 
 **Why the driver matters.** The ratio rises when bred values climb *or* when
-salvage falls, and those are opposite stories. In 2020 the ratio read 1.37
-because cull-cow prices collapsed — packers retreating, not producers
-expanding. The banner above always names which side moved.
+salvage falls, and those are opposite stories. The weakest salvage year here is
+{_lo_sal[0]} at \\${_lo_sal[3]:,.0f} a head, and its ratio of {_lo_sal[1]:.2f} is
+mostly packers retreating rather than producers expanding. The banner above always
+names which side moved.
+
+**Both sides come from one market.** A bred female is priced against the cull
+cows sold at the same barn, within {MAX_PAIR_GAP_DAYS} days — 96% of the time on
+the same day. Until October 2026 this page divided one barn's bred females by
+whatever other barn reported a cull price that day, because five of these markets
+sell their breeding stock at a Replacement Special that carries no slaughter side.
+{", ".join(cur["unpairable"])} reports bred females and no cull cows at all, and
+has no companion sale, so it is not in the ratio.
 
 **What it is not.** It is a price signal, not a head count. It tells you what
 the incentive to retain looks like, not how many females were actually kept.
