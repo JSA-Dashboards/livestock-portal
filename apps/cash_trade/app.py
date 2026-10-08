@@ -2645,10 +2645,38 @@ with tab_fcst:
         pending = scorecard.pending_row(
             fcst_vol, head5, headn, forecast_5area, forecast_national)
         if not board.empty and stats:
+            # NAME THE CHECKPOINT THESE WERE SCORED AT, because it is not
+            # always the live one. build_scorecard steps back when the live
+            # week is too green to forecast from (see its GREEN_MATURITY note),
+            # and "at this point in the week" then describes a checkpoint the
+            # rows were not scored at -- borrowing a Friday call's accuracy for
+            # a Monday one, which flatters rather than merely misleads.
+            #
+            # IT HAS TO BE BUILT BEFORE THE HEADER THAT PRINTS IT. Writing it
+            # underneath read fine and raised NameError on the live page --
+            # script order again, the rule this file keeps relearning.
+            _sc_cp = scorecard.checkpoint_of(board)
+            _live_cp = ((int(f5["checkpoint"]["weekday"]), int(f5["checkpoint"]["order"]))
+                        if f5 else None)
+            _sc_dow_lbl, _sc_cut_lbl = _dow, _cut
+            if _sc_cp is not None:
+                _sc_dow_lbl = ["Monday", "Tuesday", "Wednesday", "Thursday",
+                               "Friday"][_sc_cp[0]]
+                _sc_cut_lbl = DAILY_CUT_LABEL["morning" if _sc_cp[1] else "afternoon"]
+            if _sc_cp is None or _sc_cp == _live_cp:
+                _cp_label = "at this point in the week"
+            else:
+                # DAILY_CUT_LABEL already ends in "cut" for the afternoon
+                # file ("1:30 pm cut") and reads "Final" for the morning one,
+                # so neither wants the word appended.
+                _cp_label = (
+                    f'at the {_sc_dow_lbl} {_sc_cut_lbl.lower()} &mdash; this week '
+                    f'has barely traded, so there is nothing yet to score a call from')
+
             st.markdown(
                 f'<div class="sec-header" style="border-left-color:{D14_COLOR};">'
-                f'Forecast accuracy &mdash; the last {stats["n"]} calls at this '
-                f'point in the week</div>', unsafe_allow_html=True)
+                f'Forecast accuracy &mdash; the last {stats["n"]} calls '
+                f'{_cp_label}</div>', unsafe_allow_html=True)
 
             _f, _n = stats["five"], stats["nat"]
             st.markdown(
@@ -2709,7 +2737,11 @@ with tab_fcst:
             st.markdown(
                 f'<div class="note" style="margin-top:6px;">Each past week is replayed '
                 f'through the same code the forecast above runs, standing at the same '
-                f'<b>{_dow} {_cut.lower()}</b> and seeing only what had been '
+                # _dow/_cut are the LIVE checkpoint; these rows may have been
+                # scored at an earlier one when the live week is too green to
+                # forecast from. Naming the wrong checkpoint here is the same
+                # defect as naming it wrong in the header above.
+                f'<b>{_sc_dow_lbl} {_sc_cut_lbl.lower()}</b> and seeing only what had been '
                 f'published by then &mdash; the analogue pool, the typical-week baseline '
                 f'and the national gap are all cut to weeks USDA had already printed. '
                 f'<b>The 5-Area column is the one to trust.</b> It is close to arithmetic, '

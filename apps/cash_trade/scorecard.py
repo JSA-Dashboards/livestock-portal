@@ -129,6 +129,44 @@ def _previous_week_checkpoint(vol: pd.DataFrame, week: pd.Timestamp,
     return pairs[-1]
 
 
+GREEN_MATURITY = 0.50
+"""Live maturity below which a checkpoint is not worth scoring at.
+
+forecast_5area's own "weak" boundary, reused rather than re-chosen. See the
+measurement table in build_scorecard for why this is the line.
+"""
+
+
+def _too_green(live: dict) -> bool:
+    """
+    Has the live week traded enough for a call from it to mean anything?
+
+    A missing maturity counts as too green: it means there is no typical week
+    to measure against, which is not a state to replay ten weeks from.
+    """
+    m = live.get("maturity")
+    if m is None or m != m:          # NaN
+        return True
+    return float(m) < GREEN_MATURITY
+
+
+def checkpoint_of(sc: pd.DataFrame):
+    """
+    The (weekday, order) every row in `sc` was scored at, or None if empty.
+
+    The page needs this to label the panel honestly: when build_scorecard steps
+    back, "the last N calls at this point in the week" stops being true, and a
+    headline accuracy borrowed from a later checkpoint is flattering rather
+    than merely wrong.
+    """
+    if sc.empty or "cp_weekday" not in sc.columns:
+        return None
+    scored = sc[~sc["pending"].fillna(False).astype(bool)] if "pending" in sc else sc
+    if scored.empty:
+        return None
+    return int(scored["cp_weekday"].iloc[0]), int(scored["cp_order"].iloc[0])
+
+
 def build_scorecard(vol: pd.DataFrame, published5: pd.Series, national: pd.Series,
                     forecast_5area, forecast_national, cut_order: dict,
                     weeks: int = 10) -> pd.DataFrame:
@@ -162,12 +200,12 @@ def build_scorecard(vol: pd.DataFrame, published5: pd.Series, national: pd.Serie
 
     # ...AND THE SAME PROBLEM ARRIVES FROM THE OTHER END EVERY TUESDAY.
     #
-    # Once a new trading week opens, the live checkpoint is Monday with a
-    # week-to-date of 0 — nothing has traded yet. Scoring the last ten weeks
-    # at THAT point replays every one of them from an empty base, so each
-    # estimate collapses to the same number (the median late trade added to
-    # nothing), every row grades "weak", and the accuracy reads 23% when the
-    # calls those weeks actually produced were a median 1.5% out.
+    # Once a new trading week opens, the live checkpoint is early and nearly
+    # nothing has traded. Scoring the last ten weeks at THAT point replays
+    # every one of them from a near-empty base, so each estimate is the
+    # analogue median with noise added, every row grades "weak", and the
+    # accuracy reads 23% when the calls those weeks actually produced were a
+    # median 1.4% out.
     #
     # Worse, it contradicts the tiles. On 2026-10-06 the tiles reported the
     # settled Sep 28 week — called 60,897 against USDA's 60,063, scored where
@@ -175,10 +213,38 @@ def build_scorecard(vol: pd.DataFrame, published5: pd.Series, national: pd.Serie
     # that same week, scored at a Monday that had not happened when we called
     # it. Same week, two "we called" figures, one screen.
     #
-    # So a checkpoint nobody would ever forecast from is not a checkpoint worth
-    # scoring at. When the live week has not started, step back to the last one
-    # that produced a real call, which is also the one the tiles are showing.
-    if not live.get("done") and not live.get("wtd"):
+    # **THE FIRST VERSION OF THIS GUARD TESTED `not live["wtd"]`, AND THAT
+    # CAUGHT ONLY A LITERAL ZERO.** On 2026-10-07 the live week stood at 337
+    # head — 0.75% of a typical week, which is nothing — so the guard sat out
+    # and the whole failure came back: the table showed Sep 28 at 45,784 /
+    # 66,340 against the 60,897 / 81,453 we actually called, and the headline
+    # accuracy read 23.8% / 29.4% against 1.4% / 7.9% at the real checkpoint.
+    # A head count of 337 is zero in every sense except the arithmetic one.
+    #
+    # SO THE TEST IS MATURITY, AND THE LINE IS THE ONE forecast_5area ALREADY
+    # DRAWS. Below `maturity` 0.50 it grades the call "weak", and that boundary
+    # turns out to be exactly where the forecast stops being worth replaying.
+    # Measured over 457 (week, checkpoint) pairs on the live feed, against the
+    # naive alternative of ignoring the week and printing a typical one:
+    #
+    #     maturity     forecast   naive      maturity     forecast   naive
+    #     0–1%            19.4%   17.8%      35–50%          39.2%   32.3%
+    #     1–2%            30.9%   17.9%      50–75%          20.9%   22.9%
+    #     2–5%            34.4%   19.1%      75–101%         14.3%    5.9%
+    #     5–10%           45.1%   41.4%      101%+            6.7%   26.7%
+    #     10–35%        35–47%   26–27%
+    #
+    # The forecast beats the naive baseline nowhere below 0.50 and clearly
+    # above it, so scoring a sub-0.50 live checkpoint grades a call that
+    # carries no information — and prints numbers that are not the ones we
+    # made. Stepping back lands on the checkpoint the tiles are showing.
+    #
+    # **It costs something and the page must say so.** The accuracy then
+    # describes a Friday-cut call while a weak live call sits above it, which
+    # is flattering if it goes unlabelled — the exact distortion this module's
+    # docstring argues against. `checkpoint_of()` exists so the header can name
+    # the checkpoint it really scored, and a test pins that the page uses it.
+    if not live.get("done") and _too_green(live):
         prior = _previous_week_checkpoint(vol, cur_week, cut_order)
         if prior is None:
             return pd.DataFrame()
@@ -215,6 +281,10 @@ def build_scorecard(vol: pd.DataFrame, published5: pd.Series, national: pd.Serie
         actualn = float(national.get(w, float("nan")))
         rows.append({
             "week": pd.Timestamp(w),
+            # Carried per row rather than on .attrs, which pandas drops through
+            # most operations -- including the concat the page does with the
+            # pending row. checkpoint_of() reads it back.
+            "cp_weekday": weekday, "cp_order": order,
             "wtd": f5["wtd"],
             "grade": f5.get("grade"),
             "f5": f5["central"], "f5_lo": f5["low"], "f5_hi": f5["high"],
@@ -273,6 +343,11 @@ def pending_row(vol: pd.DataFrame, published5: pd.Series, national: pd.Series,
     nan = float("nan")
     return pd.DataFrame([{
         "week": week,
+        # Present but empty: this row is the LIVE checkpoint by definition, and
+        # checkpoint_of() must not read it when build_scorecard has stepped the
+        # scored rows back to a different one. Same columns so the two still
+        # concatenate without pandas inventing them.
+        "cp_weekday": nan, "cp_order": nan,
         "wtd": live["wtd"],
         "grade": live.get("grade"),
         "f5": live["central"], "f5_lo": live["low"], "f5_hi": live["high"],
