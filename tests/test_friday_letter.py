@@ -1205,3 +1205,72 @@ def test_the_basis_comes_from_the_format_not_the_cache():
     page_src = (REPO_ROOT / "apps" / "weekly_reports" / "app.py").read_text(encoding="utf-8")
     assert 'ctx["change_basis"] = config.change_basis_for(kind)' in build_src
     assert 'ctx_for_render["change_basis"] = config.change_basis_for(kind)' in page_src
+
+
+# -- the CFTC block's label must follow the sign ------------------------------
+
+def _cftc_text(feeder: dict) -> str:
+    """cftc_block() rendered down to plain text, for one feeder reading."""
+    import re
+    ctx = {"as_of": "2024-09-17",
+           "markets": {"Live Cattle": {"net_long": 53193, "wow": 4103},
+                       "Feeder Cattle": feeder}}
+    return re.sub(r"<[^>]+>", " ", render.cftc_block(ctx))
+
+
+def test_a_net_short_prints_net_short_and_no_minus_sign():
+    """
+    This line said "Net Long:" unconditionally until 2026-10-07 and printed the
+    words above a NEGATIVE number -- "Net Long: -870 contracts" was what went
+    out on 2024-09-17, and on the six Fridays before it.
+
+    Managed money is net short FEEDER cattle in 248 of 1,060 weeks since 2006
+    (23.4%) and it arrives in runs: seven straight letters in Aug-Sep 2024,
+    nine over the 2023 turn, two separate runs of 24 weeks in 2022. So this is
+    the ordinary case roughly one week in four, not an edge.
+    """
+    text = _cftc_text({"net_long": -870, "wow": 1738})
+    assert "Net Short: 870 contracts" in text
+    assert "-870" not in text
+    assert "(870)" not in text     # brackets mean NEGATIVE to this readership
+
+
+def test_a_net_long_still_prints_net_long():
+    text = _cftc_text({"net_long": 8166, "wow": 161})
+    assert "Net Long: 8,166 contracts" in text
+    assert "Net Short" not in text.split("Feeder Cattle")[-1]
+
+
+def test_the_weekly_change_keeps_its_sign():
+    """
+    Deliberately left alone: a CHANGE has a natural direction and "-3,100"
+    reads correctly. Only the level's label follows the sign.
+    """
+    assert "WoW Change: -3,100 contracts" in _cftc_text({"net_long": 8166, "wow": -3100})
+
+
+def test_a_missing_net_is_still_marked_rather_than_guessed():
+    text = _cftc_text({"net_long": None, "wow": None})
+    assert "[[?]]" in text
+    assert "Net Short" not in text.split("Feeder Cattle")[-1]
+
+
+def test_the_letter_and_the_cot_dashboard_agree_on_how_a_sign_is_shown():
+    """
+    Both surfaces quote managed money's net, so both must render a short
+    position the same way -- the disagreement CLAUDE.md records three mornings
+    lost to. The dashboard carries the direction in a word via
+    `cot_positions.side()`; this asserts the letter now does too.
+    """
+    import importlib.util
+    import sys
+    spec = importlib.util.spec_from_file_location(
+        "_fl_cot", REPO_ROOT / "apps" / "cot_report" / "cot_positions.py")
+    cot = importlib.util.module_from_spec(spec)
+    sys.modules["_fl_cot"] = cot
+    spec.loader.exec_module(cot)
+
+    for net in (8166, -870):
+        word = cot.side(net)                       # "long" / "short"
+        text = _cftc_text({"net_long": net, "wow": 0})
+        assert f"Net {word.capitalize()}: {abs(net):,} contracts" in text

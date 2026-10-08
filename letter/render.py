@@ -483,7 +483,35 @@ def cftc_block(cftc: dict) -> str:
         if not mk:
             rows.append(f"{name}: {MISSING}")
             continue
-        inner = _bullets([f"Net Long: {head(mk.get('net_long'))} contracts",
+        # THE LABEL FOLLOWS THE SIGN, and that is not cosmetic. This line read
+        # `f"Net Long: {head(...)}"` until 2026-10-07 and printed the words
+        # "Net Long" above a NEGATIVE number every week managed money was net
+        # short -- "Net Long: -870 contracts" on 2024-09-17, and on the six
+        # Fridays before it.
+        #
+        # It is not a rare case. Managed money has been net short FEEDER cattle
+        # in 248 of 1,060 weeks since 2006 (23.4%), and it comes in runs rather
+        # than odd weeks: seven straight letters in Aug-Sep 2024, nine over the
+        # 2023 turn, and two separate runs of 24 weeks in 2022. Live cattle has
+        # done it 15 times, most recently 2020-04-07.
+        #
+        # It matters for this readership in particular. These are readers
+        # fluent in USDA and CFTC notation, where a leading minus is easy to
+        # skim past and a bracket means negative -- the trap `sterling.py` and
+        # `apps/beef_cutout/am_cutout.py` both document. "Net Long: 870" read
+        # quickly is the exact opposite of the truth, and inverting the fund
+        # position inverts the market read.
+        #
+        # The Commitment of Traders dashboard carries the direction in a WORD
+        # for the same reason (`cot_positions.side()`), so this also keeps the
+        # letter and that page saying the same thing about the same figure --
+        # the disagreement CLAUDE.md records three mornings lost to.
+        #
+        # WoW Change is deliberately LEFT SIGNED: a change has a natural
+        # direction and "-3,100" reads correctly there.
+        net = mk.get("net_long")
+        side = "Net Short" if (net is not None and net < 0) else "Net Long"
+        inner = _bullets([f"{side}: {head(net if net is None else abs(net))} contracts",
                           f"WoW Change: {head(mk.get('wow'))} contracts"])
         rows.append(f"{name}:{inner}")
     return (f"<h2>CFTC Report as of {_esc(stamp)}:</h2>"

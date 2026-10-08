@@ -1758,9 +1758,23 @@ a basis this page neither audits nor leads with.
   minus and never by parentheses.** In CFTC's and USDA's own reports
   parentheses mean NEGATIVE, the trap `letter/sterling.py` and `am_cutout` both
   document. Managed money is net short feeders in 23.4% of weeks, so this is the
-  live case rather than the theoretical one. `letter/render.cftc_block()` still
-  hard-codes "Net Long:" and will print `Net Long: -2,081` the next time feeders
-  go short — known, flagged, not changed here because the wording is Ross's.
+  live case rather than the theoretical one.
+
+  **`letter/render.cftc_block()` had the same bug and was fixed the same day.**
+  It hard-coded the words "Net Long:" and printed them above a negative number —
+  `Net Long: -870 contracts` is what went out on 2024-09-17 and on the six
+  Fridays before it. The label now follows the sign, so a short week reads
+  `Net Short: 870 contracts` with no minus, matching what the dashboard shows
+  for the same figure. **WoW Change was deliberately left signed**: a change has
+  a natural direction and `-3,100` reads correctly there. Ross chose the
+  wording. `tests/test_friday_letter.py` pins both halves, including one test
+  that renders the letter and the dashboard side by side so they cannot drift
+  apart on how a short position is shown.
+
+  Worth knowing how often it would have bitten, because "rare edge case" was the
+  wrong intuition: feeders were net short for seven straight letters in
+  Aug–Sep 2024, nine over the 2023 turn, and two separate runs of 24 weeks in
+  2022. Live cattle has done it 15 times, last on 2020-04-07.
 - **Spreading is excluded from the net and is often larger than it.** Feeder
   2026-09-29: long 17,364, short 9,198, **spread 10,252** against a net of
   8,166. A spread is equal and offsetting legs held by one trader; it nets to
