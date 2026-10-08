@@ -2701,10 +2701,12 @@ of the three that were wrong: it walks the panel by AST and fails any `_d()`
 call that does not pass `base=`. A fourth tile added without one renders a
 move with no level, looks entirely fine, and is the defect again.
 
-**Cattle Weights has one tile with the same gap** — its production forecast
-quotes a revision with no prior, while its year-on-year tile already prints
-"2025 actual 27,543". Not changed, because the `sub` slot there carries the
-unit and "commercial" is load-bearing on that page.
+**Cattle Weights had the same gap on two tiles and was corrected the next
+day**, at Ross's request — see that page's section below. It was left out of
+this change because its `sub` slot carries the unit and "commercial" is
+load-bearing there; the answer turned out to be a separate line rather than
+spending `sub`. (This paragraph also said the year-on-year tile reads "2025
+actual 27,543". It reads **26,003** — 27,543 is not a figure in that table.)
 
 ### WASDE HAS NOTHING FOR THE OTHER ELEVEN PAGES, and that is checked
 
@@ -2834,6 +2836,40 @@ contains no pace arithmetic.
 
 That is the third basis for one quantity: FI (the page), commercial (WASDE
 page 31, 24,877) and commercial-plus-farm (WASDE page 32, 24,945).
+
+#### The revision tiles print the level they moved from
+
+Corrected 2026-10-08, the third page to get this and the same defect each
+time — the beef cutout's Month/Year tiles, then Cash Cattle Trade's WASDE
+panel, then here. Ross's words on the first: *"you have to do the math in
+your head."* The tiles read `24,877` over `▼ 90 · 0.4% vs last month` and
+never said **24,967**; the 2027 tile read `24,835` over `▼ 145 · 0.6%` and
+never said **24,980**.
+
+**THE LEVEL GOES ON ITS OWN LINE, NOT INTO `sub`**, which is the one thing
+that differs from the Cash Cattle Trade fix. `sub` here already carries
+"calendar year · million lb, commercial", and that word is load-bearing on
+this page for the reason in the paragraph above — WASDE is commercial, the
+weekly tiles are federally inspected. Spending the slot on a level would
+have traded one missing number for a missing definition.
+
+**The year-on-year tile is deliberately NOT in the rule.** It spends `sub` on
+"2025 actual 26,003" and so has always shown its level — it is the one tile
+that never had the defect, and forcing a second level onto it would print the
+same number twice. The AST guard in `tests/test_beef_trade.py` therefore keys
+on the ARGUMENT (`w["revision"]`, `w["next_revision"]`) rather than on the
+call count, so it binds the two tiles that need it and leaves that one alone.
+
+`_wasde_delta` takes `base`/`base_label` and reuses its own `digits`, so a
+production figure renders 24,967 rather than 24,967.00 under a delta of 90.
+**No `SCHEMA` bump**: `wasde.summary()` is unchanged, so the cached dict has
+the same shape and `w["prior"]` was already in it — this is a layout fix, not
+a reshape. Bumping reflexively would have refetched every page for nothing.
+
+Also renamed the `base` local in the 2027 tile to `nxt_prior`. It held last
+month's 2027 forecast (24,980) while `w["base"]` a few lines up holds the
+prior year's actual (26,003) — two unrelated numbers under one name, in the
+function that now prints both.
 
 ### Fed Cattle Crush — the cash steer price
 
