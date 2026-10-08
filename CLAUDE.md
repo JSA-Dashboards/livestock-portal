@@ -1711,7 +1711,17 @@ exercising the trap.
   revision prints "unchanged" rather than "0", because USDA leaving a
   forecast alone is an answer and "0" reads as a missing one.
 - **The part year in progress is left OFF the annual chart.** A bar covering
-  eight months beside twelve-month bars tells a true story wrongly.
+  eight months beside twelve-month bars tells a true story wrongly. That
+  holds at every window width.
+- **The annual chart opens on the FULL history, 1989.** ERS carries 37
+  complete years with no gaps, and the chart originally showed twelve of
+  them — which hid the thing that makes today remarkable: imports bottomed
+  at **2,057** million lb in 2011 against **5,388** in 2025, and both the
+  2003 BSE collapse and the 2014–15 herd-low spike sit outside any recent
+  window. `Since 2010` and `Since 2000` remain for a closer look. The
+  options are FIXED ANCHORS rather than "last N years", because a rolling
+  count silently changes what the chart covers every January while its
+  label stays the same.
 
 ### The forecast percentages, and why there are no parentheses
 

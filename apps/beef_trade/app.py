@@ -669,8 +669,22 @@ def monthly_chart(flow: str, color: str, year: int, key: str):
     st.plotly_chart(fig, use_container_width=True, key=key)
 
 
+# Start years offered on the annual chart. FIXED ANCHORS, not "last N
+# years": a rolling count silently changes what the chart covers every
+# January, and a label that says "Since 2000" still says it in 2030. ERS
+# carries 37 complete years (1989-2025, no gaps), so the only limit here is
+# how much a reader wants to look at.
+ANNUAL_WINDOWS = {"Since 2010": 2010, "Since 2000": 2000, "All (1989–)": None}
+# THE FULL HISTORY BY DEFAULT. Asked for 2026-10-07. The long view is the
+# point of an annual chart here: imports bottomed at 2,057 million lb in
+# 2011 against 5,388 in 2025, and the 2003 BSE collapse and the 2014-15
+# herd-low spike are both outside any recent window. The shorter options
+# stay for a closer look.
+ANNUAL_DEFAULT = "All (1989–)"
+
+
 def annual_figure(df: pd.DataFrame, flow: str, color: str, forecast, fc_year,
-                  back: int = 12) -> go.Figure:
+                  since: int | None = 2010) -> go.Figure:
     """
     Complete calendar years, with the WASDE forecast drawn as its own bar.
 
@@ -695,7 +709,8 @@ def annual_figure(df: pd.DataFrame, flow: str, color: str, forecast, fc_year,
     """
     m = tf.monthly(df, flow)
     complete = m.groupby("year")["month"].count()
-    full_years = [int(y) for y in complete[complete == 12].index][-back:]
+    full_years = [int(y) for y in complete[complete == 12].index
+                  if since is None or y >= since]
     tot = m[m["year"].isin(full_years)].groupby("year")["mil_lb"].sum()
 
     fig = go.Figure()
@@ -718,14 +733,29 @@ def annual_figure(df: pd.DataFrame, flow: str, color: str, forecast, fc_year,
     return fig
 
 
-def annual_chart(flow: str, color: str, forecast, fc_year, key: str,
-                 back: int = 12):
-    st.plotly_chart(annual_figure(trade, flow, color, forecast, fc_year, back),
-                    use_container_width=True, key=key)
+def annual_chart(flow: str, color: str, forecast, fc_year, key: str):
+    """
+    THE WINDOW IS THE READER'S CHOICE, because the right one depends on the
+    question. A twelve-year chart starting in 2014 was the original default
+    and it hides the thing that makes today remarkable: beef imports
+    bottomed at 2,057 million lb in 2011 and are 5,388 now. You cannot see
+    that a series has more than doubled if the chart starts after the
+    trough.
+    """
+    choice = st.segmented_control(
+        "Years shown", list(ANNUAL_WINDOWS), default=ANNUAL_DEFAULT,
+        label_visibility="collapsed", key=f"{key}_window")
+    # segmented_control returns None when the reader clears the selection.
+    since = ANNUAL_WINDOWS.get(choice or ANNUAL_DEFAULT, ANNUAL_WINDOWS[ANNUAL_DEFAULT])
+
+    st.plotly_chart(
+        annual_figure(trade, flow, color, forecast, fc_year, since),
+        use_container_width=True, key=key)
     if forecast and fc_year:
         st.caption(f"{fc_year}F is USDA's forecast, not an actual. The part "
                    "year in progress is left out rather than drawn as a short "
-                   "bar beside full ones.")
+                   "bar beside full ones. Complete calendar years only; ERS "
+                   "carries 1989 onward.")
 
 
 def country_table(flow: str, year: int, through: int, key: str, noun: str):

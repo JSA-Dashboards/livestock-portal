@@ -921,3 +921,50 @@ def test_every_pace_tile_states_its_unit_and_rates_state_their_period():
     # And the two totals use UNIT, not RATE -- a year is not a rate.
     sofar = body[body.index("so far\", fmt(p[\"ytd\"])"):]
     assert "{UNIT} · Jan" in sofar[:300]
+
+
+def test_the_annual_chart_window_reaches_the_whole_ers_history():
+    """
+    ERS carries 37 complete years (1989-2025, no gaps). The chart opened on
+    a twelve-year window starting in 2014, which hides the thing that makes
+    today remarkable: imports bottomed at 2,057 million lb in 2011 and are
+    5,388 now. A chart that starts after the trough cannot show that a
+    series has more than doubled.
+    """
+    src = (ROOT / "apps" / "beef_trade" / "app.py").read_text(encoding="utf-8")
+    ns = {}
+    body = src[src.index("ANNUAL_WINDOWS = "):src.index("def annual_figure(")]
+    exec(body, ns)                                      # noqa: S102
+    windows, default = ns["ANNUAL_WINDOWS"], ns["ANNUAL_DEFAULT"]
+
+    assert set(windows.values()) == {2010, 2000, None}
+    assert default in windows
+    # FIXED ANCHORS, not "last N years": a rolling count silently changes
+    # what the chart covers every January.
+    assert all("Since" in k or "All" in k for k in windows)
+
+    df = _ers_frame()
+    m = tf.monthly(df, "Imports")
+    complete = m.groupby("year")["month"].count()
+    years = [int(y) for y in complete[complete == 12].index]
+    for label, since in windows.items():
+        shown = [y for y in years if since is None or y >= since]
+        assert shown, label
+        if since is not None:
+            assert min(shown) >= since
+        # The part year in progress is never a bar.
+        assert 2026 not in shown
+
+
+def test_the_annual_window_never_includes_a_part_year():
+    """
+    A bar covering eight months beside twelve-month bars tells a true story
+    wrongly, and widening the window must not reintroduce that.
+    """
+    df = _ers_frame()
+    m = tf.monthly(df, "Imports")
+    complete = m.groupby("year")["month"].count()
+    assert complete.get(2026) == 8
+    full = [int(y) for y in complete[complete == 12].index]
+    assert 2026 not in full
+    assert max(full) == 2025
