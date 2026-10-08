@@ -1056,6 +1056,34 @@ def changes(df: pd.DataFrame, col: str):
     )
 
 
+def five_day(df: pd.DataFrame, col: str):
+    """
+    USDA's 5-day simple average: the five sessions BEFORE the one being
+    reported, NOT the trailing five including it.
+
+    THE WINDOW IS iloc[-6:-1] AND IT MUST STAY THAT. letter/sources.py prints
+    the same figure in the daily letter and letter/rundown.py puts it on the
+    client slide, both on that window -- and CLAUDE.md records two mornings
+    lost to the letter and a dashboard quoting one number and disagreeing,
+    each defensible, neither raising. `tail(5)` is the natural thing to write
+    and is the one that breaks it: for 2026-10-05 it gives Choice 379.38
+    where the published figure is 378.94.
+
+    It is also USDA's own convention, which is the real argument for it.
+    The morning report prints "Current 5 Day Simple Average: 378.94" on
+    2026-10-06, and 378.94 is the mean of 10/05, 10/02, 10/01, 09/30 and
+    09/29 -- the five sessions before it, to the cent. So this is not a house
+    preference that happens to match; it reproduces what USDA publishes.
+
+    The excluding window is also the more useful one: it is a fixed benchmark
+    the new print is read AGAINST, rather than a window that chases it.
+    """
+    valid = df[df[col].notna()]
+    if len(valid) < 6:
+        return None
+    return float(valid[col].iloc[-6:-1].mean())
+
+
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 
 with st.sidebar:
@@ -1228,6 +1256,12 @@ if _view == "Individual Cuts":
 
 cn, cd1, cd30, cd365 = changes(hist, "choice")
 sn, sd1, sd30, sd365 = changes(hist, "select")
+
+# USDA's own 5-day window -- the five sessions BEFORE this one. See five_day().
+c5 = five_day(hist, "choice")
+s5 = five_day(hist, "select")
+c5d = (cn - c5) if (cn is not None and c5 is not None) else None
+s5d = (sn - s5) if (sn is not None and s5 is not None) else None
 spn, spd1, spd30, _  = changes(hist, "spread")
 
 vol_rows = hist[hist["total_loads"].notna()]
@@ -1290,14 +1324,16 @@ else:
 
     st.markdown('<div class="sec-header">Choice Cutout — Composite 600–900 lbs</div>',
                 unsafe_allow_html=True)
-    cols = st.columns(4)
+    cols = st.columns(5)
     with cols[0]:
         st.markdown(tile("Current", fmt(cn), cls="tile-choice"), unsafe_allow_html=True)
     with cols[1]:
         st.markdown(tile("Day Change", fmt(cd1), delta_html(cd1), "tile-choice"), unsafe_allow_html=True)
     with cols[2]:
-        st.markdown(tile("Month Change", fmt(cd30), delta_html(cd30), "tile-choice"), unsafe_allow_html=True)
+        st.markdown(tile("5-Day Avg", fmt(c5), delta_html(c5d), "tile-choice"), unsafe_allow_html=True)
     with cols[3]:
+        st.markdown(tile("Month Change", fmt(cd30), delta_html(cd30), "tile-choice"), unsafe_allow_html=True)
+    with cols[4]:
         st.markdown(tile("Year Change", fmt(cd365), delta_html(cd365), "tile-choice"), unsafe_allow_html=True)
 
     st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
@@ -1306,15 +1342,25 @@ else:
 
     st.markdown('<div class="sec-header">Select Cutout — Composite 600–900 lbs</div>',
                 unsafe_allow_html=True)
-    cols = st.columns(4)
+    cols = st.columns(5)
     with cols[0]:
         st.markdown(tile("Current", fmt(sn), cls="tile-select"), unsafe_allow_html=True)
     with cols[1]:
         st.markdown(tile("Day Change", fmt(sd1), delta_html(sd1), "tile-select"), unsafe_allow_html=True)
     with cols[2]:
-        st.markdown(tile("Month Change", fmt(sd30), delta_html(sd30), "tile-select"), unsafe_allow_html=True)
+        st.markdown(tile("5-Day Avg", fmt(s5), delta_html(s5d), "tile-select"), unsafe_allow_html=True)
     with cols[3]:
+        st.markdown(tile("Month Change", fmt(sd30), delta_html(sd30), "tile-select"), unsafe_allow_html=True)
+    with cols[4]:
         st.markdown(tile("Year Change", fmt(sd365), delta_html(sd365), "tile-select"), unsafe_allow_html=True)
+
+    st.caption(
+        "**5-Day Avg** is USDA's own simple average of the five sessions "
+        "**before** this one, not a trailing five that includes it — the same "
+        "window the daily letter and the client slide print, and the same "
+        "figure USDA puts on the morning report. The delta beside it is where "
+        "the current print sits against that benchmark."
+    )
 
     st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 

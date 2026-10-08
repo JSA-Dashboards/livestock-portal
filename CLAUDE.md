@@ -1039,6 +1039,36 @@ prices on the other tabs. That is USDA's schedule, not staleness.
 A share is a number between 0 and 1 whether or not it is right, so none of the
 above fails loudly. `tests/test_packer_leverage.py` pins all of it.
 
+## The cutout page's 5-Day Avg
+
+Added 2026-10-07, a tile on each of the Choice and Select rows, between Day
+Change and Month Change.
+
+**IT IS THE FIVE SESSIONS BEFORE THE ONE BEING REPORTED, NOT A TRAILING FIVE
+THAT INCLUDES IT** — `iloc[-6:-1]`, the same window `letter/sources.py` uses
+and `letter/rundown.py` puts on the client slide. `tail(5)` is the natural
+thing to write and is the one that breaks it: on the 2026-10-06 report it
+gives Choice 378.19 against a published 378.94, and Select 356.58 against
+358.20. Both are plausible and both render perfectly.
+
+**USDA publishes the figure, so there is a right answer rather than a
+convention to argue about.** The morning report prints "Current 5 Day Simple
+Average", and on 2026-10-06 that is 378.94 / 358.20 — the mean of 10/05,
+10/02, 10/01, 09/30 and 09/29, to the cent. The live page shows the same two
+numbers. So this is not a house preference that happens to agree with USDA;
+it reproduces what they print.
+
+That matters because three things now quote this number — the page, the
+daily letter and the slide — and CLAUDE.md already records two mornings lost
+to the letter and a dashboard disagreeing about one figure, each defensible,
+neither raising. `tests/test_cutout_five_day.py` pins the window, pins that
+the page and the letter agree, and states the `tail(5)` error as arithmetic
+so nobody has to take it on trust.
+
+Fewer than six sessions returns None rather than averaging what is there: a
+five-row history cannot produce a five-session average that excludes the
+current one, and a partial one would be quietly not what the label says.
+
 ## The morning cutout — LM_XB402
 
 Added 2026-10-06. The Beef Cutout page now reads **both** daily cutout
