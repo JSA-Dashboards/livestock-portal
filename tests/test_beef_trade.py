@@ -1216,3 +1216,102 @@ def test_cattle_weights_shows_no_pace_against_a_different_basis():
     for forbidden in ("ytd", "pace", "year-to-date"):
         assert forbidden not in panel.lower().replace("year-to-date basis", ""), \
             f"the panel appears to compare against actuals ({forbidden})"
+
+
+# -- the WASDE tiles print the level each move is from ------------------------
+
+def _steer_delta():
+    """
+    `_d` is nested inside wasde_steer_panel, so load_from_app (top level only)
+    cannot reach it. It closes over nothing, so lifting the FunctionDef out by
+    AST and exec'ing it runs the real formatter rather than a copy of it.
+    """
+    import ast
+    src = (ROOT / "apps" / "cash_trade" / "app.py").read_text(encoding="utf-8")
+    panel = next(n for n in ast.walk(ast.parse(src))
+                 if isinstance(n, ast.FunctionDef)
+                 and n.name == "wasde_steer_panel")
+    fn = next(n for n in ast.walk(panel)
+              if isinstance(n, ast.FunctionDef) and n.name == "_d")
+    ns: dict = {}
+    exec(ast.get_source_segment(src, fn), ns)
+    return ns["_d"]
+
+
+def test_every_wasde_tile_that_quotes_a_move_also_quotes_its_base():
+    """
+    A STANDING GUARD, not a check of the three that were wrong.
+
+    The tiles read "▼ $8.00 · 3.3% vs last month" over $237.35 and never said
+    what last month's forecast was; the year-on-year tile was worse, because
+    its own value is a percentage, so "▲ $12.98/cwt" asked the reader to add
+    12.98 to a number that is not on the tile at all. Ross's words on the beef
+    cutout, which had the identical defect two days earlier: "you have to do
+    the math in your head."
+
+    Every `_d(...)` call therefore has to pass `base=`. A fourth tile added
+    without one would reintroduce it, and nothing would raise -- the tile
+    would simply render a move with no level, which looks fine.
+    """
+    import ast
+    src = (ROOT / "apps" / "cash_trade" / "app.py").read_text(encoding="utf-8")
+    panel = next(n for n in ast.walk(ast.parse(src))
+                 if isinstance(n, ast.FunctionDef)
+                 and n.name == "wasde_steer_panel")
+    calls = [n for n in ast.walk(panel)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+             and n.func.id == "_d"]
+    assert len(calls) == 3, f"expected three delta tiles, found {len(calls)}"
+    for c in calls:
+        kw = {k.arg for k in c.keywords}
+        assert "base" in kw and "base_label" in kw, (
+            f"a WASDE tile at line {c.lineno} quotes a move with no level "
+            f"to measure it from")
+
+
+def test_the_delta_renders_the_base_on_its_own_line():
+    _d = _steer_delta()
+
+    out = _d(-8.00, -3.26, " vs last month", base=245.35,
+             base_label="last month")
+    assert "▼ $8.00 · 3.3% vs last month" in out
+    assert "last month $245.35" in out
+    # Its own div, because .tile-delta-* is nowrap and four tiles share a row.
+    assert out.count("<div") == 2 and 'class="tile-sub"' in out
+
+    # The year-on-year tile carries no percentage of its own -- the percentage
+    # IS the tile's value -- so the base is the only level anywhere on it.
+    yoy = _d(12.98, None, "/cwt", base=224.37, base_label="2025 averaged")
+    assert "▲ $12.98/cwt" in yoy
+    assert "2025 averaged $224.37" in yoy
+
+    # A tile with nothing to compare against still renders, and says nothing
+    # it cannot support.
+    assert "tile-sub" not in _d(None, None, " vs last month")
+    assert "unchanged" in _d(0, 0.0, " vs last month", base=237.35,
+                             base_label="last month")
+
+
+def test_the_levels_the_tiles_print_are_the_fixtures_own_arithmetic():
+    """
+    base + move == value, on all three tiles, against the September 2026
+    release the repo actually carries. These are the figures on the live page:
+    $237.35 forecast, cut $8.00 from $245.35, up $12.98 on 2025's $224.37,
+    and 2027 at $238.00 after an $11.00 cut from $249.00.
+    """
+    w = wasde.summary(_prices(), "steer")
+
+    assert w["prior"] == pytest.approx(245.35)
+    assert w["prior"] + w["revision"] == pytest.approx(w["value"])
+
+    assert w["base"] == pytest.approx(224.37)
+    assert w["base"] + w["yoy_abs"] == pytest.approx(w["value"])
+
+    nxt_prior = w["next_value"] - w["next_revision"]
+    assert nxt_prior == pytest.approx(249.00)
+    assert w["next_value"] == pytest.approx(238.00)
+
+    # The percentages beside them are off the BASE, not off the current value:
+    # 8.00/245.35 is 3.26%, 8.00/237.35 would be 3.37%.
+    assert w["revision_pct"] == pytest.approx(-3.26, abs=0.01)
+    assert w["next_revision"] / nxt_prior * 100.0 == pytest.approx(-4.42, abs=0.01)

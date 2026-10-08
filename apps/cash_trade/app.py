@@ -253,6 +253,10 @@ st.markdown(f"""
   .tile-delta-pos {{ color:{POS}; font-size:clamp(0.62rem, 1.05vw, 0.8rem); font-weight:600; margin-top:4px; white-space:nowrap; }}
   .tile-delta-neg {{ color:{NEG}; font-size:clamp(0.62rem, 1.05vw, 0.8rem); font-weight:600; margin-top:4px; white-space:nowrap; }}
   .tile-delta-neu {{ color:{MUTED}; font-size:clamp(0.62rem, 1.05vw, 0.8rem); font-weight:600; margin-top:4px; white-space:nowrap; }}
+  /* The level a delta is measured FROM. Its own line rather than more text on
+     the delta's, because .tile-delta-* is nowrap and four tiles share a row:
+     appending to it overflows the tile at any width below desktop. */
+  .tile-sub {{ color:{MUTED}; font-size:clamp(0.54rem, 0.9vw, 0.7rem); font-weight:400; margin-top:3px; white-space:nowrap; }}
 
   .narrative {{
     background:#f6f8fa; border:1px solid {BORDER}; border-left:4px solid {JPSI_BLUE};
@@ -1455,11 +1459,23 @@ def wasde_steer_panel():
 
     year = w["year"]
 
-    def _d(value, percent, suffix, digits=2, money=True):
+    def _d(value, percent, suffix, base=None, base_label="",
+           digits=2, money=True):
+        # THE LEVEL THE MOVE IS MEASURED FROM, printed under it. A tile reading
+        # "▼ $8.00 · 3.3% vs last month" over $237.35 does not say what USDA
+        # forecast last month -- the reader adds 8.00 back in their head, and
+        # on the year-on-year tile adds 12.98 to a figure that is not even on
+        # the tile, since its value is a percentage. Same defect the beef
+        # cutout's Month/Year tiles were corrected for on 2026-10-07: a move
+        # without its base is half a number.
+        _s = ""
+        if base is not None:
+            _s = (f'<div class="tile-sub">{base_label} '
+                  + ("$" if money else "") + f'{base:,.{digits}f}</div>')
         if value is None and percent is None:
-            return '<div class="tile-delta-neu">&mdash;</div>'
+            return '<div class="tile-delta-neu">&mdash;</div>' + _s
         if value == 0 or (value is None and percent == 0):
-            return f'<div class="tile-delta-neu">unchanged{suffix}</div>'
+            return f'<div class="tile-delta-neu">unchanged{suffix}</div>' + _s
         ref = value if value is not None else percent
         arrow = "▲" if ref > 0 else "▼"
         bits = []
@@ -1470,7 +1486,7 @@ def wasde_steer_panel():
         # NO PARENTHESES: in USDA's own reports they mean negative. See the
         # headline rule in CLAUDE.md and letter/sterling.py.
         return (f'<div class="tile-delta-neu">{arrow} '
-                f'{" · ".join(bits)}{suffix}</div>')
+                f'{" · ".join(bits)}{suffix}</div>' + _s)
 
     st.markdown(
         '<div class="sec-header">USDA WASDE expectation &mdash; '
@@ -1488,13 +1504,16 @@ def wasde_steer_panel():
         st.markdown(tile(
             f"USDA {year} steer price forecast",
             f"${w['value']:,.2f}",
-            _d(w["revision"], w["revision_pct"], " vs last month")),
+            _d(w["revision"], w["revision_pct"], " vs last month",
+               base=w["prior"], base_label="last month")),
             unsafe_allow_html=True)
     with c2:
         st.markdown(tile(
             f"USDA {year} forecast vs {w['base_year']}",
             f"{w['yoy_pct']:+,.1f}%" if w["yoy_pct"] is not None else "—",
-            _d(w["yoy_abs"], None, "/cwt")), unsafe_allow_html=True)
+            _d(w["yoy_abs"], None, "/cwt",
+               base=w["base"], base_label=f"{w['base_year']} averaged")),
+            unsafe_allow_html=True)
     with c3:
         qs = [q for q in w["quarters"] if q["value"] is not None]
         left = [q for q in qs if q["projected"]]
@@ -1505,14 +1524,16 @@ def wasde_steer_panel():
             f'{", ".join(q["period"] for q in left) or "none"} to come'
             f'</div>' if qs else ""), unsafe_allow_html=True)
     with c4:
-        nxt_pct = None
+        nxt_pct, nxt_prior = None, None
         if w["next_revision"] is not None and w["next_value"] is not None:
-            base = w["next_value"] - w["next_revision"]
-            nxt_pct = (w["next_revision"] / base * 100.0) if base else None
+            nxt_prior = w["next_value"] - w["next_revision"]
+            nxt_pct = ((w["next_revision"] / nxt_prior * 100.0)
+                       if nxt_prior else None)
         st.markdown(tile(
             f"USDA {w['next_year']} steer price forecast",
             f"${w['next_value']:,.2f}" if w["next_value"] is not None else "—",
-            _d(w["next_revision"], nxt_pct, " vs last month")),
+            _d(w["next_revision"], nxt_pct, " vs last month",
+               base=nxt_prior, base_label="last month")),
             unsafe_allow_html=True)
 
     qs = [q for q in w["quarters"] if q["value"] is not None]
