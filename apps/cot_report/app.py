@@ -258,10 +258,25 @@ def ordinal(p):
 
 # -- data --------------------------------------------------------------------
 
-@st.cache_data(ttl=3600, persist="disk", show_spinner="Reading CFTC positions…")
-def load_cot(schema: int = cot.SCHEMA) -> dict:
+@st.cache_data(ttl=1800, persist="disk", show_spinner="Reading CFTC positions…")
+def load_cot(schema: int = cot.SCHEMA, epoch=None) -> dict:
     """
     The whole page's data, in two queries.
+
+    =====================================================================
+    `epoch` IS WHAT MAKES THE PAGE PICK UP FRIDAY'S REPORT ON FRIDAY
+    =====================================================================
+
+    CFTC publishes at 2:30pm CT and the ETL loads Snowflake at 3pm, but a TTL
+    knows about neither: it is a stopwatch started by whoever last opened the
+    page. On an hour's TTL a reader could be served the previous Tuesday's
+    positions until 4pm on a Friday the new report landed at 3 -- correctly
+    computed, correctly dated, and a week old.
+
+    `cot.data_epoch()` rolls over at 3pm Friday, so passing it here makes the
+    cache expire ON THE EVENT rather than on a timer. The TTL stays as a
+    backstop: if the ETL is late the epoch has already rolled, the refetch
+    returns the old week, and half an hour later it tries again.
 
     `schema` is in the signature ONLY to key the cache. `st.cache_data` keys on
     the decorated function's own code and its arguments and never on the modules
@@ -337,7 +352,7 @@ if not cot.enabled():
     )
     st.stop()
 
-data = load_cot()
+data = load_cot(epoch=cot.data_epoch())
 
 if data.get("error"):
     st.error(

@@ -241,6 +241,20 @@ AS_OF_SLACK_DAYS = 1
 RELEASE_HOUR_CT = 16
 RELEASE_MINUTE_CT = 0
 
+# TWO THRESHOLDS, BECAUSE BEING WRONG COSTS DIFFERENT AMOUNTS EITHER SIDE.
+#
+#   ETL_HOUR_CT (3pm)      when to go and LOOK for the new week. The droplet
+#                          job fills Snowflake at 3pm CT, so this is the first
+#                          moment the new report can be there. Being early
+#                          costs one SELECT that returns the same rows.
+#   RELEASE_HOUR_CT (4pm)  when to SAY SO on the page. An hour of grace for the
+#                          job to finish, because a banner that fires every
+#                          Friday afternoon while the cron runs is one nobody
+#                          reads on the Friday it matters.
+#
+# A single threshold has to pick one of those jobs and do the other badly.
+ETL_HOUR_CT = 15
+
 _SELECT = """
     REPORT_DATE, OPEN_INTEREST, OPEN_INTEREST_CHG,
     MM_LONG, MM_SHORT, MM_SPREAD, MM_NET, MM_LONG_CHG, MM_SHORT_CHG,
@@ -420,7 +434,7 @@ def _now_ct() -> datetime:
         return datetime.now()
 
 
-def expected_as_of(now: datetime | None = None) -> date:
+def expected_as_of(now: datetime | None = None, hour: int = RELEASE_HOUR_CT) -> date:
     """
     The Tuesday of the newest report that should be on file by `now`.
 
@@ -436,6 +450,9 @@ def expected_as_of(now: datetime | None = None) -> date:
         Fri 10/09 16:00  -> release made at 15:00   -> expect Tue 10/06
         Sat 10/10 09:00  -> last release Fri 10/09  -> expect Tue 10/06
 
+    `hour` defaults to the ALARM threshold. Pass ETL_HOUR_CT to get the fetch
+    threshold instead -- see `data_epoch()` and the note on the two constants.
+
     Holiday weeks shift the REPORT date back to the Monday rather than forward,
     which is why `is_current()` compares with a day of slack instead of
     demanding equality.
@@ -444,9 +461,31 @@ def expected_as_of(now: datetime | None = None) -> date:
     today = now.date()
     # Most recent Friday on or before today. weekday(): Mon=0 .. Fri=4 .. Sun=6.
     friday = today - timedelta(days=(today.weekday() - 4) % 7)
-    if friday == today and (now.hour, now.minute) < (RELEASE_HOUR_CT, RELEASE_MINUTE_CT):
+    if friday == today and (now.hour, now.minute) < (hour, RELEASE_MINUTE_CT):
         friday -= timedelta(days=7)
     return friday - timedelta(days=3)      # that week's Tuesday
+
+
+def data_epoch(now: datetime | None = None) -> date:
+    """
+    A value that changes exactly when new data should exist, for use as a CACHE
+    KEY -- not as a claim about what is on file.
+
+    WHY THE PAGE NEEDS THIS AT ALL. CFTC publishes at 2:30pm CT on a Friday and
+    the ETL loads Snowflake at 3pm, but a cached page does not notice either
+    event: `st.cache_data` re-runs when its TTL expires, which is a stopwatch
+    started by whoever happened to open the page last. With an hour's TTL a
+    reader could be served Tuesday-before-last's positions until 4pm on a Friday
+    the new report landed at 3 -- correct-looking, correctly dated, and a week
+    old. That is the staleness this file keeps warning about, arriving through
+    the cache rather than through the feed.
+
+    Keying on this instead makes the cache expire ON THE EVENT: the value rolls
+    over at 3pm Friday and every viewer's next load goes back to Snowflake. The
+    TTL stays on as a backstop for the case the ETL is late, where this value
+    has already rolled and the data has not.
+    """
+    return expected_as_of(now, hour=ETL_HOUR_CT)
 
 
 def _as_date(v):
