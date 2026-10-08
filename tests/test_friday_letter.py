@@ -1241,12 +1241,35 @@ def test_a_net_long_still_prints_net_long():
     assert "Net Short" not in text.split("Feeder Cattle")[-1]
 
 
-def test_the_weekly_change_keeps_its_sign():
+def test_the_weekly_change_carries_an_explicit_sign_in_both_directions():
     """
-    Deliberately left alone: a CHANGE has a natural direction and "-3,100"
-    reads correctly. Only the level's label follows the sign.
+    The LEVEL takes a word and the CHANGE takes a sign, because a change has a
+    natural direction where a level does not.
+
+    But the sign has to be on BOTH. `head()` prints a plain number, so a week
+    of buying rendered as a bare "1,738" while a week of selling rendered
+    "-3,100" -- leaving the reader to tell a purchase from a sale by the
+    ABSENCE of a mark, which is not something anyone notices while skimming.
+    The two are near enough equally common to make that a coin flip: 551 up
+    weeks against 507 down in feeder cattle, 553 against 506 in live.
     """
-    assert "WoW Change: -3,100 contracts" in _cftc_text({"net_long": 8166, "wow": -3100})
+    bought = _cftc_text({"net_long": 8166, "wow": 1738})
+    assert "WoW Change: +1,738 contracts" in bought
+
+    sold = _cftc_text({"net_long": 8166, "wow": -3100})
+    assert "WoW Change: -3,100 contracts" in sold
+
+
+def test_a_flat_week_says_unchanged_rather_than_zero():
+    """
+    Exactly once in 2,120 market-weeks. A bare "0" reads as a figure that
+    failed to load, and "+0" is worse; the funds not moving is a real answer.
+    The portal's standing rule, same as the dashboard's delta tiles.
+    """
+    text = _cftc_text({"net_long": 8166, "wow": 0})
+    assert "WoW Change: unchanged" in text
+    assert "+0" not in text
+    assert "WoW Change: 0" not in text
 
 
 def test_a_missing_net_is_still_marked_rather_than_guessed():

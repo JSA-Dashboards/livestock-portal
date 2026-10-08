@@ -1773,9 +1773,20 @@ a basis this page neither audits nor leads with.
   `Net Long: -870 contracts` is what went out on 2024-09-17 and on the six
   Fridays before it. The label now follows the sign, so a short week reads
   `Net Short: 870 contracts` with no minus, matching what the dashboard shows
-  for the same figure. **WoW Change was deliberately left signed**: a change has
-  a natural direction and `-3,100` reads correctly there. Ross chose the
-  wording. `tests/test_friday_letter.py` pins both halves, including one test
+  for the same figure.
+
+  **The LEVEL takes a word; the CHANGE takes a sign, in BOTH directions.** A
+  change has a natural direction where a level does not, so `WoW Change` keeps
+  `+1,738` / `-3,100` rather than a word — but it had to gain the explicit
+  plus. `head()` prints a plain number, so a week of buying rendered as a bare
+  `1,738` while a week of selling rendered `-3,100`, leaving the reader to tell
+  a purchase from a sale by the ABSENCE of a mark. Nobody notices that while
+  skimming, and the two are near enough a coin flip: 551 up weeks against 507
+  down in feeders, 553 against 506 in live. The one week in 2,120 where the
+  change was exactly zero prints `unchanged`, not `+0` and not a bare `0`.
+
+  Ross chose all of this wording.
+  `tests/test_friday_letter.py` pins every case, including one test
   that renders the letter and the dashboard side by side so they cannot drift
   apart on how a short position is shown.
 

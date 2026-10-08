@@ -507,12 +507,33 @@ def cftc_block(cftc: dict) -> str:
         # letter and that page saying the same thing about the same figure --
         # the disagreement CLAUDE.md records three mornings lost to.
         #
-        # WoW Change is deliberately LEFT SIGNED: a change has a natural
-        # direction and "-3,100" reads correctly there.
+        # WoW Change keeps its sign rather than a word, because a CHANGE has a
+        # natural direction where a level does not -- but it now carries the
+        # sign EXPLICITLY IN BOTH DIRECTIONS.
+        #
+        # `head()` formats a plain number, so a week of buying printed as a
+        # bare "1,738" while a week of selling printed "-3,100". The reader
+        # could tell a sale from a purchase only by the ABSENCE of a mark,
+        # which is not something you notice on a line you are skimming -- and
+        # the two happen about equally often: 551 up weeks against 507 down in
+        # feeder cattle, 553 against 506 in live. "+1,738" and "-3,100" say
+        # which it was without being read carefully.
+        #
+        # The one week in 2,120 where the change was exactly zero prints
+        # "unchanged" rather than "+0" or a bare "0" -- the portal's standing
+        # rule, because a bare zero reads as a figure that failed to load, and
+        # the funds not moving in a week is a real answer.
         net = mk.get("net_long")
         side = "Net Short" if (net is not None and net < 0) else "Net Long"
+        wow = mk.get("wow")
+        if wow is None:
+            wow_row = f"WoW Change: {MISSING} contracts"
+        elif wow == 0:
+            wow_row = "WoW Change: unchanged"
+        else:
+            wow_row = f"WoW Change: {wow:+,.0f} contracts"
         inner = _bullets([f"{side}: {head(net if net is None else abs(net))} contracts",
-                          f"WoW Change: {head(mk.get('wow'))} contracts"])
+                          wow_row])
         rows.append(f"{name}:{inner}")
     return (f"<h2>CFTC Report as of {_esc(stamp)}:</h2>"
             "<div>Managed Money Traders (Futures Only)</div>" + _bullets(rows))
