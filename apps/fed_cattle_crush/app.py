@@ -211,11 +211,12 @@ def contract_month(ticker: str, code: str):
 
 
 @st.cache_data(ttl=21600, persist="disk", show_spinner=False)
-def _fetch_wasde_steer(_schema: int = wasde.SCHEMA) -> dict:
+def _fetch_wasde_steer(schema: int = wasde.SCHEMA) -> dict:
     """
     USDA's quarterly cash steer forecast. Shared arithmetic -- see
     wasde.summary, which Cash Cattle Trade and Cattle Weights also use, so
-    the three pages cannot disagree about one number. `_schema` keys the
+    the three pages cannot disagree about one number. `schema` keys the cache, and BOTH halves matter: no leading underscore (Streamlit drops underscore-prefixed arguments from the key) and the CALLER must pass it (a default is never hashed).
+    It used to key the
     cache; st.cache_data never notices that wasde.py changed.
     """
     q = wasde.load_quarterly_prices()
@@ -805,7 +806,7 @@ with tab_crush:
     _wq = None
     _wq_year = None
     try:
-        _w = _fetch_wasde_steer()
+        _w = _fetch_wasde_steer(wasde.SCHEMA)
         if _w:
             _qn = (finish_date.month - 1) // 3 + 1
             _rows = (_w.get("by_year") or {}).get(finish_date.year, [])

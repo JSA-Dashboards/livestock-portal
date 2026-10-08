@@ -300,7 +300,14 @@ def test_fractions_render_as_percentages(bundle):
 def test_every_cached_loader_takes_the_schema_key():
     """st.cache_data keys on the decorated function's own code and NEVER on the
     modules it calls. Adding a key to leverage.load() once made a whole section
-    vanish silently because the one-line fetch body had not changed."""
+    vanish silently because the one-line fetch body had not changed.
+
+    THIS ASSERTION USED TO DEMAND `_schema` AND SO PINNED THE BROKEN FORM.
+    Streamlit excludes any parameter whose name starts with an underscore from
+    the cache key -- that is how unhashable arguments are passed -- so the
+    guard these eight loaders carried had never keyed anything. Corrected
+    2026-10-07; see `test_the_schema_reaches_the_cache_through_the_thread_pool`
+    below for the other half, which is that it must also be PASSED."""
     tree = _tree(LOADERS_PY)
     for node in ast.walk(tree):
         if not isinstance(node, ast.FunctionDef):
@@ -310,7 +317,9 @@ def test_every_cached_loader_takes_the_schema_key():
             continue
         args = [a.arg for a in node.args.args] + \
                [a.arg for a in node.args.kwonlyargs]
-        assert "_schema" in args, f"{node.name} is cached without the SCHEMA key"
+        assert "schema" in args, f"{node.name} is cached without the SCHEMA key"
+        assert "_schema" not in args, (
+            f"{node.name} spells it _schema, which Streamlit drops from the key")
 
 
 def test_no_loader_persists_to_disk():
@@ -416,3 +425,17 @@ def test_the_demand_card_never_claims_the_weekly_export_figure(bundle):
     ex = registry.BY_KEY["exports_ytd"]
     assert "carcass" in ex.basis.lower()
     assert "ers" in ex.source.lower()
+
+
+def test_the_schema_reaches_the_cache_through_the_thread_pool():
+    """
+    The eight loaders above are never called by name -- they are handed to a
+    ThreadPoolExecutor -- so an unprefixed `schema` in the signature is still
+    inert unless the dispatch passes it. DEFAULTS ARE NOT PART OF A CACHE KEY;
+    only arguments the caller actually supplies are hashed, so `ex.submit(f)`
+    would silently disable the guard for all eight at once.
+    """
+    with open(LOADERS_PY, encoding="utf-8") as fh:
+        src = fh.read()
+    assert "ex.submit(f, SCHEMA)" in src
+    assert "ex.submit(f)" not in src

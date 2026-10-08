@@ -286,39 +286,51 @@ def load_cot(schema: int = cot.SCHEMA, epoch=None) -> dict:
     is recorded against `leverage.SCHEMA` in CLAUDE.md.
 
     =====================================================================
-    THE ARGUMENT HAS NO LEADING UNDERSCORE, AND THAT IS THE WHOLE POINT
+    TWO CONDITIONS, AND THE GUARD IS INERT UNLESS BOTH HOLD
     =====================================================================
 
-    Every other cached loader in this repo spells it `_schema`, and in that form
-    IT DOES NOT KEY ANYTHING. Streamlit deliberately excludes any parameter whose
-    name begins with an underscore from the cache key -- that is the documented
-    mechanism for passing unhashable things like a database handle into a cached
-    function -- so `_schema=mod.SCHEMA` is hashed exactly never and bumping the
-    constant changes nothing at all.
+    1. NO LEADING UNDERSCORE. Streamlit deliberately excludes any parameter
+       whose name begins with one from the cache key -- that is the documented
+       way to pass unhashable things like a database handle into a cached
+       function -- so a `_schema` argument is hashed exactly never.
+    2. THE CALLER MUST PASS IT. Only arguments actually supplied are hashed;
+       DEFAULTS ARE NOT PART OF THE KEY AT ALL. So `schema=mod.SCHEMA` sitting
+       in the signature while every call site writes `load_x()` is just as
+       inert as the underscore form, in a way that looks fixed.
 
     Measured rather than assumed, on the Streamlit in this venv:
 
         @st.cache_data
         def f(_schema=1, normal=0): ...
-        f(); f(2); f(1); f(1, 9)   ->  the body ran for (1,0) and (1,9) only
+        f(); f(2); f(1); f(1, 9)   ->  body ran for (1,0) and (1,9) only;
                                        f(2) was served from the cache
 
         @st.cache_data
         def g(schema=1): ...
-        g(); g(2); g(1); g(2)      ->  the body ran for 1, 2, 1
+        g(); g(2); g(1)            ->  body ran for 1, 2, 1
+        g(); g(1); g(); g(1)       ->  body ran TWICE, not once -- so f()
+                                       and f(1) are different keys, which
+                                       is only possible if the default is
+                                       absent from the key rather than
+                                       resolved into it
 
-    So the guard works with the underscore removed and is inert with it in
-    place. THE TRAP IT IS MEANT TO CATCH FIRED ON THIS VERY PAGE while it was
-    being built, with `_schema` in the signature and the constant freshly
-    bumped: `why()` gained an `agree` key, the hero tile read `.get("agree")`,
+    THE SECOND CONDITION WAS MISSED ON THE FIRST PASS AT THIS, which is worth
+    recording because the result was a fix that looked complete: the underscore
+    came off, the constant got bumped, a test asserted the signature, and the
+    cache went on ignoring all of it because the call site still read
+    `load_cot()`. That is the shape CLAUDE.md records under the feeder index --
+    a first fix that shipped the same bug with a label on it.
+
+    THE TRAP IT IS MEANT TO CATCH FIRED ON THIS VERY PAGE while it was being
+    built: `why()` gained an `agree` key, the hero tile read `.get("agree")`,
     the cached dict predated it, `.get` returned None, the tile printed the
     wrong sentence, and `persist="disk"` carried the stale dict across two full
     server restarts. Nothing raised at any point.
 
-    `apps/beef_cutout`, `apps/beef_trade`, `apps/cash_trade`,
-    `apps/mexican_feeder_imports` and `apps/market_board/loaders.py` all still
-    use the underscore form -- sixteen loaders in all. They are not changed from
-    here; that is its own job and its own review.
+    The other eighteen loaders in this repo were corrected the same way; see
+    the CLAUDE.md section. `apps/cash_trade/app.py::fetch_leverage` is the one
+    that was right all along, and is worth reading as the model: unprefixed,
+    and passed `leverage.SCHEMA` at the call site.
 
     FRAMES ARE RETURNED AS DATAFRAMES AND THAT IS FINE -- st.cache_data pickles
     what it stores and a DataFrame pickles cleanly. What must never go in here is
@@ -352,7 +364,7 @@ if not cot.enabled():
     )
     st.stop()
 
-data = load_cot(epoch=cot.data_epoch())
+data = load_cot(cot.SCHEMA, cot.data_epoch())
 
 if data.get("error"):
     st.error(

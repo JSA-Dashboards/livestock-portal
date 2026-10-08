@@ -1358,10 +1358,10 @@ with tab_crossings:
 # Cold Storage view and the Packer Leverage tab.
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def load_mx_prices(_schema=mxp.SCHEMA):
+def load_mx_prices(schema=mxp.SCHEMA):
     """One connection, everything the prices tab draws. None on any failure.
 
-    `_schema` is passed in purely as part of the cache key. st.cache_data keys
+    `schema` keys the cache, and BOTH halves matter: no leading underscore (Streamlit drops underscore-prefixed arguments from the key) and the CALLER must pass it (a default is never hashed). st.cache_data keys
     on the decorated function's own code and arguments and NEVER on the modules
     it calls, so without it a change to mx_prices.compare()'s shape would keep
     serving a dict from before the new key existed and the tiles would render
@@ -1401,7 +1401,7 @@ with tab_prices:
     st.markdown('<div class="sec-header">Mexican Feeder Prices</div>',
                 unsafe_allow_html=True)
 
-    MX = load_mx_prices()
+    MX = load_mx_prices(mxp.SCHEMA)
 
     if not MX:
         st.info(

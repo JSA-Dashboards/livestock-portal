@@ -106,7 +106,7 @@ def _err(e) -> dict:
 # ── LMR: the packer-position block ───────────────────────────────────────────
 
 @st.cache_data(ttl=3600, show_spinner=False)  # LM_CT153 publishes Monday for the prior week
-def load_leverage(_schema=SCHEMA) -> dict:
+def load_leverage(schema=SCHEMA) -> dict:
     """
     The purchase mix, forward book, committed inventory and delivery schedule.
 
@@ -142,7 +142,7 @@ def load_leverage(_schema=SCHEMA) -> dict:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)  # LM_CT150 is weekly
-def load_weights(_schema=SCHEMA) -> dict:
+def load_weights(schema=SCHEMA) -> dict:
     """
     Head-weighted 5-Area live and dressed weight, and this week against trend.
 
@@ -179,7 +179,7 @@ def load_weights(_schema=SCHEMA) -> dict:
 # ── the letter's own read-only fetchers ──────────────────────────────────────
 
 @st.cache_data(ttl=900, show_spinner=False)  # LM_XB403 prints every afternoon
-def load_cutout(_schema=SCHEMA) -> dict:
+def load_cutout(schema=SCHEMA) -> dict:
     try:
         return sources.fetch_cutout() or {"error": "no cutout returned"}
     except Exception as e:                      # noqa: BLE001
@@ -187,7 +187,7 @@ def load_cutout(_schema=SCHEMA) -> dict:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)  # LM_CT150/154 are weekly
-def load_cash(_schema=SCHEMA) -> dict:
+def load_cash(schema=SCHEMA) -> dict:
     try:
         return sources.fetch_cash_trade() or {"error": "no cash trade returned"}
     except Exception as e:                      # noqa: BLE001
@@ -195,7 +195,7 @@ def load_cash(_schema=SCHEMA) -> dict:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)  # SJ_LS712 is weekly
-def load_slaughter(_schema=SCHEMA) -> dict:
+def load_slaughter(schema=SCHEMA) -> dict:
     try:
         return sources.fetch_slaughter() or {"error": "no slaughter returned"}
     except Exception as e:                      # noqa: BLE001
@@ -203,7 +203,7 @@ def load_slaughter(_schema=SCHEMA) -> dict:
 
 
 @st.cache_data(ttl=900, show_spinner=False)  # the index moves daily
-def load_fci(_schema=SCHEMA) -> dict:
+def load_fci(schema=SCHEMA) -> dict:
     """
     The feeder index, headlined on the date CME will print NEXT.
 
@@ -222,7 +222,7 @@ def load_fci(_schema=SCHEMA) -> dict:
 # ── Snowflake ────────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=1800, show_spinner=False)  # basis snapshots land through the day
-def load_corn(_schema=SCHEMA) -> dict:
+def load_corn(schema=SCHEMA) -> dict:
     """
     Delivered corn by feeding state -- the cost side of every feeder bid.
 
@@ -243,7 +243,7 @@ def load_corn(_schema=SCHEMA) -> dict:
 
 
 @st.cache_data(ttl=21600, show_spinner=False)  # ERS publishes monthly
-def load_trade(_schema=SCHEMA) -> dict:
+def load_trade(schema=SCHEMA) -> dict:
     """
     US beef exports and imports against USDA's own full-year forecast.
 
@@ -311,7 +311,7 @@ def bundle(today: date | None = None) -> dict:
     # you abandon. Each is separately cached on its own feed's cadence, so this
     # cost is paid once an hour for the weekly blocks rather than per view.
     with ThreadPoolExecutor(max_workers=8) as ex:
-        jobs = {k: ex.submit(f) for k, f in (
+        jobs = {k: ex.submit(f, SCHEMA) for k, f in (
             ("lev", load_leverage), ("weights", load_weights),
             ("cutout", load_cutout), ("cash", load_cash),
             ("slaughter", load_slaughter), ("fci", load_fci),

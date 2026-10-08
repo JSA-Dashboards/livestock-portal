@@ -1427,7 +1427,7 @@ with c2:
 # supply-and-use table the US Beef Trade page reads.
 
 @st.cache_data(ttl=21600, persist="disk", show_spinner=False)
-def fetch_wasde_steer(_schema: int = wasde.SCHEMA) -> dict:
+def fetch_wasde_steer(schema: int = wasde.SCHEMA) -> dict:
     """
     USDA's quarterly 5-Area steer price forecast, as a plain dict.
 
@@ -1438,7 +1438,7 @@ def fetch_wasde_steer(_schema: int = wasde.SCHEMA) -> dict:
 
     Flattened because st.cache_data pickles what it stores and a cached
     dataclass goes stale against its own class the moment the module is
-    edited. `_schema` keys the cache; see `leverage.SCHEMA`.
+    edited. `schema` keys the cache, and BOTH halves matter: no leading underscore (Streamlit drops underscore-prefixed arguments from the key) and the CALLER must pass it (a default is never hashed). See `leverage.SCHEMA`.
     """
     return wasde.summary(wasde.load_quarterly_prices(), "steer")
 
@@ -1446,7 +1446,7 @@ def fetch_wasde_steer(_schema: int = wasde.SCHEMA) -> dict:
 def wasde_steer_panel():
     """USDA's forecast for the very series this tab charts."""
     try:
-        w = fetch_wasde_steer()
+        w = fetch_wasde_steer(wasde.SCHEMA)
     except Exception as exc:  # noqa: BLE001
         st.caption(f"WASDE steer price forecast unavailable — {exc}")
         return

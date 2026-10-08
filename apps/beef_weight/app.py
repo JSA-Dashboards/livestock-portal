@@ -951,8 +951,11 @@ trend_class = st.sidebar.selectbox("Trend class", CLASS_ORDER, format_func=_fmt_
 
 
 @st.cache_data(ttl=21600, persist="disk", show_spinner=False)
-def _fetch_wasde_beef(_schema: int = wasde.SCHEMA) -> dict:
-    """Shared arithmetic -- see wasde.summary. `_schema` keys the cache."""
+def _fetch_wasde_beef(schema: int = wasde.SCHEMA) -> dict:
+    """Shared arithmetic -- see wasde.summary.
+
+    `schema` keys the cache, and BOTH halves matter: no leading underscore (Streamlit drops underscore-prefixed arguments from the key) and the CALLER must pass it (a default is never hashed).
+    """
     return wasde.summary(wasde.load_quarterly_production(), "beef")
 
 
@@ -993,7 +996,7 @@ def _wasde_tile(label, value, delta="", sub=""):
 
 def _render_wasde_production():
     try:
-        w = _fetch_wasde_beef()
+        w = _fetch_wasde_beef(wasde.SCHEMA)
     except Exception as exc:  # noqa: BLE001
         st.caption("WASDE beef production forecast unavailable — %s" % exc)
         return

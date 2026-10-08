@@ -249,10 +249,11 @@ def fmt(v, digits=0, suffix=""):
 # -- data --------------------------------------------------------------------
 
 @st.cache_data(ttl=21600, persist="disk", show_spinner=False)
-def load_trade(_schema: int = tf.SCHEMA) -> pd.DataFrame:
+def load_trade(schema: int = tf.SCHEMA) -> pd.DataFrame:
     """
     The ERS monthly file. Six hours, because it is republished monthly and is
-    4 MB. `_schema` is in the signature ONLY to key the cache -- st.cache_data
+    4 MB. `schema` keys the cache, and BOTH halves matter: no leading underscore (Streamlit drops underscore-prefixed arguments from the key) and the CALLER must pass it (a default is never hashed).
+    st.cache_data
     never notices that trade_flows.py changed. See CLAUDE.md on
     `leverage.SCHEMA`.
     """
@@ -260,7 +261,7 @@ def load_trade(_schema: int = tf.SCHEMA) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=21600, persist="disk", show_spinner=False)
-def load_wasde(_schema: int = wasde.SCHEMA) -> dict:
+def load_wasde(schema: int = wasde.SCHEMA) -> dict:
     """
     The newest WASDE meats table, flattened to a plain dict.
 
@@ -284,7 +285,7 @@ def load_wasde(_schema: int = wasde.SCHEMA) -> dict:
 
 @st.cache_data(ttl=86400, persist="disk", show_spinner=False)
 def load_revisions(attribute: str, year: int, n: int,
-                   _schema: int = wasde.SCHEMA) -> list:
+                   schema: int = wasde.SCHEMA) -> list:
     """n releases, n requests -- only ever called from a button."""
     return wasde.history("Beef", attribute, year, n=n)
 
@@ -312,14 +313,14 @@ st.markdown(
 
 _err = None
 try:
-    trade = load_trade()
+    trade = load_trade(tf.SCHEMA)
 except Exception as exc:                                   # noqa: BLE001
     trade, _err = pd.DataFrame(), exc
 
 wd = None
 wasde_err = None
 try:
-    wd = load_wasde()
+    wd = load_wasde(wasde.SCHEMA)
 except Exception as exc:                                   # noqa: BLE001
     wasde_err = exc
 
@@ -484,7 +485,7 @@ def wasde_panel(attribute: str, label: str, key: str):
         if st.button("Fetch revision history", key=f"rev_go_{key}"):
             with st.spinner(f"Reading {n} WASDE releases…"):
                 try:
-                    hist = load_revisions(attribute, year, n)
+                    hist = load_revisions(attribute, year, n, wasde.SCHEMA)
                 except Exception as exc:                   # noqa: BLE001
                     hist = []
                     st.warning(f"Could not read the releases: {exc}")

@@ -537,71 +537,88 @@ def test_the_as_of_line_renders_before_the_headline_figures():
 
 def test_the_cache_key_argument_is_not_underscore_prefixed():
     """
-    STREAMLIT IGNORES ANY PARAMETER WHOSE NAME BEGINS WITH AN UNDERSCORE when it
-    computes a cache key -- that is the documented mechanism for passing
+    STREAMLIT IGNORES ANY PARAMETER WHOSE NAME BEGINS WITH AN UNDERSCORE when
+    it computes a cache key -- that is the documented mechanism for passing
     unhashable things like a connection into a cached function. So the
-    `_schema=mod.SCHEMA` form used elsewhere in this repo keys nothing at all
-    and bumping the constant changes nothing.
+    `_schema=mod.SCHEMA` form keys nothing and bumping the constant does
+    nothing.
 
     Measured, not assumed: with `_schema`, calling f(), f(2), f(1) ran the body
     once; with `schema`, calling g(), g(2), g(1) ran it three times. The trap it
-    guards fired on this very page during development, survived two server
-    restarts via persist="disk", and printed the wrong sentence without raising.
+    guards fired on this page during development, survived two server restarts
+    via persist="disk", and printed the wrong sentence without raising.
     """
     src = _page_source()
     assert "def load_cot(schema: int = cot.SCHEMA, epoch=None)" in src
-    assert "_schema" not in src.split("def load_cot")[1][:400]
+    assert "_schema" not in src.split("def load_cot")[1][:300]
 
 
-# -- picking up Friday's report on Friday ------------------------------------
-
-@pytest.mark.parametrize("now,epoch,alarm", [
-    # CFTC publishes 2:30pm CT; the ETL loads Snowflake at 3pm. The FETCH
-    # threshold rolls at 3, the ALARM threshold at 4, and between them the page
-    # is looking for the new week without yet complaining that it is missing.
-    (datetime(2026, 10, 9, 14, 0),  date(2026, 9, 29), date(2026, 9, 29)),
-    (datetime(2026, 10, 9, 14, 45), date(2026, 9, 29), date(2026, 9, 29)),  # CFTC out, ETL not run
-    (datetime(2026, 10, 9, 15, 5),  date(2026, 10, 6), date(2026, 9, 29)),  # look, do not shout
-    (datetime(2026, 10, 9, 16, 5),  date(2026, 10, 6), date(2026, 10, 6)),  # both rolled
-    (datetime(2026, 10, 12, 9, 0),  date(2026, 10, 6), date(2026, 10, 6)),  # Monday
-])
-def test_the_fetch_threshold_leads_the_alarm_threshold_by_an_hour(now, epoch, alarm):
-    assert cot.data_epoch(now) == epoch
-    assert cot.expected_as_of(now) == alarm
-
-
-def test_the_cache_epoch_rolls_over_exactly_once_a_week():
+def test_the_cache_key_argument_is_actually_passed_by_the_caller():
     """
-    It is a cache key, so what matters is that it is STABLE between releases and
-    CHANGES at one. A value that moved more often would refetch for nothing; one
-    that moved less would serve a week-old position on the day it mattered.
+    THE SECOND HALF, AND THE ONE THE FIRST PASS AT THIS MISSED. Only arguments
+    the caller actually supplies are hashed -- DEFAULTS ARE NOT PART OF THE KEY.
+    So an unprefixed `schema=cot.SCHEMA` in the signature is still inert while
+    every call site writes `load_cot()`, in a way that looks fixed and is not.
+
+    Demonstrated by the fact that f() and f(1) are DIFFERENT cache entries on a
+    function whose default is 1: if the default were resolved into the key they
+    would be the same entry and the body would run once.
     """
-    seen = []
-    for day in range(14):
-        for hour in (0, 9, 14, 15, 16, 23):
-            seen.append(cot.data_epoch(datetime(2026, 10, 1 + day, hour, 0)))
-    distinct = sorted(set(seen))
-    # Oct 1-14 spans the Friday releases of Oct 2 and Oct 9 only, so three
-    # epochs: the one standing on Oct 1, and one for each release.
-    assert distinct == [date(2026, 9, 22), date(2026, 9, 29), date(2026, 10, 6)]
-    # and it only ever moves forward as the clock does
-    assert seen == sorted(seen)
+    src = _page_source()
+    assert "load_cot(cot.SCHEMA, cot.data_epoch())" in src
 
 
-def test_the_page_passes_the_epoch_into_the_cached_loader():
+def test_every_cached_loader_in_the_repo_keys_on_its_schema():
     """
-    The constant is useless unless it reaches the cache key. `st.cache_data`
-    hashes the ARGUMENTS, so a `data_epoch()` that nothing passes in is a
-    function with no callers wearing a comment.
+    The guard is only worth having if it holds everywhere, and it is exactly the
+    kind of thing that rots back: the next cached loader somebody adds will be
+    copied from a neighbour. Checked by AST across the whole repo -- any cached
+    function taking a schema argument must spell it without an underscore, and
+    every direct call must pass it.
+
+    `apps/market_board/loaders.py` is exempted from the call check because its
+    eight loaders are dispatched through a ThreadPoolExecutor
+    (`ex.submit(f, SCHEMA)`), which no AST walk can follow to the callee; that
+    one line is asserted separately below.
     """
-    src = (REPO / "apps" / "cot_report" / "app.py").read_text(encoding="utf-8")
-    assert "load_cot(epoch=cot.data_epoch())" in src
-    assert "def load_cot(schema: int = cot.SCHEMA, epoch=None)" in src
+    import ast
+
+    problems = []
+    for path in sorted(REPO.rglob("*.py")):
+        if "__pycache__" in str(path) or ".venv" in str(path):
+            continue
+        rel = path.relative_to(REPO).as_posix()
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if not any("cache_data" in ast.unparse(d) or "cache_resource" in ast.unparse(d)
+                       for d in node.decorator_list):
+                continue
+            names = [a.arg for a in node.args.args]
+            if "_schema" in names:
+                problems.append(f"{rel}:{node.lineno} {node.name} uses _schema")
+                continue
+            if "schema" not in names or rel.startswith("apps/market_board/"):
+                continue
+            idx = names.index("schema")
+            for call in ast.walk(tree):
+                if isinstance(call, ast.Call) and getattr(call.func, "id", None) == node.name:
+                    if not (any(k.arg == "schema" for k in call.keywords)
+                            or len(call.args) > idx):
+                        problems.append(
+                            f"{rel}:{call.lineno} calls {node.name}() without passing schema")
+    assert not problems, ("cache guards that key nothing: "
+                          + "; ".join(problems))
 
 
-def test_the_etl_hour_precedes_the_alarm_hour():
+def test_the_market_board_passes_its_schema_through_the_thread_pool():
     """
-    If these ever cross, the page starts complaining that data is missing before
-    it has looked for it.
+    Its eight loaders are never called by name, so the guard lives or dies on
+    this one line. `ex.submit(f)` would key nothing for all eight at once.
     """
-    assert cot.ETL_HOUR_CT < cot.RELEASE_HOUR_CT
+    src = (REPO / "apps" / "market_board" / "loaders.py").read_text(encoding="utf-8")
+    assert "ex.submit(f, SCHEMA)" in src

@@ -856,9 +856,11 @@ def fetch_grading_weekly() -> pd.DataFrame:
 # deployed app, and NOT marsapi, which Community Cloud cannot reach.
 
 @st.cache_data(ttl=900, show_spinner=False)
-def fetch_am_cutout(_schema: int = am_cutout.SCHEMA) -> dict:
+def fetch_am_cutout(schema: int = am_cutout.SCHEMA) -> dict:
     """
-    Today's morning cutout. `_schema` is in the signature ONLY to key the
+    Today's morning cutout. `schema` keys the cache, and BOTH halves matter: no leading underscore (Streamlit drops underscore-prefixed arguments from the key) and the CALLER must pass it (a default is never hashed).
+    The old `_schema` form keyed nothing at all. It was
+    in the signature ONLY to key the
     cache -- st.cache_data never notices that am_cutout.py changed. See
     am_cutout.SCHEMA.
     """
@@ -866,7 +868,7 @@ def fetch_am_cutout(_schema: int = am_cutout.SCHEMA) -> dict:
 
 
 @st.cache_data(ttl=900, show_spinner=False)
-def fetch_am_history(_schema: int = am_cutout.SCHEMA) -> pd.DataFrame:
+def fetch_am_history(schema: int = am_cutout.SCHEMA) -> pd.DataFrame:
     """The mornings banked so far. Empty until this has run for a few days."""
     return am_cutout.history()
 
@@ -1219,7 +1221,7 @@ with st.spinner("Loading USDA beef cutout data…"):
 # at all -- the mistake the Saturday Slaughter tab's four-line guard exists to
 # prevent (CLAUDE.md, "The Saturday Slaughter view").
 try:
-    am_row = fetch_am_cutout()
+    am_row = fetch_am_cutout(am_cutout.SCHEMA)
 except Exception as e:
     am_row = {"error": str(e)}
 
@@ -1234,7 +1236,7 @@ if not am_row.get("error") and am_cutout.enabled():
         am_bank_msg = ""
 
 try:
-    am_banked = fetch_am_history()
+    am_banked = fetch_am_history(am_cutout.SCHEMA)
 except Exception:
     am_banked = pd.DataFrame()
 

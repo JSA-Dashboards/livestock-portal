@@ -1836,15 +1836,30 @@ hidden body is cheap. All three tabs read the **same two cached queries**
 `load_cot()` already made, so the second and third cost rendering and no network
 at all. Nothing on this page fetches from inside a tab.
 
-### `cot_positions.SCHEMA` — and the discovery that the guard was never working
+### The SCHEMA cache guard — it never worked anywhere, and the fix has TWO halves
 
-`SCHEMA` exists because the cache serves shape, not freshness. **But the form
-this repo uses for it does not work**, which was found here by the trap firing:
+`<module>.SCHEMA` exists because `st.cache_data` serves shape, not freshness:
+it keys on the decorated function's own code and arguments and is blind to the
+modules that function calls, so a reshaped return value is served from a cache
+built before the reshape and the tile reading a new key renders an em dash with
+nothing raising. That reasoning, recorded against `leverage.SCHEMA`,
+`am_cutout.SCHEMA`, `mx_prices.SCHEMA` and `trade_flows.SCHEMA`, is right.
 
-**`st.cache_data` ignores any parameter whose name begins with an underscore.**
-That is the documented mechanism for passing unhashable things like a
-connection into a cached function, so `_schema=mod.SCHEMA` is hashed never and
-bumping the constant changes nothing at all. Measured, not assumed:
+**The implementation of it was not, and had never fired.** Found 2026-10-07
+while building the Commitment of Traders page, by the trap itself going off on
+a loader whose constant had just been bumped. Two conditions, and the guard is
+inert unless BOTH hold:
+
+1. **No leading underscore.** Streamlit excludes any parameter whose name
+   begins with one from the cache key — that is the documented way to pass
+   unhashable things like a connection into a cached function. So
+   `_schema=mod.SCHEMA` is hashed exactly never.
+2. **The caller must pass it.** Only arguments actually supplied are hashed.
+   **A DEFAULT IS NOT PART OF THE KEY AT ALL**, so `schema=mod.SCHEMA` in the
+   signature while every call site writes `load_x()` is just as inert as the
+   underscore form — and looks fixed, which is worse.
+
+Measured on the Streamlit in this venv rather than reasoned about:
 
     @st.cache_data
     def f(_schema=1, normal=0): ...
@@ -1853,17 +1868,48 @@ bumping the constant changes nothing at all. Measured, not assumed:
     @st.cache_data
     def g(schema=1): ...
     g(); g(2); g(1)            ->  body ran for 1, 2, 1
+    g(); g(1); g(); g(1)       ->  body ran TWICE — so g() and g(1) are
+                                   different keys, which is only possible if
+                                   the default is absent from the key rather
+                                   than resolved into it
 
-`apps/cot_report/app.py::load_cot` takes **`schema`, with no underscore**, and a
-test pins that. **Sixteen other loaders across five pages still use the broken
-form** — `apps/beef_cutout` (2), `apps/beef_trade` (3), `apps/cash_trade` (1),
-`apps/mexican_feeder_imports` (1) and `apps/market_board/loaders.py` (8). They
-were not changed from here; that is its own job and its own review.
+**THE FIRST PASS AT THE FIX FOUND ONLY CONDITION 1 AND SHIPPED LOOKING
+COMPLETE** — underscore removed, constant bumped, a test asserting the
+signature, and the cache still ignoring all of it because the call site read
+`load_cot()`. That is the shape this file already records under the feeder
+index: a first fix that shipped the same bug with a label on it. The second
+condition was found by writing the test that checks call sites rather than
+signatures.
 
-The trap itself fired on this page while it was being built: `why()` gained an
-`agree` key, the hero tile read `.get("agree")`, the cached dict predated it,
-`.get` returned None, the tile printed the wrong sentence, and `persist="disk"`
-carried the stale dict across two full server restarts with nothing raising.
+Nineteen loaders were corrected across eight files: `apps/beef_cutout` (2),
+`apps/beef_trade` (3), `apps/beef_weight` (1), `apps/cash_trade` (1),
+`apps/fed_cattle_crush` (1), `apps/mexican_feeder_imports` (1),
+`apps/us_cow_herd` (1), `apps/cot_report` (1) and
+`apps/market_board/loaders.py` (8).
+
+**`apps/us_cow_herd/app.py::load_all` is the one a grep for `_schema` does not
+find.** It had the name right from the start and was still called `load_all()`,
+so it failed condition 2 alone — invisible to the obvious search and caught
+only by the AST test. **Do not audit this by grepping for the underscore.**
+
+**`apps/cash_trade/app.py::fetch_leverage` is the one that was right all
+along**, and is the model to copy: unprefixed, and handed `leverage.SCHEMA` at
+the call site.
+
+**The market board's eight are dispatched through a ThreadPoolExecutor**, so
+they are never called by name and no AST walk can follow them to the callee.
+The guard for all eight lives or dies on one line, `ex.submit(f, SCHEMA)`, and
+`tests/test_market_board.py` asserts that line specifically.
+
+`tests/test_cot_positions.py::test_every_cached_loader_in_the_repo_keys_on_its_schema`
+walks every `.py` in the repo and fails on either condition, because the next
+cached loader anybody writes will be copied from a neighbour.
+`tests/test_market_board.py::test_every_cached_loader_takes_the_schema_key`
+used to assert `"_schema" in args` and so **pinned the broken form** — a test
+can hold a mistake in place as firmly as it holds a fix.
+
+One consequence of the correction: every one of these caches is keyed
+differently for the first time, so each page refetched once after it shipped.
 
 ### Verifying a change to this page locally
 
