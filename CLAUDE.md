@@ -2142,7 +2142,8 @@ is beef production.
 So there is no WASDE panel for CME Feeder Cattle Index, Beef Cutout, US Cow
 Herd, Cattle on Feed, Livestock Inventory, Beef Trimmings, Mexican Feeder
 Imports or Backgrounding Crush — not an oversight, and **not worth probing
-again**. Adding one would mean showing a loosely-related number, which is
+again**. The three that DO have one — Cash Cattle Trade, Cattle Weights and
+Fed Cattle Crush — are now all built; see the section below. Adding one would mean showing a loosely-related number, which is
 worse than showing none. Seasonal Futures already marks WASDE release dates
 as chart vlines, which is the right treatment there.
 
@@ -2232,6 +2233,91 @@ attribute 'quarter_number'` against code where the attribute plainly existed
 and the tests passed. The server had imported the module before the function
 was added, and a rerun reuses `sys.modules`. Restart the server; on the
 deployed app, reboot. Same cause as the entry further up this file.
+
+## WASDE on Cattle Weights and Fed Cattle Crush
+
+Added 2026-10-07, which completes the three pages WASDE has anything to say
+about. `wasde.py` is at the repo root and all three import it; **a test
+asserts `rglob("wasde.py")` returns exactly one path**, and another asserts
+all three call `wasde.summary()` rather than computing their own revision
+and year-on-year. Three pages each doing that arithmetic separately is how
+two of them end up a decimal apart with both defensible.
+
+### Cattle Weights — beef production
+
+USDA's **commercial** beef production forecast: 2026 at **24,877** million
+lb, **−4.3%** on 2025's 26,003, cut 90 million lb at the September WASDE;
+2027 at 24,835. Quarters Q1 6,148 and Q2 6,154 actual, Q3 6,140 and Q4 6,435
+projected.
+
+**THERE IS DELIBERATELY NO YEAR-TO-DATE PACE**, unlike US Beef Trade where
+ERS and WASDE are provably the same series. WASDE is COMMERCIAL production;
+this page's weekly tiles are FEDERALLY INSPECTED, and commercial adds
+state-inspected and custom plants on top. Dividing an FI year-to-date by a
+commercial forecast prints a percentage that looks like progress and
+measures a definitional gap, with nothing raising. A test asserts the panel
+contains no pace arithmetic.
+
+That is the third basis for one quantity: FI (the page), commercial (WASDE
+page 31, 24,877) and commercial-plus-farm (WASDE page 32, 24,945).
+
+### Fed Cattle Crush — the cash steer price
+
+USDA's quarterly forecast for the quarter the pen actually sells in, beside
+the sale price the calculator is using.
+
+**THE COMPARISON IS LIKE FOR LIKE AND THAT IS THE WHOLE POINT.** The page's
+sale price is `live futures + basis`, which is a CASH price; WASDE's steer
+line is "5-Area, Direct, Total all grades", also cash. Setting the bare
+futures price against WASDE would be the ESR-versus-ERS mistake from the
+trade page — two numbers that look comparable on different bases. The basis
+field is what makes it legitimate, and the caption says so.
+
+What it still is not: USDA forecasts a quarterly average across all grades
+and three months, and a pen sells on one day. A gap is ordinary. The panel
+reports it and does not call it an error.
+
+**IT MATCHES THE SALE'S OWN YEAR, NOT THE FORECAST YEAR.** The default start
+date puts the sale in the FOLLOWING year — an April 2027 sale off LEJ7 — and
+the first version looked only in 2026's quarters, fell back to the 2026
+calendar-year average, and printed "$7.05 below USDA" for a 2027 sale
+against a 2026 number. WASDE carries the next year's Q1 and Q2 from May
+onward, so the right figure (Q2 2027, $235.00) was there and simply not
+read. `wasde.quarters_by_year()` exists for this. Where WASDE quotes no
+quarter for the sale, the tile prints a dash and the comparison is withheld
+rather than falling back to a different period.
+
+### The aggregation is a property of the TABLE
+
+A price is the MEAN of its four quarters; a quantity is their SUM. Both
+tables sit on WASDE page 31, and `reconciles()` had "mean" hard-coded —
+right for the steer price and wrong for production, where
+6,148 + 6,154 + 6,140 + 6,435 = 24,877 exactly against a mean of 6,219.
+
+Unfixed, the Cattle Weights panel would have printed "WASDE's annual figure
+no longer equals the mean of its four quarters" **on every single load** —
+a false alarm, which is worse than no alarm because it teaches readers to
+ignore the real one. `AGGREGATE_BY_TITLE` sets it per table and the sum's
+tolerance scales to four roundings rather than a price's two cents.
+
+### A NameError that py_compile and 1,103 tests all passed
+
+`_render_wasde_production` started out next to `_render_beef_production`,
+far down the module. The NASS outage branch near the top calls it, and
+Python runs top to bottom, so **the page raised
+`NameError: name '_render_wasde_production' is not defined` the moment NASS
+was unavailable** — the exact situation that branch exists for.
+
+Nothing static caught it. It showed up on the first local load, against a
+shell with no Snowflake passphrase, which is why that was worth doing rather
+than trusting a green test run. Same lesson as `AXIS` in
+`apps/beef_cutout/app.py`, and the same lesson as the memory note
+"compiling is not running".
+
+The panel is also rendered **above** the NASS guard, in its own tab beside
+Saturday Slaughter, for the reason that branch already exists: ESMIS is a
+different host and a NASS outage must not take down a forecast that has no
+NASS in it.
 
 ## The Saturday Slaughter view
 

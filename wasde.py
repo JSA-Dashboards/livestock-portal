@@ -487,12 +487,29 @@ class QuarterRow:
         return self.period == "Annual" or self.period.endswith("Proj.")
 
 
+# How a table's annual figure relates to its quarters. A PROPERTY OF THE
+# TABLE, not of the caller: a price is an average of its quarters and a
+# quantity is their sum, and the two tables sit on the same printed page.
+#
+# Hard-coding "mean" was right for the steer price and wrong for production,
+# where 6,148 + 6,154 + 6,140 + 6,435 = 24,877 exactly and the mean is 6,219.
+# The audit would have printed "WASDE's annual figure no longer equals the
+# mean of its four quarters" on every single load of the Cattle Weights
+# panel -- a false alarm that teaches readers to ignore a real one. Caught
+# by running the audit against the production table before shipping it.
+AGGREGATE_BY_TITLE = {
+    QUARTERLY_PRICES_TITLE: "mean",
+    QUARTERLY_PRODUCTION_TITLE: "sum",
+}
+
+
 @dataclass
 class Quarterly:
     report_month: str = ""
     title: str = ""
     columns: list = field(default_factory=list)
     rows: list = field(default_factory=list)
+    aggregate: str = "mean"          # "mean" for prices, "sum" for quantities
 
     def years(self) -> list:
         return sorted({r.year for r in self.rows})
@@ -544,17 +561,24 @@ class Quarterly:
               if r.values.get(column) is not None]
         annual, _ = self.annual(column, year)
         if annual is None or len(qs) != 4:
-            return {"ok": None, "annual": annual, "mean": None,
-                    "quarters": len(qs)}
-        mean = sum(r.values[column] for r in qs) / 4.0
-        return {"ok": abs(mean - annual) <= QUARTERLY_TOLERANCE,
-                "annual": annual, "mean": mean, "quarters": 4}
+            return {"ok": None, "annual": annual, "expected": None,
+                    "how": self.aggregate, "quarters": len(qs)}
+        total = sum(r.values[column] for r in qs)
+        expected = total / 4.0 if self.aggregate == "mean" else total
+        # A sum of four five-digit figures carries four roundings, so the
+        # slack scales with the aggregation rather than staying at a price's
+        # two cents.
+        tol = (QUARTERLY_TOLERANCE if self.aggregate == "mean"
+               else QUARTERLY_TOLERANCE * 4)
+        return {"ok": abs(expected - annual) <= tol, "annual": annual,
+                "expected": expected, "how": self.aggregate, "quarters": 4}
 
 
 def parse_quarterly(text: str, title: str, columns: list) -> Quarterly:
     """Parse one of the page-31 quarterly tables."""
     body, month = _table_body((text or "").splitlines(), title)
-    out = Quarterly(report_month=month, title=title, columns=list(columns))
+    out = Quarterly(report_month=month, title=title, columns=list(columns),
+                    aggregate=AGGREGATE_BY_TITLE.get(title, "mean"))
     year = None
     for raw in body:
         line = raw.rstrip()
@@ -586,3 +610,94 @@ def load_quarterly_prices(sess: requests.Session | None = None) -> Quarterly:
     r.raise_for_status()
     return parse_quarterly(r.text, QUARTERLY_PRICES_TITLE,
                            QUARTERLY_PRICE_COLUMNS)
+
+
+def summary(q: Quarterly, column: str, year: int | None = None) -> dict:
+    """
+    One figure from a quarterly table, with everything a panel needs:
+    {year, value, prior, revision, revision_pct, base_year, base, yoy_pct,
+     next_year, next_value, next_revision, quarters, audit}.
+
+    SHARED SO THREE PAGES CANNOT DISAGREE ABOUT ONE NUMBER. Cash Cattle
+    Trade, Cattle Weights and Fed Cattle Crush all show a WASDE figure, and
+    each computing its own revision and year-on-year is how two of them end
+    up a decimal apart with both defensible -- the letter-versus-dashboard
+    failure CLAUDE.md records twice. The LAYOUT stays per page, because the
+    three pages have different tile styling; only the arithmetic is here.
+
+    `year` defaults to the earliest forecast year, matching `Wasde.get`.
+    """
+    years = q.years()
+    if not years:
+        return {}
+    if year is None:
+        forecast_years = [y for y in years if q.annual(column, y)[1]]
+        year = min(forecast_years) if forecast_years else max(years)
+
+    value, is_forecast = q.annual(column, year)
+    prior = q.prior_annual(column, year)
+    base, _ = q.annual(column, year - 1)
+    nxt, _ = q.annual(column, year + 1)
+    nxt_prior = q.prior_annual(column, year + 1)
+
+    def _pct(new, old):
+        if new is None or not old:
+            return None
+        return (new / old - 1.0) * 100.0
+
+    return {
+        "year": year,
+        "value": value,
+        "is_forecast": is_forecast,
+        "prior": prior,
+        "revision": (value - prior) if (value is not None and prior is not None) else None,
+        "revision_pct": _pct(value, prior),
+        "base_year": year - 1,
+        "base": base,
+        "yoy_pct": _pct(value, base),
+        "yoy_abs": (value - base) if (value is not None and base is not None) else None,
+        "next_year": year + 1,
+        "next_value": nxt,
+        "next_revision": (nxt - nxt_prior) if (nxt is not None and nxt_prior is not None) else None,
+        "next_vs_this": _pct(nxt, value),
+        "quarters": [{"period": r.period, "number": quarter_number(r.period),
+                      "value": r.values.get(column), "projected": r.projected}
+                     for r in q.quarters(year)],
+        "audit": q.reconciles(column, year),
+        "report_month": q.report_month,
+    }
+
+
+def load_quarterly_production(sess: requests.Session | None = None) -> Quarterly:
+    """The newest WASDE's quarterly animal-product PRODUCTION table."""
+    sess = sess or _session()
+    rel = releases(sess)
+    if not rel:
+        raise RuntimeError("ESMIS returned no WASDE releases")
+    r = sess.get(rel[0]["url"], timeout=45)
+    r.raise_for_status()
+    return parse_quarterly(r.text, QUARTERLY_PRODUCTION_TITLE,
+                           QUARTERLY_PRODUCTION_COLUMNS)
+
+
+def quarters_by_year(q: Quarterly, column: str) -> dict:
+    """
+    {year: [{number, value, projected}]} for every year the table quotes.
+
+    `summary()` carries one year's quarters, which is all a forecast panel
+    needs. A page matching a DATE to a quarter needs the others: the Fed
+    Cattle Crush default start date puts the sale in the following year, and
+    looking only in the current one made an April 2027 sale fall back to the
+    2026 annual average -- then report the gap as though the two were the
+    same period. WASDE carries the next year's Q1 and Q2 from May onward, so
+    the figure was there and simply not being looked at.
+    """
+    out = {}
+    for year in q.years():
+        rows = [{"number": quarter_number(r.period), "value": r.values.get(column),
+                 "projected": r.projected}
+                for r in q.quarters(year)]
+        rows = [r for r in rows if r["number"] and r["value"] is not None]
+        if rows:
+            out[year] = rows
+    return out

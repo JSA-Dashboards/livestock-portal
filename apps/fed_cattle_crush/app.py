@@ -44,8 +44,16 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
+# `wasde` is SHARED and lives at the repo root -- the convention
+# apps/weekly_reports/app.py uses for `letter`. It exists ONCE in this repo:
+# Python caches modules by NAME, so a copy beside this page would mean
+# whichever page loaded first decided which one every other page got.
+REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).parent))
 
+import wasde  # noqa: E402
 from massive_api import MassiveApiError, get_futures_curve
 
 # ── JSA Brand Colors (shared with the rest of the portal shell) ─────────────
@@ -199,6 +207,27 @@ def contract_month(ticker: str, code: str):
     while y < base - 1:
         y += 10
     return y, m
+
+
+
+@st.cache_data(ttl=21600, persist="disk", show_spinner=False)
+def _fetch_wasde_steer(_schema: int = wasde.SCHEMA) -> dict:
+    """
+    USDA's quarterly cash steer forecast. Shared arithmetic -- see
+    wasde.summary, which Cash Cattle Trade and Cattle Weights also use, so
+    the three pages cannot disagree about one number. `_schema` keys the
+    cache; st.cache_data never notices that wasde.py changed.
+    """
+    q = wasde.load_quarterly_prices()
+    out = wasde.summary(q, "steer")
+    # EVERY YEAR'S QUARTERS, not just the forecast year's. The default start
+    # date puts the sale in the FOLLOWING year, and looking only in the
+    # current one made an April 2027 sale fall back to the 2026 annual
+    # average and then report the gap as though the two were the same
+    # period. WASDE carries the next year's Q1 and Q2 from May onward.
+    out["by_year"] = {int(k): v for k, v in
+                      wasde.quarters_by_year(q, "steer").items()}
+    return out
 
 
 def pick_contract(curve: pd.DataFrame, code: str, target: date):
@@ -755,6 +784,98 @@ with tab_crush:
         f"**\\${le_price:,.2f}** now, "
         + ("**above** that." if le_price >= need else "**below** that.")
     )
+
+    # ── USDA WASDE expectation — the sale price, checked ────────────────────
+    #
+    # THE ONE NUMBER THE WHOLE MARGIN TURNS ON, against USDA's own forecast
+    # for the quarter this pen actually sells in.
+    #
+    # IT IS A LIKE-FOR-LIKE COMPARISON AND THAT IS NOT AN ACCIDENT. The sale
+    # price above is `live futures + basis`, which is a CASH price; WASDE's
+    # steer line is defined by its own footnote as "5-Area, Direct, Total all
+    # grades", also cash. Comparing the bare futures price to WASDE would be
+    # the ESR-versus-ERS mistake on the US Beef Trade page -- two numbers
+    # that look comparable and are quoted on different bases. The basis field
+    # is what makes this legitimate, so the caption names it.
+    #
+    # WHAT IT STILL IS NOT: USDA forecasts a quarterly AVERAGE across every
+    # grade and all three months; this pen sells on one day. A gap is
+    # ordinary. The panel reports the difference and refuses to call it an
+    # error.
+    _wq = None
+    _wq_year = None
+    try:
+        _w = _fetch_wasde_steer()
+        if _w:
+            _qn = (finish_date.month - 1) // 3 + 1
+            _rows = (_w.get("by_year") or {}).get(finish_date.year, [])
+            _wq = next((q for q in _rows if q["number"] == _qn), None)
+            if _wq:
+                _wq_year = finish_date.year
+    except Exception:                                    # noqa: BLE001
+        _w, _wq = None, None
+
+    if _w and _w.get("value") is not None:
+        st.markdown("<hr style='margin:18px 0 12px;'>", unsafe_allow_html=True)
+        st.markdown(
+            '<div class="sec-header">USDA WASDE expectation &mdash; cash '
+            'steer price</div>', unsafe_allow_html=True)
+
+        w1, w2, w3 = st.columns(3)
+        with w1:
+            st.markdown(tile(
+                "Your sale price", f"${sale_price:,.2f}",
+                f"{le_pick} ${le_price:,.2f} {basis:+.2f} basis"),
+                unsafe_allow_html=True)
+        with w2:
+            if _wq:
+                st.markdown(tile(
+                    f"USDA Q{_wq['number']} {_wq_year} forecast",
+                    f"${_wq['value']:,.2f}",
+                    ("projection" if _wq["projected"] else "actual")
+                    + f" · {finish_date.strftime('%b %Y')} sale"),
+                    unsafe_allow_html=True)
+            else:
+                # NO QUARTER FOR THIS SALE, SO NO COMPARISON. Falling back to
+                # the calendar-year average would set a 2028 sale against a
+                # 2026 number and print a dollar gap for it -- two different
+                # periods under one label, which is the failure this page is
+                # most exposed to.
+                st.markdown(tile(
+                    f"USDA Q{_qn} {finish_date.year} forecast", "—",
+                    f"WASDE does not quote {finish_date.year} Q{_qn} yet"),
+                    unsafe_allow_html=True)
+        with w3:
+            if not _wq:
+                st.markdown(tile(
+                    "Your price vs USDA", "—",
+                    "no quarterly forecast to compare against"),
+                    unsafe_allow_html=True)
+            else:
+                _gap = sale_price - _wq["value"]
+                _word = ("above" if _gap > 0
+                         else ("below" if _gap < 0 else "level with"))
+                st.markdown(tile(
+                    f"Your price vs USDA Q{_wq['number']}",
+                    ("level" if _gap == 0 else f"${abs(_gap):,.2f}"),
+                    f"{_word} USDA" if _gap else "same number",
+                    "pos" if _gap > 0 else ("neg" if _gap < 0 else "")),
+                    unsafe_allow_html=True)
+
+        st.caption(
+            f"Both are CASH prices, which is what makes them comparable: your "
+            f"sale price is {le_pick} plus your \\${basis:+,.2f} basis, and "
+            f"WASDE's steer line is *“{wasde.STEER_PRICE_BASIS}”* by "
+            f"its own footnote. Comparing the bare futures price to USDA "
+            f"would be comparing two different bases. "
+            f"USDA forecasts a quarterly **average** across all grades and "
+            f"three months and this pen sells on one day, so a gap is "
+            f"ordinary rather than a disagreement — it is worth knowing "
+            f"which side of USDA you are pencilling. "
+            f"Report: **{_w['report_month']}**"
+            + (f", and USDA moved this forecast \\${_w['revision']:+,.2f} "
+               f"last month." if _w.get("revision") else "."))
+
 
     # ── Method ──────────────────────────────────────────────────────────────────
     with st.expander("How this is calculated, and what it does not include"):

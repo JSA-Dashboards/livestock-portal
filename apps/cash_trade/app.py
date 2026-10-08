@@ -1429,28 +1429,18 @@ with c2:
 @st.cache_data(ttl=21600, persist="disk", show_spinner=False)
 def fetch_wasde_steer(_schema: int = wasde.SCHEMA) -> dict:
     """
-    USDA's quarterly 5-Area steer price forecast, flattened to a plain dict.
+    USDA's quarterly 5-Area steer price forecast, as a plain dict.
 
-    FLATTENED because st.cache_data pickles what it stores and a cached
+    THE ARITHMETIC IS wasde.summary(), SHARED. Three pages now show a WASDE
+    figure, and each computing its own revision and year-on-year is how two
+    of them end up a decimal apart with both defensible -- the
+    letter-versus-dashboard failure CLAUDE.md records twice.
+
+    Flattened because st.cache_data pickles what it stores and a cached
     dataclass goes stale against its own class the moment the module is
-    edited. `_schema` is in the signature only to key the cache -- the trap
-    CLAUDE.md records for `leverage.SCHEMA`.
+    edited. `_schema` keys the cache; see `leverage.SCHEMA`.
     """
-    q = wasde.load_quarterly_prices()
-    years = q.years()
-    out = {"report_month": q.report_month, "years": years, "by_year": {}}
-    for y in years:
-        annual, is_fc = q.annual("steer", y)
-        out["by_year"][y] = {
-            "annual": annual,
-            "is_forecast": is_fc,
-            "prior": q.prior_annual("steer", y),
-            "audit": q.reconciles("steer", y),
-            "quarters": [{"period": r.period, "value": r.values.get("steer"),
-                          "projected": r.projected}
-                         for r in q.quarters(y)],
-        }
-    return out
+    return wasde.summary(wasde.load_quarterly_prices(), "steer")
 
 
 def wasde_steer_panel():
@@ -1460,21 +1450,12 @@ def wasde_steer_panel():
     except Exception as exc:  # noqa: BLE001
         st.caption(f"WASDE steer price forecast unavailable — {exc}")
         return
-
-    fc_years = [y for y in w["years"] if w["by_year"][y]["is_forecast"]]
-    if not fc_years:
+    if not w or w.get("value") is None:
         return
-    year = min(fc_years)
-    cur = w["by_year"][year]
-    now, prior = cur["annual"], cur["prior"]
-    base = w["by_year"].get(year - 1, {}).get("annual")
 
-    rev = (now - prior) if (now is not None and prior is not None) else None
-    rev_pct = (rev / prior * 100.0) if (rev is not None and prior) else None
-    yoy_pct = ((now / base - 1.0) * 100.0) if (now and base) else None
-    yoy_abs = (now - base) if (now is not None and base is not None) else None
+    year = w["year"]
 
-    def _d(value, percent, suffix, digits=2):
+    def _d(value, percent, suffix, digits=2, money=True):
         if value is None and percent is None:
             return '<div class="tile-delta-neu">&mdash;</div>'
         if value == 0 or (value is None and percent == 0):
@@ -1483,11 +1464,11 @@ def wasde_steer_panel():
         arrow = "▲" if ref > 0 else "▼"
         bits = []
         if value is not None:
-            bits.append(f"${abs(value):,.{digits}f}")
+            bits.append(("$" if money else "") + f"{abs(value):,.{digits}f}")
         if percent is not None:
             bits.append(f"{abs(percent):,.1f}%")
         # NO PARENTHESES: in USDA's own reports they mean negative. See the
-        # same note on the US Beef Trade page and in letter/sterling.py.
+        # headline rule in CLAUDE.md and letter/sterling.py.
         return (f'<div class="tile-delta-neu">{arrow} '
                 f'{" · ".join(bits)}{suffix}</div>')
 
@@ -1506,16 +1487,16 @@ def wasde_steer_panel():
     with c1:
         st.markdown(tile(
             f"USDA {year} steer price forecast",
-            f"${now:,.2f}" if now is not None else "—",
-            _d(rev, rev_pct, " vs last month")), unsafe_allow_html=True)
+            f"${w['value']:,.2f}",
+            _d(w["revision"], w["revision_pct"], " vs last month")),
+            unsafe_allow_html=True)
     with c2:
         st.markdown(tile(
-            f"USDA {year} forecast vs {year - 1}",
-            f"{yoy_pct:+,.1f}%" if yoy_pct is not None else "—",
-            _d(yoy_abs, None, "/cwt")), unsafe_allow_html=True)
+            f"USDA {year} forecast vs {w['base_year']}",
+            f"{w['yoy_pct']:+,.1f}%" if w["yoy_pct"] is not None else "—",
+            _d(w["yoy_abs"], None, "/cwt")), unsafe_allow_html=True)
     with c3:
-        qs = [q for q in cur["quarters"] if q["value"] is not None]
-        done = [q for q in qs if not q["projected"]]
+        qs = [q for q in w["quarters"] if q["value"] is not None]
         left = [q for q in qs if q["projected"]]
         st.markdown(tile(
             f"{year} quarters still forecast",
@@ -1524,18 +1505,17 @@ def wasde_steer_panel():
             f'{", ".join(q["period"] for q in left) or "none"} to come'
             f'</div>' if qs else ""), unsafe_allow_html=True)
     with c4:
-        nxt = w["by_year"].get(year + 1, {})
-        nxt_v, nxt_p = nxt.get("annual"), nxt.get("prior")
-        nxt_rev = ((nxt_v - nxt_p)
-                   if (nxt_v is not None and nxt_p is not None) else None)
+        nxt_pct = None
+        if w["next_revision"] is not None and w["next_value"] is not None:
+            base = w["next_value"] - w["next_revision"]
+            nxt_pct = (w["next_revision"] / base * 100.0) if base else None
         st.markdown(tile(
-            f"USDA {year + 1} steer price forecast",
-            f"${nxt_v:,.2f}" if nxt_v is not None else "—",
-            _d(nxt_rev,
-               (nxt_rev / nxt_p * 100.0) if (nxt_rev is not None and nxt_p)
-               else None, " vs last month")), unsafe_allow_html=True)
+            f"USDA {w['next_year']} steer price forecast",
+            f"${w['next_value']:,.2f}" if w["next_value"] is not None else "—",
+            _d(w["next_revision"], nxt_pct, " vs last month")),
+            unsafe_allow_html=True)
 
-    qs = [q for q in cur["quarters"] if q["value"] is not None]
+    qs = [q for q in w["quarters"] if q["value"] is not None]
     if qs:
         st.markdown(
             '<div class="sec-header" style="margin-top:10px;">'
@@ -1543,27 +1523,19 @@ def wasde_steer_panel():
         cols = st.columns(len(qs))
         for col, q in zip(cols, qs):
             with col:
-                qn = wasde.quarter_number(q["period"])
-                name = f"Q{qn}" if qn else q["period"]
+                name = f"Q{q['number']}" if q["number"] else q["period"]
                 state = "proj" if q["projected"] else "actual"
-                st.markdown(tile(
-                    f"{name} {year} · {state}",
-                    f"${q['value']:,.2f}"), unsafe_allow_html=True)
+                st.markdown(tile(f"{name} {year} · {state}",
+                                 f"${q['value']:,.2f}"), unsafe_allow_html=True)
 
-    # THE ONLY AUDIT A PRICE TABLE OFFERS. The meats table has two accounting
-    # identities; this one has none, so a shifted column would be invisible
-    # from the row alone. USDA's footnote says the annual is a simple average
-    # of months and each quarter is three months, so the annual must equal
-    # the mean of the four quarters -- 237.3525 against a printed 237.35 for
-    # September 2026. It can only run once all four are published.
-    audit = cur["audit"]
+    audit = w["audit"]
     if audit.get("ok") is False:
         st.caption(
             f"⚠️ WASDE's annual figure ({audit['annual']:,.2f}) no "
-            f"longer equals the mean of its four quarters "
-            f"({audit['mean']:,.2f}). The table layout has probably changed "
-            f"and these figures should not be relied on until that is "
-            f"checked.")
+            f"longer equals the {audit['how']} of its four quarters "
+            f"({audit['expected']:,.2f}). The table layout has probably "
+            f"changed and these figures should not be relied on until that "
+            f"is checked.")
 
 
 tab_weekly, tab_daily, tab_fcst, tab_lev = st.tabs(

@@ -711,8 +711,40 @@ def test_the_annual_equals_the_mean_of_its_four_quarters():
     q = _prices()
     audit = q.reconciles("steer", 2026)
     assert audit["ok"] is True, audit
-    assert audit["mean"] == pytest.approx(237.3525)
+    assert audit["how"] == "mean"
+    assert audit["expected"] == pytest.approx(237.3525)
     assert audit["quarters"] == 4
+
+
+def test_production_annuals_are_a_SUM_of_quarters_and_prices_are_a_MEAN():
+    """
+    THE AGGREGATION IS A PROPERTY OF THE TABLE, not of the caller. A price is
+    an average of its quarters; a quantity is their sum. Both tables sit on
+    WASDE page 31.
+
+    Hard-coding "mean" was right for the steer price and wrong for
+    production, where 6,148 + 6,154 + 6,140 + 6,435 = 24,877 exactly against
+    a mean of 6,219. The audit would then have printed "no longer equals the
+    mean of its four quarters" on every single load of the Cattle Weights
+    panel -- a false alarm that teaches readers to ignore a real one.
+    """
+    txt = QUARTERLY_TXT.read_text(encoding="utf-8")
+    prices = _prices()
+    prod = wasde.parse_quarterly(txt, wasde.QUARTERLY_PRODUCTION_TITLE,
+                                 wasde.QUARTERLY_PRODUCTION_COLUMNS)
+    assert prices.aggregate == "mean"
+    assert prod.aggregate == "sum"
+
+    pa = prod.reconciles("beef", 2026)
+    assert pa["ok"] is True, pa
+    assert pa["how"] == "sum"
+    assert pa["expected"] == pytest.approx(24877.0)
+
+    # The sum and the mean are wildly different here, so getting it wrong
+    # could never be a near miss.
+    quarters = [r.values["beef"] for r in prod.quarters(2026)]
+    assert sum(quarters) == pytest.approx(24877.0)
+    assert sum(quarters) / 4 == pytest.approx(6219.25)
 
 
 def test_the_audit_declines_to_judge_a_part_published_year():
@@ -1065,3 +1097,94 @@ def test_an_event_note_is_printed_once_even_when_two_landmarks_share_a_year():
     assert "EVENT_NOTES.get((flow, rise[" not in body
     assert "EVENT_NOTES.get((flow, low[" not in body
     assert body.count("_note(") >= 5   # definition plus four call sites
+
+
+# -- the two new WASDE panels ------------------------------------------------
+
+def test_quarters_by_year_covers_the_following_year():
+    """
+    The Fed Cattle Crush default start date puts the sale in the FOLLOWING
+    year. Looking only in the forecast year made an April 2027 sale fall
+    back to the 2026 calendar-year average and then report the gap as though
+    the two were the same period -- the cross-period comparison this repo
+    keeps being bitten by. WASDE carries the next year's Q1 and Q2 from May
+    onward, so the figure was there and simply not being read.
+    """
+    q = _prices()
+    by_year = wasde.quarters_by_year(q, "steer")
+    assert set(by_year) >= {2026, 2027}
+    assert len(by_year[2026]) == 4
+    q2_2027 = next(r for r in by_year[2027] if r["number"] == 2)
+    assert q2_2027["value"] == pytest.approx(235.0)
+    assert q2_2027["projected"] is True
+    # Every entry is usable: a number and a value, never a None to format.
+    for rows in by_year.values():
+        for r in rows:
+            assert r["number"] in (1, 2, 3, 4) and r["value"] is not None
+
+
+def test_the_crush_page_refuses_to_compare_across_periods():
+    """
+    A sale in a quarter WASDE does not quote must print a dash, not the
+    calendar-year average. Falling back would set a 2028 sale against a 2026
+    number and put a dollar gap under it.
+    """
+    src = (ROOT / "apps" / "fed_cattle_crush" / "app.py").read_text(encoding="utf-8")
+    body = src[src.index("USDA WASDE expectation"):]
+    assert "by_year" in body
+    assert "does not quote" in body
+    assert "no quarterly forecast to compare against" in body
+    # The fallback to the annual figure is gone.
+    assert 'f"USDA {_w[\'year\']} forecast", f"${_w[\'value\']:,.2f}"' not in body
+
+
+def test_the_three_wasde_pages_share_one_arithmetic_function():
+    """
+    Cash Cattle Trade, Cattle Weights and Fed Cattle Crush all show a WASDE
+    figure. Each computing its own revision and year-on-year is how two of
+    them end up a decimal apart with both defensible -- the
+    letter-versus-dashboard failure CLAUDE.md records twice.
+    """
+    for page in ("cash_trade", "beef_weight", "fed_cattle_crush"):
+        src = (ROOT / "apps" / page / "app.py").read_text(encoding="utf-8")
+        assert "wasde.summary(" in src, page
+        assert "wasde.SCHEMA" in src, f"{page} must key its cache on the schema"
+    # And still exactly one copy of the module.
+    copies = sorted(p.relative_to(ROOT).as_posix() for p in ROOT.rglob("wasde.py")
+                    if "__pycache__" not in p.parts)
+    assert copies == ["wasde.py"], copies
+
+
+def test_the_cattle_weights_panel_is_defined_above_its_first_call():
+    """
+    THE BUG py_compile AND 1,103 TESTS BOTH PASSED. The NASS outage branch
+    calls _render_wasde_production near the top of the module; the function
+    was defined far below, next to the tab it normally lives in. Python runs
+    top to bottom, so the page raised NameError the moment NASS was
+    unavailable -- and only loading it in a browser with no Snowflake
+    credentials showed that. Same lesson as AXIS in apps/beef_cutout/app.py.
+    """
+    src = (ROOT / "apps" / "beef_weight" / "app.py").read_text(encoding="utf-8")
+    define = src.index("def _render_wasde_production():")
+    first_call = src.index("_render_wasde_production()", define)
+    assert define < first_call
+    # And the outage branch really does call it, so the guard stays honest.
+    guard = src.index("if raw.empty:")
+    stop = src.index("st.stop()", guard)
+    assert "_render_wasde_production()" in src[guard:stop]
+
+
+def test_cattle_weights_shows_no_pace_against_a_different_basis():
+    """
+    WASDE production is COMMERCIAL; this page's weekly tiles are FEDERALLY
+    INSPECTED. Dividing an FI year-to-date by a commercial forecast prints a
+    percentage that looks like progress and measures a definitional gap.
+    The panel therefore shows forecast, revision and year-on-year only.
+    """
+    src = (ROOT / "apps" / "beef_weight" / "app.py").read_text(encoding="utf-8")
+    panel = src[src.index("def _render_wasde_production():"):
+                src.index("with st.spinner(\"Loading USDA NASS data")]
+    assert "commercial" in panel.lower()
+    for forbidden in ("ytd", "pace", "year-to-date"):
+        assert forbidden not in panel.lower().replace("year-to-date basis", ""), \
+            f"the panel appears to compare against actuals ({forbidden})"

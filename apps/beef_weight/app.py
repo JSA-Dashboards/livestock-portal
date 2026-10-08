@@ -14,9 +14,19 @@ from urllib.parse import quote
 # st.Page runs this file via exec(), not as a standalone script, so its own
 # directory is never added to sys.path automatically -- without this, the
 # local nass_cache_client import below raises ModuleNotFoundError.
+# `wasde` is SHARED and lives at the repo root -- the convention
+# apps/weekly_reports/app.py uses to reach `letter`. It exists ONCE in this
+# repo and must stay that way: Python caches modules by NAME, so a copy
+# beside this page would mean whichever page loaded first decided which one
+# every other page got. US Beef Trade and Cash Cattle Trade import the same
+# file.
+REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).parent))
 
 import daily_slaughter
+import wasde  # noqa: E402
 
 # ── JSA Brand Colors ───────────────────────────────────────────────────────────
 # Extracted from jpsi.com logo: sage green #5e7164, charcoal #333132
@@ -913,6 +923,159 @@ trend_class = st.sidebar.selectbox("Trend class", CLASS_ORDER, format_func=_fmt_
 
 # ── Load data ──────────────────────────────────────────────────────────────────
 
+# DEFINED HERE, ABOVE THE NASS GUARD THAT CALLS IT, and that placement is
+# load-bearing. It was originally next to _render_beef_production, far below;
+# the outage branch a few lines down then raised
+# `NameError: name '_render_wasde_production' is not defined` the moment NASS
+# was unavailable. py_compile passed and all 1,103 tests passed -- only
+# loading the page with no Snowflake credentials showed it. Same lesson as
+# AXIS in apps/beef_cutout/app.py.
+# ── USDA WASDE beef production forecast ─────────────────────────────────────
+#
+# WHAT THIS PAGE MEASURES, FORECAST A YEAR AHEAD. The tiles above are weekly
+# slaughter and carcass weight, and those two multiply into production --
+# the one cattle quantity WASDE publishes. So the panel says what USDA
+# thinks this page's own arithmetic comes to for the year.
+#
+# IT IS COMMERCIAL PRODUCTION AND THE WEEKLY TILES ARE FEDERALLY INSPECTED.
+# Not the same series: commercial adds state-inspected and custom plants on
+# top of FI, and WASDE's OTHER table (meats supply and use, page 32) adds
+# farm slaughter on top of that again -- 24,877 against 24,945 for 2026, a
+# 68 million lb gap identical in both years on file.
+#
+# SO THERE IS DELIBERATELY NO YEAR-TO-DATE PACE HERE, unlike the US Beef
+# Trade page, where ERS and WASDE are provably the same series. Dividing an
+# FI year-to-date by a commercial forecast would print a percentage that
+# looks like progress and measures a definitional gap, and nothing would
+# raise. tests/test_beef_trade.py pins the 68.
+
+
+@st.cache_data(ttl=21600, persist="disk", show_spinner=False)
+def _fetch_wasde_beef(_schema: int = wasde.SCHEMA) -> dict:
+    """Shared arithmetic -- see wasde.summary. `_schema` keys the cache."""
+    return wasde.summary(wasde.load_quarterly_production(), "beef")
+
+
+def _wasde_delta(value, percent, suffix, digits=0):
+    if value is None and percent is None:
+        return '<div style="color:%s;font-size:0.8rem">&mdash;</div>' % DM_MUTED
+    if value == 0 or (value is None and percent == 0):
+        return ('<div style="color:%s;font-size:0.8rem">unchanged%s</div>'
+                % (DM_MUTED, suffix))
+    ref = value if value is not None else percent
+    arrow = "▲" if ref > 0 else "▼"
+    bits = []
+    if value is not None:
+        bits.append(format(abs(value), ",.%df" % digits))
+    if percent is not None:
+        bits.append(format(abs(percent), ",.1f") + "%")
+    # NO PARENTHESES: in USDA's own reports they mean negative.
+    return ('<div style="color:%s;font-size:0.8rem;font-weight:600;'
+            'margin-top:4px">%s %s%s</div>'
+            % (DM_MUTED, arrow, " · ".join(bits), suffix))
+
+
+def _wasde_tile(label, value, delta="", sub=""):
+    sub_html = ""
+    if sub:
+        sub_html = ('<div style="color:%s;font-size:0.7rem;margin-top:5px">'
+                    '%s</div>' % (DM_MUTED, sub))
+    return ('<div style="background:%s;border:1px solid %s;'
+            'border-top:3px solid #c4b456;border-radius:10px;'
+            'padding:16px 20px;text-align:center;height:100%%">'
+            '<div style="color:%s;font-size:0.68rem;text-transform:uppercase;'
+            'letter-spacing:0.09em;margin-bottom:6px">%s</div>'
+            '<div style="color:%s;font-size:1.5rem;font-weight:700;'
+            'line-height:1.1">%s</div>%s%s</div>'
+            % (DM_SURFACE, DM_BORDER, DM_MUTED, label, DM_TEXT, value,
+               delta, sub_html))
+
+
+def _render_wasde_production():
+    try:
+        w = _fetch_wasde_beef()
+    except Exception as exc:  # noqa: BLE001
+        st.caption("WASDE beef production forecast unavailable — %s" % exc)
+        return
+    if not w or w.get("value") is None:
+        return
+
+    year = w["year"]
+    dash = "—"
+
+    st.markdown('<div class="sec-hdr">USDA WASDE expectation — beef '
+                'production</div>', unsafe_allow_html=True)
+    st.caption(
+        "USDA's projection of total US **commercial** beef production for "
+        "the **%d calendar year**, updated every WASDE. Report: **%s**. "
+        "Commercial is federally inspected plus state-inspected and custom "
+        "plants, so it runs above the federally-inspected weekly figures on "
+        "this page — the two are not the same series and should not be "
+        "set against each other." % (year, w["report_month"]))
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.markdown(_wasde_tile(
+            "USDA %d production forecast" % year,
+            format(w["value"], ",.0f"),
+            _wasde_delta(w["revision"], w["revision_pct"], " vs last month"),
+            "calendar year · million lb, commercial"),
+            unsafe_allow_html=True)
+    with c2:
+        st.markdown(_wasde_tile(
+            "USDA %d forecast vs %d" % (year, w["base_year"]),
+            (format(w["yoy_pct"], "+,.1f") + "%"
+             if w["yoy_pct"] is not None else dash),
+            _wasde_delta(w["yoy_abs"], None, " million lb"),
+            ("%d actual %s" % (w["base_year"], format(w["base"], ",.0f"))
+             if w["base"] else "million lb, commercial")),
+            unsafe_allow_html=True)
+    with c3:
+        qs = [q for q in w["quarters"] if q["value"] is not None]
+        left = [q for q in qs if q["projected"]]
+        st.markdown(_wasde_tile(
+            "%d quarters still forecast" % year,
+            ("%d of %d" % (len(left), len(qs))) if qs else dash,
+            ('<div style="color:%s;font-size:0.8rem;margin-top:4px">%s to '
+             'come</div>' % (DM_MUTED,
+                             ", ".join(q["period"] for q in left) or "none"))
+            if qs else ""), unsafe_allow_html=True)
+    with c4:
+        nxt_pct = None
+        if w["next_revision"] is not None and w["next_value"] is not None:
+            base = w["next_value"] - w["next_revision"]
+            nxt_pct = (w["next_revision"] / base * 100.0) if base else None
+        st.markdown(_wasde_tile(
+            "USDA %d production forecast" % w["next_year"],
+            (format(w["next_value"], ",.0f")
+             if w["next_value"] is not None else dash),
+            _wasde_delta(w["next_revision"], nxt_pct, " vs last month"),
+            "million lb, commercial"), unsafe_allow_html=True)
+
+    qs = [q for q in w["quarters"] if q["value"] is not None]
+    if qs:
+        st.markdown('<div class="sec-hdr" style="margin-top:12px">By '
+                    'quarter</div>', unsafe_allow_html=True)
+        cols = st.columns(len(qs))
+        for col, q in zip(cols, qs):
+            with col:
+                name = ("Q%d" % q["number"]) if q["number"] else q["period"]
+                state = "proj" if q["projected"] else "actual"
+                st.markdown(_wasde_tile(
+                    "%s %d · %s" % (name, year, state),
+                    format(q["value"], ",.0f"), "", "million lb"),
+                    unsafe_allow_html=True)
+
+    audit = w["audit"]
+    if audit.get("ok") is False:
+        st.caption(
+            "⚠️ WASDE's annual figure (%s) no longer equals the %s "
+            "of its four quarters (%s). The table layout has probably "
+            "changed and these figures should not be relied on until that is "
+            "checked." % (format(audit["annual"], ",.0f"), audit["how"],
+                          format(audit["expected"], ",.0f")))
+
+
 with st.spinner("Loading USDA NASS data…"):
     raw     = fetch_data(LOAD_YEARS)
     raw_vol = fetch_vol_data(LOAD_YEARS)
@@ -925,8 +1088,20 @@ if raw.empty:
     # stops the rest of the page, is what keeps a NASS outage from taking down
     # a view that has no NASS in it -- the property the old top-level switch
     # had by sitting above this line.
-    with st.tabs(["📅  Saturday Slaughter"])[0]:
+    # Same argument for the WASDE forecast: it comes from ESMIS and touches
+    # neither NASS nor the cache, so a NASS outage must not take it down. It
+    # normally lives inside the Beef Production tab, which sits BELOW this
+    # guard -- caught while rendering the page locally with no Snowflake
+    # credentials, which is exactly the outage this block exists for. Without
+    # these two lines the panel's own comment ("an AMS outage must not take
+    # the forecast down with it") was true inside the tab and false about the
+    # page.
+    _sat, _wasde_tab = st.tabs(["📅  Saturday Slaughter",
+                                "🥩  USDA WASDE forecast"])
+    with _sat:
         render_saturday_slaughter()
+    with _wasde_tab:
+        _render_wasde_production()
     st.stop()
 
 wt  = raw[raw["unit_desc"].str.contains(unit_filter, case=False, na=False)].copy()
@@ -2224,6 +2399,13 @@ def _render_summary():
 
 def _render_beef_production():
     """Beef Production tab — AMS weekly tile + NASS-computed seasonal chart."""
+
+    # ABOVE THE AMS FETCH, DELIBERATELY. WASDE comes from ESMIS over a
+    # different host, so an AMS outage must not take the forecast down with
+    # it -- the same shape as the Saturday Slaughter view and the morning
+    # cutout panel.
+    _render_wasde_production()
+    st.markdown("<hr style='margin:18px 0;'>", unsafe_allow_html=True)
 
     ams       = _fetch_ams_raw()
     meat_prod = ams.get("meat_prod", {})
