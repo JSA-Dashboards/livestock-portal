@@ -2966,6 +2966,47 @@ with tab_lev:
                    f'{_near["change"]:+.1%}</b>.' if _near else ".")
                 + '</div>', unsafe_allow_html=True)
 
+            # WHICH CATTLE THESE ARE is the first thing anyone asks of the
+            # figure, and both wrong answers misread the market. Read it as
+            # all committed supply and the packer looks far shorter than he
+            # is, because formula is the bigger share by a wide margin; read
+            # it as "contracts, so basis contracts are somewhere else" and you
+            # go looking for a number that does not exist separately.
+            #
+            # LM_CT153's own section names settle it. Section B is
+            # "Prior Week Formula & Contract Slaughter" -- it names both and
+            # counts them apart. Section C, where this figure comes from, is
+            # "Forward Contract Purchases", and the word formula does not
+            # appear anywhere in it.
+            st.markdown(
+                f'<div style="border-left:3px solid {DEL_COLOR};'
+                f'background:#fbfbfa;padding:9px 13px;margin:2px 0 14px;'
+                f'font-size:0.78rem;line-height:1.6;color:{JPSI_DARK};">'
+                f'<b>What is in this book.</b> Forward-contract cattle only '
+                f'&mdash; head signed for delivery in a named month at a price '
+                f'struck as a <b>basis to a CME futures month</b>. USDA keys '
+                f'the table &ldquo;Delivery Mo./Basis Mo.&rdquo;, so a row '
+                f'reading <i>Oct&nbsp;&rsquo;26/Oct</i> is October delivery '
+                f'priced off October futures. <b>Basis contracts are not a '
+                f'separate category from these &mdash; they are these</b>, '
+                f'which is why the only prices in the table are basis levels '
+                f'rather than dollars per hundredweight.<br>'
+                f'<b>Formula cattle are not in it</b>, and could not be. A '
+                f'formula animal has no contracted delivery month and no '
+                f'agreed price &mdash; it is priced when it ships, off a '
+                f'published average &mdash; so there is nothing to inventory '
+                f'by month. USDA splits them for the same reason: section B '
+                f'of this report is &ldquo;Formula <i>&amp;</i> Contract&rdquo;, '
+                f'section C is forward contract alone.<br>'
+                f'<b>So the book understates committed supply on purpose.</b> '
+                f'Formula was <b>{_r["formula_pct"]:.1%}</b> of last '
+                f'week&rsquo;s reported kill against forward contract&rsquo;s '
+                f'<b>{_r["forward_pct"]:.1%}</b>. What is counted here is the '
+                f'part of the packer&rsquo;s cover that carries a date and a '
+                f'price; the formula share is cover of a different kind and '
+                f'sits in the purchase mix above, not here.</div>',
+                unsafe_allow_html=True)
+
             _s = _sch.head(12).copy()
             _lbl = [f"{m} '{str(y)[2:]}" for m, y in zip(_s["month"], _s["year"])]
             fig2 = go.Figure()
