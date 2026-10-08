@@ -968,3 +968,100 @@ def test_the_annual_window_never_includes_a_part_year():
     full = [int(y) for y in complete[complete == 12].index]
     assert 2026 not in full
     assert max(full) == 2025
+
+
+# -- the landmark caption ----------------------------------------------------
+
+def test_landmarks_use_complete_years_only():
+    """
+    The part year in progress is eight months of trade. Including it hands
+    back "biggest fall: 2026, -19%" -- a calendar artefact reported as a
+    market event, in a caption whose whole job is to explain the chart.
+    """
+    df = _ers_frame()
+    for flow in tf.FLOWS:
+        lm = tf.landmarks(df, flow)
+        assert lm, flow
+        assert lm["last_year"] == 2025
+        for key in ("low", "high", "biggest_fall", "biggest_rise"):
+            entry = lm.get(key)
+            if entry:
+                assert entry["year"] != 2026, (flow, key)
+
+
+def test_a_biggest_fall_must_actually_be_a_fall():
+    """
+    Over a window where every year rose, idxmin() returns the smallest RISE
+    and the caption prints "biggest fall: +0.2%" -- a sentence that
+    contradicts itself. Caught on this very fixture, whose imports rise
+    every year from 2019.
+    """
+    df = _ers_frame()
+    imports = tf.landmarks(df, "Imports")
+    assert imports["biggest_fall"] is None, (
+        "imports rise every year in the fixture, so there is no fall to name")
+    assert imports["biggest_rise"]["pct"] > 0
+
+    exports = tf.landmarks(df, "Exports")
+    assert exports["biggest_fall"]["pct"] < 0
+
+
+def test_recovered_year_measures_how_long_a_collapse_lasted():
+    """
+    A bar chart shows a hole; it cannot say how long it took to climb out.
+    """
+    df = _ers_frame()
+    annual = (tf.monthly(df, "Exports").groupby("year")["mil_lb"].sum())
+    # Pick a year that is followed by a return to its level.
+    base = 2020
+    back = tf.recovered_year(df, "Exports", base)
+    assert back is not None and back > base
+    assert annual[back] >= annual[base]
+    # A year never since equalled returns None rather than a wrong year.
+    peak = int(annual.idxmax())
+    assert tf.recovered_year(df, "Exports", peak) is None or \
+        annual[tf.recovered_year(df, "Exports", peak)] >= annual[peak]
+
+
+def test_event_notes_are_keyed_per_flow_because_bse_is_an_exports_story():
+    """
+    THE MISTAKE THIS GUARDS. The December 2003 BSE case closed export
+    markets: exports fell 82% in 2004 while imports ROSE 22% the same year,
+    because the bans ran outward. "The 2003 BSE collapse" under an imports
+    chart describes a dip that is not there -- I wrote exactly that to Ross
+    before checking the series.
+    """
+    src = (ROOT / "apps" / "beef_trade" / "app.py").read_text(encoding="utf-8")
+    body = src[src.index("EVENT_NOTES = {"):src.index("def landmark_caption(")]
+    ns = {}
+    exec(body, ns)                                      # noqa: S102
+    notes = ns["EVENT_NOTES"]
+
+    assert ("Exports", 2004) in notes
+    assert ("Imports", 2004) not in notes, (
+        "BSE closed export markets; imports rose that year")
+    assert all(isinstance(k, tuple) and k[0] in tf.FLOWS for k in notes)
+
+    # The notes carry causes, not years -- which year is the record is
+    # computed, so a new record cannot leave the caption on the old one.
+    for text in notes.values():
+        assert "record" not in text.lower()
+
+
+def test_an_event_note_is_printed_once_even_when_two_landmarks_share_a_year():
+    """
+    2004 is both the steepest fall and the record low for exports, so an
+    unguarded caption printed the whole BSE sentence twice in one paragraph.
+    A reader meeting the same clause again assumes they have misread the
+    first one.
+    """
+    src = (ROOT / "apps" / "beef_trade" / "app.py").read_text(encoding="utf-8")
+    body = src[src.index("def landmark_caption("):
+               src.index("def annual_chart(")]
+    assert "explained = set()" in body
+    assert "def _note(year):" in body
+    # Every landmark goes through the de-duplicating helper, never the dict.
+    assert "EVENT_NOTES.get((flow, fall[" not in body
+    assert "EVENT_NOTES.get((flow, rise[" not in body
+    assert "EVENT_NOTES.get((flow, low[" not in body
+    assert body.count("_note(") >= 5   # definition plus four call sites

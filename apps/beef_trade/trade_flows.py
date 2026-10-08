@@ -386,6 +386,83 @@ def net_run(df: pd.DataFrame) -> dict:
             "latest": float(ann.iloc[-1]), "flipped": flipped}
 
 
+def landmarks(df: pd.DataFrame, flow: str) -> dict:
+    """
+    The record low, record high and biggest one-year move for a flow:
+    {low, high, biggest_fall, biggest_rise}, each {year, value, pct}.
+
+    COMPLETE YEARS ONLY, and that is not a detail. The part year in progress
+    is eight months of trade, so including it hands back "biggest fall: 2026,
+    -19%" -- a calendar artefact reported as a market event, in a caption
+    whose whole job is to explain the chart.
+
+    COMPUTED RATHER THAN WRITTEN DOWN, so the caption cannot drift from the
+    bars above it. The record import year changed twice in three years; a
+    hard-coded "the 2025 record" would have been wrong by the following
+    spring, which is the failure `scorecard.py` and the hard-coded-caption
+    commit in this repo's history both exist to prevent.
+
+    Returns {} where there is not enough history to rank anything.
+    """
+    m = monthly(df, flow)
+    if m.empty:
+        return {}
+    complete = m.groupby("year")["month"].count()
+    years = [int(y) for y in complete[complete == 12].index]
+    annual = m[m["year"].isin(years)].groupby("year")["mil_lb"].sum()
+    if len(annual) < 3:
+        return {}
+    change = annual.pct_change() * 100.0
+
+    def _at(idx, series, pct_series=None):
+        if idx is None or idx not in series.index:
+            return None
+        out = {"year": int(idx), "value": float(series[idx])}
+        if pct_series is not None and idx in pct_series.index:
+            v = pct_series[idx]
+            out["pct"] = None if pd.isna(v) else float(v)
+        return out
+
+    # A "biggest fall" must actually be a fall. Over a window where every
+    # year rose, idxmin() returns the smallest RISE and the caption prints
+    # "biggest fall: +0.2%" -- a contradiction in its own sentence. Seen on
+    # the 2019-2025 test fixture before it could reach a page.
+    fall = _at(change.idxmin(), annual, change)
+    if fall and not (fall.get("pct") or 0) < 0:
+        fall = None
+    rise = _at(change.idxmax(), annual, change)
+    if rise and not (rise.get("pct") or 0) > 0:
+        rise = None
+
+    return {
+        "low": _at(annual.idxmin(), annual),
+        "high": _at(annual.idxmax(), annual),
+        "biggest_fall": fall,
+        "biggest_rise": rise,
+        "first_year": int(annual.index.min()),
+        "last_year": int(annual.index.max()),
+    }
+
+
+def recovered_year(df: pd.DataFrame, flow: str, after: int):
+    """
+    The first year after `after` that got back to its level -- how long a
+    collapse actually lasted, which a bar chart shows and does not say.
+
+    US beef exports fell 82% in 2004 and did not regain their 2003 total
+    until 2011. Seven years is the fact worth printing; "there is a dip" is
+    what the chart already conveys on its own.
+    """
+    m = monthly(df, flow)
+    complete = m.groupby("year")["month"].count()
+    years = [int(y) for y in complete[complete == 12].index]
+    annual = m[m["year"].isin(years)].groupby("year")["mil_lb"].sum()
+    if after not in annual.index:
+        return None
+    later = annual[(annual.index > after) & (annual >= annual[after])]
+    return int(later.index.min()) if not later.empty else None
+
+
 def basis_agrees(df: pd.DataFrame, year: int, wasde_imports: float | None,
                  wasde_exports: float | None, tolerance: float = 2.0) -> dict:
     """

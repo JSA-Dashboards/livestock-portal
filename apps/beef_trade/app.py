@@ -733,6 +733,99 @@ def annual_figure(df: pd.DataFrame, flow: str, color: str, forecast, fc_year,
     return fig
 
 
+# What moved the series, for the years the data itself picks out.
+#
+# KEYED BY (FLOW, YEAR) BECAUSE THE EVENTS ARE NOT SHARED. The December 2003
+# BSE case is an EXPORTS story and nothing else: exports fell 82% in 2004 and
+# imports ROSE 22% the same year, because the bans ran outward. Writing "the
+# 2003 BSE collapse" under an imports chart would describe a dip that is not
+# there -- I did exactly that in a note to Ross before checking the series,
+# which is why this is keyed rather than shared.
+#
+# The YEARS are not written here, only the causes. Which year is the record,
+# the trough or the biggest move is computed from the data every load, so a
+# new record cannot leave the caption describing the old one.
+EVENT_NOTES = {
+    ("Exports", 2004):
+        "the BSE case confirmed that December closed Japan, South Korea and "
+        "most other markets almost overnight — monthly exports went from "
+        "163.5 million lb in December 2003 to 5.6 that January",
+    ("Imports", 2014):
+        "the US cow herd bottomed after the 2011–12 drought, and lean "
+        "grinding beef had to come from somewhere",
+}
+# ("Imports", 2011) HAD A NOTE HERE AND IT WAS WRONG. It read "the tightest
+# year of the herd rebuild, before the drought broke it" -- but 2011 was
+# DURING the 2011-12 drought, not before it, and the rebuild did not start
+# until around 2014. I do not actually know why imports bottomed that year,
+# so the figure now stands on its own. A caption with no cause is worth more
+# than a caption with a plausible wrong one, which is the standard the rest
+# of this file is written to.
+
+
+def landmark_caption(flow: str) -> str:
+    """
+    One line naming the extremes the chart shows, with the reason where
+    there is one.
+
+    A thirty-seven-year bar chart has obvious features a reader can see and
+    cannot name. The chart already says "there is a hole in 2004"; what it
+    cannot say is that exports fell 82% and took until 2011 to recover.
+    """
+    lm = tf.landmarks(trade, flow)
+    if not lm:
+        return ""
+    noun = flow.lower()
+    bits = []
+
+    # ONE EXPLANATION PER YEAR. 2004 is both the steepest fall and the record
+    # low for exports, so an unguarded caption printed the whole BSE sentence
+    # twice in one paragraph. A reader meeting the same clause again assumes
+    # they have misread the first one.
+    explained = set()
+
+    def _note(year):
+        if year in explained:
+            return ""
+        text = EVENT_NOTES.get((flow, year))
+        if not text:
+            return ""
+        explained.add(year)
+        return f" — {text}"
+
+    fall = lm.get("biggest_fall")
+    if fall:
+        line = (f"**{fall['year']}** was the steepest fall on record, "
+                f"{abs(fall['pct']):,.0f}% to {fall['value']:,.0f}"
+                + _note(fall["year"]))
+        back = tf.recovered_year(trade, flow, fall["year"] - 1)
+        if back:
+            line += (f". {noun.capitalize()} did not regain their "
+                     f"{fall['year'] - 1} level until **{back}**")
+        bits.append(line)
+
+    rise = lm.get("biggest_rise")
+    if rise and (not fall or rise["year"] != fall["year"]):
+        bits.append(f"**{rise['year']}** was the sharpest rise, "
+                    f"{rise['pct']:,.0f}% to {rise['value']:,.0f}"
+                    + _note(rise["year"]))
+
+    low, high = lm.get("low"), lm.get("high")
+    if low and high:
+        # TWO SENTENCES, not one joined by a comma. With a note spliced into
+        # the first half, ", the high ..." trails off the end of a clause
+        # that already has commas in it and stops parsing as a list.
+        bits.append(f"The low is **{low['year']}** at {low['value']:,.0f}"
+                    + _note(low["year"]))
+        bits.append(f"The high is **{high['year']}** at {high['value']:,.0f}"
+                    + _note(high["year"]))
+
+    if not bits:
+        return ""
+    return (". ".join(bits) + f". Million lb, carcass weight, "
+            f"{lm['first_year']}–{lm['last_year']}.")
+
+
 def annual_chart(flow: str, color: str, forecast, fc_year, key: str):
     """
     THE WINDOW IS THE READER'S CHOICE, because the right one depends on the
@@ -751,11 +844,13 @@ def annual_chart(flow: str, color: str, forecast, fc_year, key: str):
     st.plotly_chart(
         annual_figure(trade, flow, color, forecast, fc_year, since),
         use_container_width=True, key=key)
+    note = landmark_caption(flow)
+    if note:
+        st.caption(note)
     if forecast and fc_year:
         st.caption(f"{fc_year}F is USDA's forecast, not an actual. The part "
                    "year in progress is left out rather than drawn as a short "
-                   "bar beside full ones. Complete calendar years only; ERS "
-                   "carries 1989 onward.")
+                   "bar beside full ones.")
 
 
 def country_table(flow: str, year: int, through: int, key: str, noun: str):

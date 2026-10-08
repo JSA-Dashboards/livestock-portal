@@ -1779,6 +1779,48 @@ forecasting no change" and "there is nothing to compare against" are
 different answers, and the panel would otherwise print a confident `+0.0%`
 where it has nothing. Same rule as `Wasde.revision`.
 
+### The annual chart names its own landmarks — per flow
+
+A thirty-seven-year bar chart has obvious features a reader can see and
+cannot name, so a caption underneath states the record low, the record high
+and the biggest one-year move, **computed from the data every load** rather
+than written down. The record import year has changed twice in three years;
+a hard-coded caption would already be describing the old one.
+
+**BSE IS AN EXPORTS STORY AND ONLY AN EXPORTS STORY.** The December 2003
+case closed Japan, South Korea and most other markets: exports fell **82% to
+460** million lb in 2004 — monthly, 163.5 in December 2003 to **5.6** that
+January — and did not regain their 2003 level until **2011**. Imports **ROSE
+22%** the same year, because the bans ran outward. I told Ross the "2003 BSE
+collapse" was among the things a short window hid on the IMPORTS chart; that
+was wrong, and `EVENT_NOTES` is keyed on `(flow, year)` so the mistake cannot
+be made in code.
+
+Imports have their own: the steepest fall is **2008** (−17%), the sharpest
+rise **2014** (+31%, the cow herd bottoming after the 2011–12 drought), the
+low **2011** at 2,057 and the high **2025** at 5,388.
+
+Three things in it that look fussy and are not:
+
+- **A "biggest fall" must actually be a fall.** Over a window where every
+  year rose, `idxmin()` returns the smallest RISE and the caption prints
+  "biggest fall: +0.2%", a sentence that contradicts itself. Caught on the
+  2019–2025 test fixture before it could reach a page.
+- **Complete years only.** The part year in progress is eight months of
+  trade; include it and the caption reports "biggest fall: 2026, −19%", a
+  calendar artefact presented as a market event.
+- **One explanation per year.** 2004 is both the steepest fall and the
+  record low for exports, so an unguarded caption printed the entire BSE
+  sentence twice in one paragraph.
+
+**A note was removed for being a guess.** `("Imports", 2011)` read "the
+tightest year of the herd rebuild, before the drought broke it" — but 2011
+was DURING the 2011–12 drought and the rebuild began around 2014. Why
+imports bottomed that year is not something I established, so the figure now
+stands on its own. **A caption with no cause is worth more than a caption
+with a plausible wrong one**, which is the standard the rest of this file is
+written to.
+
 ### The forecast bar that rendered nowhere
 
 `annual_figure` forces `xaxis type="category"` and **that line is
