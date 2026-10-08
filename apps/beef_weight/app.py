@@ -959,12 +959,29 @@ def _fetch_wasde_beef(schema: int = wasde.SCHEMA) -> dict:
     return wasde.summary(wasde.load_quarterly_production(), "beef")
 
 
-def _wasde_delta(value, percent, suffix, digits=0):
+def _wasde_delta(value, percent, suffix, digits=0, base=None, base_label=""):
+    # THE LEVEL THE MOVE IS MEASURED FROM, printed under it. A tile reading
+    # "▼ 90 · 0.4% vs last month" over 24,877 does not say what USDA forecast
+    # last month -- the reader subtracts to find 24,967, which is the whole
+    # of Ross's complaint about the beef cutout tiles on 2026-10-07 and the
+    # Cash Cattle Trade WASDE tiles the day after. Same defect, same fix.
+    #
+    # IT GOES HERE AND NOT IN `sub` BECAUSE sub ALREADY CARRIES THE UNIT, and
+    # on this page the unit is load-bearing: WASDE is COMMERCIAL production
+    # while the weekly tiles above are FEDERALLY INSPECTED, and the word is
+    # what stops a reader setting one against the other. The year-on-year
+    # tile is the one place sub was spent on a level instead, which is why
+    # that tile was never part of this defect and is left alone.
+    _b = ""
+    if base is not None:
+        _b = ('<div style="color:%s;font-size:0.72rem;margin-top:3px">'
+              '%s %s</div>' % (DM_MUTED, base_label, format(base, ",.%df" % digits)))
     if value is None and percent is None:
-        return '<div style="color:%s;font-size:0.8rem">&mdash;</div>' % DM_MUTED
+        return ('<div style="color:%s;font-size:0.8rem">&mdash;</div>'
+                % DM_MUTED) + _b
     if value == 0 or (value is None and percent == 0):
         return ('<div style="color:%s;font-size:0.8rem">unchanged%s</div>'
-                % (DM_MUTED, suffix))
+                % (DM_MUTED, suffix)) + _b
     ref = value if value is not None else percent
     arrow = "▲" if ref > 0 else "▼"
     bits = []
@@ -975,7 +992,7 @@ def _wasde_delta(value, percent, suffix, digits=0):
     # NO PARENTHESES: in USDA's own reports they mean negative.
     return ('<div style="color:%s;font-size:0.8rem;font-weight:600;'
             'margin-top:4px">%s %s%s</div>'
-            % (DM_MUTED, arrow, " · ".join(bits), suffix))
+            % (DM_MUTED, arrow, " · ".join(bits), suffix)) + _b
 
 
 def _wasde_tile(label, value, delta="", sub=""):
@@ -1021,7 +1038,8 @@ def _render_wasde_production():
         st.markdown(_wasde_tile(
             "USDA %d production forecast" % year,
             format(w["value"], ",.0f"),
-            _wasde_delta(w["revision"], w["revision_pct"], " vs last month"),
+            _wasde_delta(w["revision"], w["revision_pct"], " vs last month",
+                         base=w["prior"], base_label="last month"),
             "calendar year · million lb, commercial"),
             unsafe_allow_html=True)
     with c2:
@@ -1044,15 +1062,17 @@ def _render_wasde_production():
                              ", ".join(q["period"] for q in left) or "none"))
             if qs else ""), unsafe_allow_html=True)
     with c4:
-        nxt_pct = None
+        nxt_pct, nxt_prior = None, None
         if w["next_revision"] is not None and w["next_value"] is not None:
-            base = w["next_value"] - w["next_revision"]
-            nxt_pct = (w["next_revision"] / base * 100.0) if base else None
+            nxt_prior = w["next_value"] - w["next_revision"]
+            nxt_pct = ((w["next_revision"] / nxt_prior * 100.0)
+                       if nxt_prior else None)
         st.markdown(_wasde_tile(
             "USDA %d production forecast" % w["next_year"],
             (format(w["next_value"], ",.0f")
              if w["next_value"] is not None else dash),
-            _wasde_delta(w["next_revision"], nxt_pct, " vs last month"),
+            _wasde_delta(w["next_revision"], nxt_pct, " vs last month",
+                         base=nxt_prior, base_label="last month"),
             "million lb, commercial"), unsafe_allow_html=True)
 
     qs = [q for q in w["quarters"] if q["value"] is not None]

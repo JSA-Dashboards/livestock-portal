@@ -1315,3 +1315,94 @@ def test_the_levels_the_tiles_print_are_the_fixtures_own_arithmetic():
     # 8.00/245.35 is 3.26%, 8.00/237.35 would be 3.37%.
     assert w["revision_pct"] == pytest.approx(-3.26, abs=0.01)
     assert w["next_revision"] / nxt_prior * 100.0 == pytest.approx(-4.42, abs=0.01)
+
+
+# -- Cattle Weights: the same tiles, the same correction ---------------------
+
+def _production_delta():
+    """The real formatter, lifted from the page (it is top level here)."""
+    sys.path.insert(0, str(ROOT / "tests"))
+    from streamlit_source import load_from_app
+    return load_from_app(ROOT / "apps" / "beef_weight" / "app.py",
+                         "_wasde_delta", consts=("DM_MUTED",))
+
+
+def test_the_production_tiles_that_quote_a_revision_also_quote_their_base():
+    """
+    Ross asked for the Cash Cattle Trade treatment here after seeing it there.
+    The defect was the same on both pages: a tile reading "▼ 90 · 0.4% vs last
+    month" over 24,877 never said USDA forecast 24,967 last month.
+
+    THE YEAR-ON-YEAR TILE IS DELIBERATELY NOT IN THIS RULE. It spends its
+    `sub` slot on "2025 actual 26,003" and so already shows its level — it is
+    the one tile that never had the defect. The guard keys on the ARGUMENT, so
+    it binds the revision tiles and leaves that one alone rather than forcing
+    a second level onto it.
+    """
+    import ast
+    src = (ROOT / "apps" / "beef_weight" / "app.py").read_text(encoding="utf-8")
+    panel = next(n for n in ast.walk(ast.parse(src))
+                 if isinstance(n, ast.FunctionDef)
+                 and n.name == "_render_wasde_production")
+    calls = [n for n in ast.walk(panel)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+             and n.func.id == "_wasde_delta"]
+    assert len(calls) == 3, f"expected three delta tiles, found {len(calls)}"
+
+    quoting_a_revision = [c for c in calls
+                          if "revision" in ast.dump(c.args[0])]
+    assert len(quoting_a_revision) == 2, "the two revision tiles moved"
+    for c in quoting_a_revision:
+        kw = {k.arg for k in c.keywords}
+        assert "base" in kw and "base_label" in kw, (
+            f"the tile at line {c.lineno} quotes a revision with no level "
+            f"to measure it from")
+
+    # ...and the year-on-year tile still carries its own level in `sub`.
+    assert 'f"{year - 1} actual' in src or '"%d actual %s"' in src
+
+
+def test_the_production_delta_renders_the_base_under_the_move():
+    _wasde_delta = _production_delta()
+
+    out = _wasde_delta(-90, -0.36, " vs last month", base=24967,
+                       base_label="last month")
+    assert "▼ 90 · 0.4% vs last month" in out
+    assert "last month 24,967" in out
+    assert out.count("<div") == 2
+
+    # digits flows through to the base, so a production figure never renders
+    # as 24,967.00 under a delta that says 90.
+    assert "24,967.0" not in out
+
+    # Nothing to compare against prints no line at all rather than a label
+    # with a blank after it.
+    assert "last month" not in _wasde_delta(None, None, " vs last month")
+    assert "unchanged" in _wasde_delta(0, 0.0, " vs last month", base=24877,
+                                       base_label="last month")
+
+
+def test_the_production_levels_are_the_fixtures_own_arithmetic():
+    """
+    base + move == value on both revision tiles, against the September 2026
+    release the repo carries: 2026 cut 90 to 24,877 from 24,967, and 2027 cut
+    145 to 24,835 from 24,980.
+    """
+    txt = QUARTERLY_TXT.read_text(encoding="utf-8")
+    prod = wasde.parse_quarterly(txt, wasde.QUARTERLY_PRODUCTION_TITLE,
+                                 wasde.QUARTERLY_PRODUCTION_COLUMNS)
+    w = wasde.summary(prod, "beef")
+
+    assert w["prior"] == pytest.approx(24967.0)
+    assert w["prior"] + w["revision"] == pytest.approx(w["value"])
+    assert w["value"] == pytest.approx(24877.0)
+
+    nxt_prior = w["next_value"] - w["next_revision"]
+    assert nxt_prior == pytest.approx(24980.0)
+    assert w["next_value"] == pytest.approx(24835.0)
+
+    # The year-on-year tile's level is the prior year's ACTUAL, a different
+    # number from either of those -- which is why giving them one name was
+    # worth undoing.
+    assert w["base"] == pytest.approx(26003.0)
+    assert w["base"] + w["yoy_abs"] == pytest.approx(w["value"])
