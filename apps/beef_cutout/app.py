@@ -149,6 +149,26 @@ def tile(label, value, delta="", cls=""):
 def fmt(v, prefix="$"):
     return f"{prefix}{v:.2f}" if v is not None else "—"
 
+def money_md(text: str) -> str:
+    """
+    A caption string with its dollar signs escaped for Streamlit markdown.
+
+    TWO UNESCAPED $ IN ONE st.caption IS INLINE LaTeX, and Streamlit renders
+    it as maths. Everything between the first and second dollar sign is
+    swallowed: the $ themselves vanish, and **bold** inside the span comes
+    out as literal asterisks because LaTeX does not do markdown. A caption
+    reading "a month ago is **Sep 04, 2026** at $20.30" shipped as "a month
+    ago is **Sep 04, 2026** at 20.30" with the prices stripped -- which is
+    worse than a visible fault, because a spread quoted without its dollar
+    sign still reads as a number.
+
+    ONE dollar sign in a caption is safe and several already exist on this
+    page ("$/cwt"): it takes a PAIR to open and close a maths span. So this
+    only became a bug when captions started quoting two prices at once.
+    """
+    return text.replace("$", '\\$')
+
+
 def fmt_loads(v):
     return f"{v:.1f}" if v is not None else "—"
 
@@ -889,13 +909,13 @@ def am_panel(am_row: dict, pm_hist: pd.DataFrame, banked: pd.DataFrame):
     # followed by more string literals, the conditional takes the implicit
     # concatenation as its ELSE branch -- so the caption silently loses every
     # sentence after the first on exactly the days the date IS present.
-    st.caption(
+    st.caption(money_md(
         (f"Morning report for {rd:%b %d, %Y}. " if rd else "")
         + "The change is USDA's own, against the prior afternoon close. "
         + "USDA's 5-day simple average — the five sessions **before** this one — is "
         + f"{fmt(am_row.get('avg5_choice'))} Choice, "
         + f"{fmt(am_row.get('avg5_select'))} Select."
-    )
+    ))
 
     # ── What the morning read did by the close ──────────────────────────────
     close = None
@@ -1064,6 +1084,33 @@ def changes(df: pd.DataFrame, col: str):
         cval - p30  if p30  is not None else None,
         cval - p365 if p365 is not None else None,
     )
+
+
+def prior_level(df: pd.DataFrame, col: str, days: int):
+    """
+    What `col` actually WAS `days` ago, and the report it comes from.
+
+    THE SELECTION RULE IS COPIED FROM changes() ON PURPOSE -- the last report
+    on or before today minus `days`. The tiles show this level and that
+    function's delta side by side, so if the two ever picked different rows
+    the page would print a prior price and a change that do not subtract to
+    the current one, and a reader doing the arithmetic would be the one to
+    find it. tests/test_cutout_prior_level.py asserts prior + delta == current
+    rather than trusting the two to stay in step.
+
+    USDA does not publish on a fixed calendar, so "a month ago" lands on the
+    nearest session at or before the date, not on the date. The tile prints
+    which one.
+    """
+    valid = df[df[col].notna()]
+    if valid.empty:
+        return None, None
+    cdt = valid.iloc[-1]["report_date"]
+    sub = valid[valid["report_date"] <= cdt - timedelta(days=days)]
+    if sub.empty:
+        return None, None
+    row = sub.iloc[-1]
+    return row[col], row["report_date"]
 
 
 def five_day(df: pd.DataFrame, col: str):
@@ -1276,6 +1323,13 @@ s5d = (sn - s5) if (sn is not None and s5 is not None) else None
 # for any column; only the spread row never showed one.
 spn, spd1, spd30, spd365 = changes(hist, "spread")
 
+# THE LEVEL, NOT JUST THE MOVE. These two tiles used to print the change as
+# their value AND as their delta -- the same number twice, with the prior
+# spread nowhere on the page, so reading "a month ago" meant subtracting
+# 1.11 from 21.41 in your head.
+sp_p30,  sp_p30_dt  = prior_level(hist, "spread", 30)
+sp_p365, sp_p365_dt = prior_level(hist, "spread", 365)
+
 vol_rows = hist[hist["total_loads"].notna()]
 loads_now  = vol_rows.iloc[-1]["total_loads"]  if not vol_rows.empty else None
 loads_prev = vol_rows.iloc[-2]["total_loads"]  if len(vol_rows) > 1  else None
@@ -1385,10 +1439,10 @@ else:
         st.markdown(tile("Choice–Select Spread", fmt(spn), delta_html(spd1), "tile-spread"),
                     unsafe_allow_html=True)
     with cols[1]:
-        st.markdown(tile("Spread Month Change", fmt(spd30), delta_html(spd30), "tile-spread"),
+        st.markdown(tile("Spread a Month Ago", fmt(sp_p30), delta_html(spd30), "tile-spread"),
                     unsafe_allow_html=True)
     with cols[2]:
-        st.markdown(tile("Spread Year Change", fmt(spd365), delta_html(spd365), "tile-spread"),
+        st.markdown(tile("Spread a Year Ago", fmt(sp_p365), delta_html(spd365), "tile-spread"),
                     unsafe_allow_html=True)
     with cols[3]:
         st.markdown(tile("Total Loads Today", fmt_loads(loads_now), cls="tile-vol"),
@@ -1396,6 +1450,23 @@ else:
     with cols[4]:
         st.markdown(tile("Loads Day Change", fmt_loads(loads_d1), delta_html(loads_d1, " lds"), "tile-vol"),
                     unsafe_allow_html=True)
+
+    # WHICH SESSION "a month ago" IS. USDA publishes on its own calendar, not
+    # every 30 days, so the comparison lands on the nearest report at or
+    # before the date. Printing it means a reader can check the subtraction
+    # against the chart instead of taking the tile's word for it.
+    if sp_p30_dt is not None or sp_p365_dt is not None:
+        _bits = []
+        if sp_p30_dt is not None:
+            _bits.append(f"a month ago is **{sp_p30_dt:%b %d, %Y}** at {fmt(sp_p30)}")
+        if sp_p365_dt is not None:
+            _bits.append(f"a year ago is **{sp_p365_dt:%b %d, %Y}** at {fmt(sp_p365)}")
+        st.caption(money_md(
+            "Against the current " + fmt(spn) + ", " + " and ".join(_bits) +
+            " — the last report on or before each date, since USDA does not "
+            "publish on a fixed calendar. The green or red figure is the move "
+            "from that session to this one."
+        ))
 
 
 # ── What moved the cutout ────────────────────────────────────────────────────
@@ -1580,7 +1651,7 @@ if not _sp.empty:
     _lo, _hi = _sp["spread"].min(), _sp["spread"].max()
     _lo_d = _sp.loc[_sp["spread"].idxmin(), "report_date"]
     _hi_d = _sp.loc[_sp["spread"].idxmax(), "report_date"]
-    st.caption(
+    st.caption(money_md(
         f"Choice minus Select, {len(_sp):,} reports from "
         f"{_sp['report_date'].min():%b %d, %Y} to {_sp['report_date'].max():%b %d, %Y}. "
         f"**It starts in 2004 because USDA's composite cutout does** — LM_XB403 "
@@ -1589,7 +1660,7 @@ if not _sp.empty:
         f"cuts do go back to 2001; see Individual Cuts. "
         f"Range over the whole series ${_lo:,.2f} ({_lo_d:%b %Y}) to "
         f"${_hi:,.2f} ({_hi_d:%b %Y})."
-    )
+    ))
 
 
 # ── Volume Chart ─────────────────────────────────────────────────────────────

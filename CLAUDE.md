@@ -1090,6 +1090,53 @@ prices from 2001. A reader who knows that would otherwise read the start of
 this line as a hole in our fetch. Same reasoning as `FIRST_YEAR` on the
 Saturday Slaughter view. Zero is drawn because the series can cross it.
 
+### The month and year tiles show a LEVEL, not just a move
+
+Corrected 2026-10-07 on Ross's report: "too vague just showing the
+difference and no price, you have to do the math in your head."
+
+The spread's two tiles were worse than vague. They were built as
+`tile("Spread Month Change", fmt(spd30), delta_html(spd30))` — **the change
+passed as both the value and the delta**, so the tile used its whole area to
+print `+1.11` twice and the prior spread appeared nowhere on the page. They
+now print the level, with the move as the delta: *Spread a Month Ago $20.30
+▲1.11* against a current $21.41.
+
+**`prior_level()` copies its selection rule from `changes()` and that is
+load-bearing.** Two functions now pick a row — one for the level, one for the
+move — and if they ever choose differently the page prints a prior price and
+a change that do not subtract to the current one. Nothing would raise;
+both numbers are individually fine. `tests/test_cutout_prior_level.py`
+asserts `prior + delta == current` rather than trusting them to stay in step,
+and that a history too short for a year-ago figure returns None instead of
+falling back to the oldest row and labelling a two-month-old spread "a year
+ago".
+
+The caption prints **which session** each comparison lands on, because USDA
+does not publish every 30 days and "a month ago" is the last report at or
+before the date — Sep 04 for an Oct 07 reading.
+
+### Two unescaped dollar signs in one caption is LaTeX
+
+**Shipped live and found the same day.** Streamlit renders `$...$` in
+markdown as inline maths, so a caption quoting two prices has everything
+between them swallowed: the dollar signs vanish and any `**bold**` inside
+the span comes out as literal asterisks. The spread caption went out as
+
+    a month ago is **Sep 04, 2026** at 20.30
+
+— asterisks showing, prices stripped of their sign. **That is worse than a
+visible fault**, because 20.30 still reads perfectly well as a number.
+
+**ONE dollar sign is safe**, which is why this page carried `$/cwt` in a
+caption for months without trouble. It takes a PAIR to open and close a maths
+span, so the bug only appeared when captions started quoting two prices at
+once — the 5-day averages, the spread's range, the month/year levels. All
+three were mine and all three were introduced within a day.
+
+`money_md()` escapes them. Verified by counting `.katex` spans and literal
+`**` in the live DOM, both zero.
+
 ### Five tiles a row is past what the tile CSS could take
 
 Adding the 5-day average and then the spread's year change took those rows
