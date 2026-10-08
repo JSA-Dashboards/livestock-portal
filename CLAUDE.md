@@ -1036,6 +1036,55 @@ both figures — as soon as the week is in `published5`, reading the scorecard's
 own newest row so the two cannot drift apart. Step 2 also prints the
 **realised gap**, since when the national call misses that is always why.
 
+### ...and a near-empty week is the same bug with a pulse — 2026-10-07
+
+The scorecard replays past weeks at the checkpoint the LIVE week stands at,
+which is right: read the page on a Wednesday and the accuracy under it should
+describe a Wednesday call. It stops being right when the week has barely
+opened, because every week then replays from nothing and the table prints
+figures that are **not the calls we made**. A guard added 10-06 tested
+`not live["wtd"]` — a literal zero only. On 10-07 the live week stood at **337
+head** (0.76% of a typical week), which is truthy, so it sat out:
+
+|  | page showed | we called | USDA printed |
+|---|---|---|---|
+| Sep 28 5-Area | 45,784 | 60,897 | 60,063 |
+| Sep 28 National | 66,340 | 81,453 | 88,019 |
+| headline | 23.8% / 29.4% | 1.4% / 7.9% | |
+
+`scorecard.GREEN_MATURITY` tests **maturity** now, at `forecast_5area`'s own
+0.50 "weak" line rather than a new constant — and that line is where the
+forecast starts earning its place. Measured over 457 (week, checkpoint) pairs
+against the naive alternative of ignoring the week and printing a typical one:
+
+    maturity   0–1%   1–2%   2–5%   5–10%  10–35%  35–50%  50–75%  75–101%  101%+
+    forecast  19.4%  30.9%  34.4%  45.1%  35–47%   39.2%   20.9%    14.3%    6.7%
+    naive     17.8%  17.9%  19.1%  41.4%  26–27%   32.3%   22.9%     5.9%   26.7%
+
+**The forecast beats naive NOWHERE below 0.50**, which is a live question about
+the mid-week product and not just about the scorecard. It is not acted on.
+
+**NONE OF THIS TOUCHES THE LIVE FORECAST.** The tiles, Step 1 and Step 2 still
+re-forecast at every checkpoint as USDA publishes through the week, and the
+table's top row is still the live call at the live checkpoint — it has to be,
+or it would contradict the tiles above it. Only the SCORED rows step back, and
+only while the week is too green to score against. Once maturity passes 0.50
+the guard stops firing and the table returns to the live checkpoint on its own.
+
+**Stepping back costs an honest header, and that is the part to not undo.**
+"The last 10 calls at this point in the week" is false once the rows come from
+a different checkpoint, and a Friday call's accuracy printed under a Monday one
+flatters rather than merely misleads. `scorecard.checkpoint_of()` reports what
+was really scored; the heading AND the "standing at the same *day* *cut*"
+paragraph under the table both read it. The checkpoint rides on the rows, not
+on `.attrs`, which pandas drops through the page's concat with the pending row.
+
+One that the tests could not catch: the new label was written *below* the
+header that interpolates it — `NameError` on the live page while a source-text
+test passed. Script order again. `tests/test_cash_scorecard_green.py` now
+compares the assignment's line number against the use's, and the browser is
+what found it.
+
 ## The Packer Leverage tab
 
 Added 2026-10-05 as the **fourth tab** on Cash Cattle Trade. It answers how
