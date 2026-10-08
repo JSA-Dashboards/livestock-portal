@@ -1,10 +1,10 @@
 # JSA Livestock Portal
 
-A single Streamlit process (`Home.py`) bundling thirteen livestock dashboards
-under `apps/`: CME Feeder Cattle Index, Seasonal Futures & Spreads, Cattle on
-Feed, US Cow Herd, Mexican Feeder Imports, Fed Cattle Crush, Backgrounding
-Crush, Cattle Weights, Beef Cutout, Beef Trimmings, Livestock Inventory, Cash
-Cattle Trade, US Beef Trade.
+A single Streamlit process (`Home.py`) bundling fourteen livestock dashboards
+under `apps/`: CME Feeder Cattle Index, Seasonal Futures & Spreads, Commitment
+of Traders, Cattle on Feed, US Cow Herd, Mexican Feeder Imports, Fed Cattle
+Crush, Backgrounding Crush, Cattle Weights, Beef Cutout, Beef Trimmings,
+Livestock Inventory, Cash Cattle Trade, US Beef Trade.
 
 `Cattle Weights` was renamed from `Beef Weight` on 2026-09-10. Only the visible
 label changed — the folder is still `apps/beef_weight/` and the `url_path` is
@@ -1069,6 +1069,45 @@ Fewer than six sessions returns None rather than averaging what is there: a
 five-row history cannot produce a five-session average that excludes the
 current one, and a partial one would be quietly not what the label says.
 
+## The spread's year change, and its own chart
+
+Added 2026-10-07. `changes()` already returned a year change for any column
+and the spread row was the one place it was computed and **thrown away**
+(`spn, spd1, spd30, _`). It is now a tile, after the month change.
+
+**The spread also gets a chart of its own, and that is not a duplicate of
+the Cutout Trend above it.** That chart already carries the spread, as the
+shaded band between the two lines — but on a $100–$400 axis a $20 spread is
+a smear along the bottom you cannot read a value off. Alone it gets an axis
+scaled to itself, which is the entire reason for plotting the same series
+twice.
+
+**It starts 2004-01-05 and the page says so rather than letting the axis
+imply it.** LM_XB403's rows begin 2001-04-03, but its composite cutout is
+null for the first **699** of them, so there is no spread to compute before
+2004 even though the report exists — while the individual cuts *do* carry
+prices from 2001. A reader who knows that would otherwise read the start of
+this line as a hole in our fetch. Same reasoning as `FIRST_YEAR` on the
+Saturday Slaughter view. Zero is drawn because the series can cross it.
+
+### Five tiles a row is past what the tile CSS could take
+
+Adding the 5-day average and then the spread's year change took those rows
+from four tiles to five, and at 1440px that makes a tile **128px** wide with
+an **86px** content box — narrower than `$375.62` at the old 1.65rem. The
+price **broke between characters** and rendered as `$375.6` above a lone
+`2`.
+
+`.tile-value` is `white-space:nowrap` now, at 1.45rem, with the tile's side
+padding cut from 20px to 10px. Verified by measuring every tile in the live
+DOM at 1280 and 1440: fifteen values, none wrapping, none overflowing.
+
+**It shipped that way for a day because the verification read the page's
+TEXT**, where `$375.62` is intact whether or not it is broken across two
+lines. `get_page_text` cannot see layout. A tile row that changes width
+needs a screenshot or a DOM measurement, and the measurement is the better
+of the two because it gives a number rather than an impression.
+
 ## The morning cutout — LM_XB402
 
 Added 2026-10-06. The Beef Cutout page now reads **both** daily cutout
@@ -1559,6 +1598,214 @@ any had moved.
 records for the letter page: every multi-line string living above the split is
 the only reason indenting the rest is safe. Check that again before moving this
 one.
+
+## Commitment of Traders — the fourteenth dashboard
+
+Added 2026-10-07. Managed money's net futures position in Live Cattle and
+Feeder Cattle, from CFTC's weekly Disaggregated report, with twenty years of
+context. Arithmetic, fetching and every audit are in
+`apps/cot_report/cot_positions.py`; the layout is `app.py` — the same split as
+`cof_recap`, `leverage`, `am_cutout` and `mx_prices`.
+
+**No new secret and no new host.** It reads `JSA.CFTC_COT`, loaded by the
+droplet job in `JSA-Dashboards/cftc-cot-etl` on Fridays at 3pm CT with a Monday
+catch-up, which re-pulls the last eight weeks each run so CFTC's revisions land.
+Locally the read works through the **`JSA_ANALYST` secondary role** while
+`CURRENT_ROLE()` is `CME_INGEST_ROLE` — the trap this file already records in
+the other direction, so note that a local read here proves nothing about the
+deployed identity.
+
+    COT_DISAGG   managed money, producer/merchant, swaps, other, non-reportable
+                 2006-06-13 →, 1,060 weeks per cattle market per report type
+    COT_LEGACY   commercial / non-commercial, 1986 →   (reconciliation only)
+    COT_CIT      index traders   (NOT READ — see below)
+
+### THE LETTER ALREADY PRINTS THESE TWO NUMBERS
+
+`letter/render.cftc_block()` has rendered "Managed Money Traders (Futures
+Only)" on the Friday letter since before 2026-09-18, fed by
+`letter/sources.fetch_cftc()`, which hits the **live CFTC Socrata API**
+(`publicreporting.cftc.gov/resource/72hh-3qpy`) rather than Snowflake. So this
+page is the fourth JSA surface to quote a figure another surface already
+publishes — the failure this file records three times.
+
+**It was checked before the module was written, not after.** 120 rows, 60 weeks
+× 2 markets, 2025-08-12..2026-09-29: **zero mismatches on net, long, short and
+week-over-week.** They agree because this module makes the same three choices
+`fetch_cftc` makes, and each fails silently if missed:
+
+- `REPORT_TYPE = 'FUT'`, never COMBINED. Combined gives Live Cattle 51,304
+  against 53,193 — plausible, different, silent.
+- the DISAGGREGATED report, never legacy. Legacy flips feeders to a net short.
+- net is LONG less SHORT, with `MM_SPREAD` excluded.
+
+`tests/test_cot_positions.py::test_the_page_and_the_friday_letter_cannot_drift`
+pins it.
+
+**One window where they legitimately differ, worth knowing before someone
+reports it as a bug.** CFTC releases at 2:30pm CT; the ETL fills Snowflake at
+3pm. Between those the letter has the new report and this page does not.
+`RELEASE_HOUR_CT` is 4pm, an hour past the job, so the staleness banner does not
+fire every Friday afternoon while the job runs.
+
+### THE SAME WEEK, QUOTED THREE WAYS — and this week two of them disagree in SIGN
+
+The single most valuable thing on the page, and it sits **directly under the
+headline** rather than at the bottom, because what it prevents is a client
+ringing up about a number that disagrees with his broker's screen. A
+reconciliation below four charts cannot do that job.
+
+On 2026-09-29 feeder cattle, all three futures-only and all three CFTC's:
+
+| | |
+|---|---|
+| managed money net, Disaggregated | **8,166 LONG** ← this page, and the letter |
+| managed money net, futures + options combined | 7,638 long |
+| non-commercial net, the older Legacy report | **2,081 SHORT** |
+
+**The gap is an identity, not an estimate**, which is what makes it printable:
+
+    NONCOMM_NET = MM_NET + OTHER_NET      exactly, 1,060/1,060 weeks, both
+                                          markets, max error 0
+
+The old report had one "non-commercial" bucket; the Disaggregated report split
+it into managed money and other reportables. Feeder other reportables are
+10,247 net short, which is the whole difference and the whole sign flip. The
+signs disagree in **133 of 1,060 feeder weeks (12.5%)** and 68 live weeks.
+`reconciles_across_views()` asserts the identity on every load.
+
+**Legacy is NOT a longer history and must never be charted as one**, for two
+independent reasons either of which is fatal: the gap drifts and changes sign
+(feeder annual mean −2,837 in 2019 to +10,805 in 2026), and before October 1992
+the legacy report was **semi-monthly**, 24 reports a year, so a "back to 1986"
+chart silently changes its own sampling rate mid-axis. The feeder contract was
+also 44,000 lb before mid-1992 rather than 50,000.
+
+**`COT_CIT` is deliberately not read at all.** Index traders overlap the
+disaggregated categories materially — 30% of CIT's net comes out of legacy
+non-commercial in live cattle and 55% in feeders — so a CIT figure beside
+managed money invites a reader to add two numbers that double-count.
+
+### Futures-only is exact; combined is not, and that is why FUT leads
+
+Every identity in the futures-only report holds with **zero residual** on all
+2,120 cattle rows since 2006: each category's longs plus the spread columns
+equal open interest, the five nets sum to zero, and CFTC's published weekly
+change equals the change in its own levels.
+
+None of that is quite true on COMBINED, and the cause is one thing: CFTC
+converts options to futures equivalents on a **delta** basis and rounds each
+category separately. Independent rounding breaks a sum by a contract or two
+(−3..+2 on about half the rows) and stops a published change reproducing the
+diff of two rounded levels (198 feeder / 283 live weeks on the long leg, 361 and
+437 on the net, **every error exactly one contract, or two on the net**).
+
+So `OI_TOLERANCE` is **0, not a comfortable few contracts**. A tolerance on an
+identity that is exact is a hole, not a safeguard — it lets a shifted column of
+that many contracts through silently. The ±3 that would justify slack belongs to
+a basis this page neither audits nor leads with.
+
+### Things that look wrong and are not
+
+- **The sign is carried by a WORD — "8,166 long", "2,081 short" — never by a
+  minus and never by parentheses.** In CFTC's and USDA's own reports
+  parentheses mean NEGATIVE, the trap `letter/sterling.py` and `am_cutout` both
+  document. Managed money is net short feeders in 23.4% of weeks, so this is the
+  live case rather than the theoretical one. `letter/render.cftc_block()` still
+  hard-codes "Net Long:" and will print `Net Long: -2,081` the next time feeders
+  go short — known, flagged, not changed here because the wording is Ross's.
+- **Spreading is excluded from the net and is often larger than it.** Feeder
+  2026-09-29: long 17,364, short 9,198, **spread 10,252** against a net of
+  8,166. A spread is equal and offsetting legs held by one trader; it nets to
+  zero by construction, so folding it in would add zero contracts with a label
+  on them. It is shown as its own figure because a market where spreading
+  exceeds the net has a smaller directional bet than its gross suggests.
+- **Net is NOT converted to head, and that is a refusal rather than an
+  omission.** The conversion needs a liveweight CFTC does not publish; at
+  1,350 lb the live cattle net reads as 1,576,089 head, two-thirds of a month's
+  fed kill, and it is notional exposure. Net as a share of open interest says
+  the same thing and assumes nothing.
+- **Two percentiles, because they disagree and the disagreement is the point.**
+  Live cattle sits at the 47th percentile of 2006-2026 and the 26th of the last
+  five years. Every percentile on the page names its own window in the tile
+  label; a bare "percentile" has four defensible answers here spanning 60
+  points.
+- **Records are labelled "in contracts".** Feeder open interest has grown about
+  4%/yr, so the biggest bet in contracts and the biggest relative to the market
+  are different weeks.
+- **The year-ago tile is the actual news and the week-over-week delta hides it.**
+  Live cattle is 59,238 contracts lighter than a year ago, feeders 15,257. The
+  latest week moved +4,103 and +161.
+- **Four weeks back and a year back are taken BY DATE, not by counting rows.**
+  Fifty-two weeks is 364 days and the drift compounds.
+- **There are no missing weeks, but there are Mondays.** Every step is 6, 7 or 8
+  days: 1,037 sevens, and 22 six/eight pairs where a federal holiday pushes the
+  Tuesday report date back to Monday. `is_current()` therefore allows one day of
+  slack rather than demanding the exact Tuesday. **No government shutdown has
+  ever left a hole** — not 2013, not 2018-19, not the 43-day 2025 one. They
+  delay the release, which the data does not record, so staleness can only be
+  detected by comparing the newest report date to the Tuesday that should exist.
+- **`LOADED_AT` is a batch stamp, not provenance.** The whole schema was loaded
+  in four batches six minutes apart, so its lag to `REPORT_DATE` runs 9 to 7,422
+  days and means nothing. Nothing on the page reads it.
+
+### Tabs are allowed here
+
+A hidden Streamlit tab still executes, so a tab is the right shape only when its
+hidden body is cheap. All three tabs read the **same two cached queries**
+`load_cot()` already made, so the second and third cost rendering and no network
+at all. Nothing on this page fetches from inside a tab.
+
+### `cot_positions.SCHEMA` — and the discovery that the guard was never working
+
+`SCHEMA` exists because the cache serves shape, not freshness. **But the form
+this repo uses for it does not work**, which was found here by the trap firing:
+
+**`st.cache_data` ignores any parameter whose name begins with an underscore.**
+That is the documented mechanism for passing unhashable things like a
+connection into a cached function, so `_schema=mod.SCHEMA` is hashed never and
+bumping the constant changes nothing at all. Measured, not assumed:
+
+    @st.cache_data
+    def f(_schema=1, normal=0): ...
+    f(); f(2); f(1); f(1, 9)   ->  body ran for (1,0) and (1,9); f(2) was a hit
+
+    @st.cache_data
+    def g(schema=1): ...
+    g(); g(2); g(1)            ->  body ran for 1, 2, 1
+
+`apps/cot_report/app.py::load_cot` takes **`schema`, with no underscore**, and a
+test pins that. **Sixteen other loaders across five pages still use the broken
+form** — `apps/beef_cutout` (2), `apps/beef_trade` (3), `apps/cash_trade` (1),
+`apps/mexican_feeder_imports` (1) and `apps/market_board/loaders.py` (8). They
+were not changed from here; that is its own job and its own review.
+
+The trap itself fired on this page while it was being built: `why()` gained an
+`agree` key, the hero tile read `.get("agree")`, the cached dict predated it,
+`.get` returned None, the tile printed the wrong sentence, and `persist="disk"`
+carried the stale dict across two full server restarts with nothing raising.
+
+### Verifying a change to this page locally
+
+Two process-level traps cost time here and will again:
+
+- **A running dev server will not pick up an edit to `cot_positions.py`.** A
+  Streamlit rerun reuses `sys.modules`. Restart the server; on the deployed app,
+  reboot. Same cause as the `wasde.py` entry above.
+- **`preview_stop` does not always free the port.** A stale `run_cot.py` kept
+  listening on 8540 while a "restarted" server failed to bind, so the browser
+  went on talking to the old process and three separate correct fixes appeared
+  not to work. Check with `netstat -ano | grep 8540` and kill the holder by PID
+  before concluding a change did not land.
+
+### Still to verify on the deployed app
+
+**Whether the deployed identity can read `JSA.CFTC_COT` is NOT established.**
+Nothing on Ross's machine can answer it: the local read goes through
+`JSA_ANALYST` as a secondary role, and the deployed app runs as `KOLTENPOSTIN` /
+`ACCOUNTADMIN`, which should be ample but has not been seen to work. **Check the
+live page against 53,193** — a figure predictable to the contract in advance,
+which is the kind of check this file argues for over reading a log.
 
 ## US Beef Trade — the thirteenth dashboard
 

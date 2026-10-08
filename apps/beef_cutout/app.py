@@ -89,14 +89,24 @@ st.markdown(f"""
   .tile {{
     background:{DM_SURFACE}; border:1px solid {DM_BORDER};
     border-top:3px solid {JSA_GREEN}; border-radius:10px;
-    padding:16px 20px; text-align:center; height:100%;
+    /* 10px side padding, not 20. These rows went from four tiles to five
+       when the 5-day average and the spread's year change were added, and at
+       1440px a tile is 128px wide -- 20px a side left an 86px content box,
+       which is narrower than "$375.62" at this font size. */
+    padding:16px 10px; text-align:center; height:100%;
   }}
   .tile-label {{
     color:{DM_MUTED}; font-size:0.68rem; text-transform:uppercase;
     letter-spacing:0.09em; margin-bottom:6px;
   }}
   .tile-value {{
-    color:{DM_TEXT}; font-size:1.65rem; font-weight:700; line-height:1.1;
+    /* NOWRAP IS THE IMPORTANT HALF. Without it a price too wide for its tile
+       breaks between characters and renders as "$375.6" above a lone "2" --
+       which does not look like a layout fault, it looks like a number. It
+       shipped that way for a day because the checks read the page's TEXT,
+       where "$375.62" is intact either way, and only a screenshot shows it. */
+    color:{DM_TEXT}; font-size:1.45rem; font-weight:700; line-height:1.1;
+    white-space:nowrap;
   }}
   .tile-delta-pos {{ color:{COL_POS}; font-size:0.82rem; font-weight:600; margin-top:4px; }}
   .tile-delta-neg {{ color:{COL_NEG}; font-size:0.82rem; font-weight:600; margin-top:4px; }}
@@ -1262,7 +1272,9 @@ c5 = five_day(hist, "choice")
 s5 = five_day(hist, "select")
 c5d = (cn - c5) if (cn is not None and c5 is not None) else None
 s5d = (sn - s5) if (sn is not None and s5 is not None) else None
-spn, spd1, spd30, _  = changes(hist, "spread")
+# The year change was computed and thrown away here. changes() returns it
+# for any column; only the spread row never showed one.
+spn, spd1, spd30, spd365 = changes(hist, "spread")
 
 vol_rows = hist[hist["total_loads"].notna()]
 loads_now  = vol_rows.iloc[-1]["total_loads"]  if not vol_rows.empty else None
@@ -1368,7 +1380,7 @@ else:
 
     st.markdown('<div class="sec-header">Choice–Select Spread &amp; Total Volume</div>',
                 unsafe_allow_html=True)
-    cols = st.columns(4)
+    cols = st.columns(5)
     with cols[0]:
         st.markdown(tile("Choice–Select Spread", fmt(spn), delta_html(spd1), "tile-spread"),
                     unsafe_allow_html=True)
@@ -1376,9 +1388,12 @@ else:
         st.markdown(tile("Spread Month Change", fmt(spd30), delta_html(spd30), "tile-spread"),
                     unsafe_allow_html=True)
     with cols[2]:
-        st.markdown(tile("Total Loads Today", fmt_loads(loads_now), cls="tile-vol"),
+        st.markdown(tile("Spread Year Change", fmt(spd365), delta_html(spd365), "tile-spread"),
                     unsafe_allow_html=True)
     with cols[3]:
+        st.markdown(tile("Total Loads Today", fmt_loads(loads_now), cls="tile-vol"),
+                    unsafe_allow_html=True)
+    with cols[4]:
         st.markdown(tile("Loads Day Change", fmt_loads(loads_d1), delta_html(loads_d1, " lds"), "tile-vol"),
                     unsafe_allow_html=True)
 
@@ -1495,6 +1510,86 @@ fig.update_layout(
 )
 
 st.plotly_chart(fig, use_container_width=True)
+
+
+# ── Choice–Select Spread Chart ───────────────────────────────────────────────
+# ITS OWN CHART BECAUSE IT CANNOT BE READ ON THE ONE ABOVE. The Cutout Trend
+# already carries the spread, as the shaded band between the two lines, and on
+# a $100-$400 axis a $20 spread is a smear at the bottom you cannot take a
+# value off. Plotted alone it gets an axis scaled to itself, which is the
+# whole point of repeating the series rather than a duplication to tidy away.
+
+_sp = hist[hist["spread"].notna()]
+
+if not _sp.empty:
+    st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="sec-header">Choice–Select Spread</div>',
+                unsafe_allow_html=True)
+
+    figsp = go.Figure()
+    figsp.add_trace(go.Scatter(
+        x=_sp["report_date"], y=_sp["spread"],
+        name="Choice–Select",
+        mode="lines",
+        line=dict(color=SPREAD_COLOR, width=1.6),
+        fill="tozeroy",
+        fillcolor="rgba(196,180,86,0.12)",
+        hovertemplate="<b>Spread</b>: $%{y:.2f}<extra></extra>",
+    ))
+
+    # ZERO IS DRAWN BECAUSE THE SERIES CAN CROSS IT. Select trading above
+    # Choice is rare and is exactly the thing a reader wants to see rather
+    # than infer from an axis that starts wherever the data happens to.
+    figsp.add_hline(y=0, line=dict(color=DM_MUTED, width=1, dash="dot"))
+
+    figsp.update_layout(
+        paper_bgcolor=DM_SURFACE2, plot_bgcolor=DM_SURFACE2,
+        font=dict(color=DM_TEXT, size=11),
+        hovermode="x unified",
+        showlegend=False,
+        margin=dict(l=55, r=20, t=15, b=40),
+        xaxis=dict(
+            **AXIS, title="",
+            rangeselector=dict(
+                buttons=[
+                    dict(count=1,  label="1M",  step="month", stepmode="backward"),
+                    dict(count=6,  label="6M",  step="month", stepmode="backward"),
+                    dict(count=1,  label="YTD", step="year",  stepmode="todate"),
+                    dict(count=1,  label="1Y",  step="year",  stepmode="backward"),
+                    dict(count=5,  label="5Y",  step="year",  stepmode="backward"),
+                    dict(step="all", label="All"),
+                ],
+                bgcolor=DM_SURFACE, activecolor=JSA_GREEN,
+                font=dict(color=DM_TEXT, size=10), bordercolor=DM_BORDER,
+            ),
+            rangeslider=dict(visible=False),
+            type="date",
+        ),
+        yaxis=dict(**AXIS, title="$/cwt", tickprefix="$"),
+        height=340,
+    )
+
+    st.plotly_chart(figsp, use_container_width=True)
+
+    # THE START DATE IS PRINTED, NOT LEFT TO THE AXIS. LM_XB403's rows begin
+    # 2001-04-03, but its composite cutout is null for the first 699 of them
+    # and only becomes usable on 2004-01-05 -- so the spread cannot exist
+    # before then even though the report does. A reader who knows the cuts go
+    # back to 2001 would otherwise read the start of this line as a gap in
+    # our fetch. Same reasoning as FIRST_YEAR on the Saturday Slaughter view.
+    _lo, _hi = _sp["spread"].min(), _sp["spread"].max()
+    _lo_d = _sp.loc[_sp["spread"].idxmin(), "report_date"]
+    _hi_d = _sp.loc[_sp["spread"].idxmax(), "report_date"]
+    st.caption(
+        f"Choice minus Select, {len(_sp):,} reports from "
+        f"{_sp['report_date'].min():%b %d, %Y} to {_sp['report_date'].max():%b %d, %Y}. "
+        f"**It starts in 2004 because USDA's composite cutout does** — LM_XB403 "
+        f"carries rows from Apr 2001, but the cutout column is empty for the "
+        f"first 699 of them, so there is no spread to compute. The individual "
+        f"cuts do go back to 2001; see Individual Cuts. "
+        f"Range over the whole series ${_lo:,.2f} ({_lo_d:%b %Y}) to "
+        f"${_hi:,.2f} ({_hi_d:%b %Y})."
+    )
 
 
 # ── Volume Chart ─────────────────────────────────────────────────────────────
