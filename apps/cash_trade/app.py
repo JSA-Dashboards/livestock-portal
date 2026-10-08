@@ -1480,8 +1480,8 @@ def wasde_steer_panel():
         f"average over the **{year} calendar year**, updated every WASDE. "
         f"WASDE's own footnote defines this series as "
         f"*“{wasde.STEER_PRICE_BASIS}”* — the same thing "
-        f"LM_CT150 reports, which is why it can sit beside the weekly "
-        f"average above. Report: **{w['report_month']}**.")
+        f"LM_CT150 reports, so it is directly comparable with the weekly "
+        f"averages on the first tab. Report: **{w['report_month']}**.")
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
@@ -1538,19 +1538,11 @@ def wasde_steer_panel():
             f"is checked.")
 
 
-tab_weekly, tab_daily, tab_fcst, tab_lev = st.tabs(
+tab_weekly, tab_daily, tab_fcst, tab_lev, tab_wasde = st.tabs(
     ["Weekly Cash Trade Averages", "Daily Cash Trade", "Monday Print Forecast",
-     "Packer Leverage"])
+     "Packer Leverage", "WASDE Steer Price"])
 
 with tab_weekly:
-    # ABOVE THE LMR GUARD, DELIBERATELY, and the same four-line shape the
-    # Saturday Slaughter view and the morning cutout panel use. WASDE comes
-    # from ESMIS over a different host; an LMR outage must not blank a
-    # forecast that never touched LMR. Below the guard this whole panel would
-    # disappear on exactly the days a reader most wants a reference price.
-    wasde_steer_panel()
-    st.markdown("<hr style='margin:14px 0;'>", unsafe_allow_html=True)
-
     if not load_ok:
         st.warning(
             "⏳ **USDA data temporarily unavailable** — the USDA server is not responding. "
@@ -3150,6 +3142,24 @@ with tab_lev:
             'newest row here is a week behind the daily cash prices on the other tabs. '
             'That is USDA\'s publication schedule, not a staleness bug.</div>',
             unsafe_allow_html=True)
+
+
+# ── WASDE steer price ────────────────────────────────────────────────────────
+# Moved out of the Weekly tab 2026-10-07. It had sat above that tab's LMR guard
+# deliberately, because WASDE comes from ESMIS over a different host and an LMR
+# outage must not blank a forecast that never touched LMR.
+#
+# ITS OWN TAB KEEPS THAT PROPERTY RATHER THAN LOSING IT, which is the only
+# reason the move is safe: a tab body is outside the weekly tab's `if not
+# load_ok` entirely, so the panel still renders on exactly the days an LMR
+# outage would have hidden it. Putting it anywhere INSIDE the weekly tab's
+# else-branch would have quietly undone that.
+#
+# No new fetch either. fetch_wasde_steer is cached and the hidden-tab rule
+# means it already ran on every load from the weekly tab; it now runs from
+# here instead.
+with tab_wasde:
+    wasde_steer_panel()
 
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────
