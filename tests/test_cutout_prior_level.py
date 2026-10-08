@@ -117,3 +117,66 @@ def test_the_tiles_no_longer_print_the_change_as_their_own_value():
     assert "fmt(spd365), delta_html(spd365)" not in src
     assert "fmt(sp_p30), delta_html(spd30)" in src
     assert "fmt(sp_p365), delta_html(spd365)" in src
+
+
+# -- The same treatment on Choice and Select ---------------------------------
+
+def test_all_three_rows_show_a_level_not_the_change_twice():
+    """
+    The defect was identical on Choice and Select. Each of the six tiles
+    passed its change as BOTH value and delta; none showed a prior price.
+    """
+    src = APP.read_text(encoding="utf-8")
+    for d in ("cd30", "cd365", "sd30", "sd365", "spd30", "spd365"):
+        assert f"fmt({d}), delta_html({d})" not in src, f"{d} still prints twice"
+    for level, delta in (("c_p30", "cd30"), ("c_p365", "cd365"),
+                         ("s_p30", "sd30"), ("s_p365", "sd365"),
+                         ("sp_p30", "spd30"), ("sp_p365", "spd365")):
+        assert f"fmt({level}), delta_html({delta})" in src, f"{level} not wired"
+
+
+@pytest.mark.parametrize("col", ["choice", "select", "spread"])
+def test_prior_plus_delta_equals_current_for_every_column(col):
+    """
+    The identity has to hold on all three now, not just the spread. Each row
+    puts a level and a move side by side and invites the reader to subtract.
+    """
+    changes = _lift("changes")
+    prior_level = _lift("prior_level")
+    idx = pd.bdate_range(end="2026-10-07", periods=400)
+    h = pd.DataFrame({
+        "report_date": idx,
+        col: [100 + (i % 53) * 1.25 for i in range(len(idx))],
+    })
+    cur, _d1, d30, d365 = changes(h, col)
+    p30, _ = prior_level(h, col, 30)
+    p365, _ = prior_level(h, col, 365)
+    assert round(p30 + d30, 6) == round(cur, 6)
+    assert round(p365 + d365, 6) == round(cur, 6)
+
+
+def test_captions_that_quote_two_prices_are_escaped():
+    """
+    Two unescaped $ in one st.caption is inline LaTeX: the dollar signs are
+    swallowed and **bold** inside the span renders as literal asterisks. It
+    shipped that way. Any caption carrying more than one price must go
+    through money_md().
+    """
+    import ast
+    src = APP.read_text(encoding="utf-8")
+    assert "def money_md(" in src
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "caption"):
+            continue
+        if not node.args:
+            continue
+        arg = node.args[0]
+        rendered = ast.unparse(arg)
+        prices = rendered.count("fmt(") + rendered.count("$")
+        if prices < 2:
+            continue
+        wrapped = (isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name)
+                   and arg.func.id == "money_md")
+        assert wrapped, f"caption near line {node.lineno} quotes 2+ prices unescaped"

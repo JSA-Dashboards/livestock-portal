@@ -1095,6 +1095,10 @@ Saturday Slaughter view. Zero is drawn because the series can cross it.
 Corrected 2026-10-07 on Ross's report: "too vague just showing the
 difference and no price, you have to do the math in your head."
 
+**All three rows, six tiles** — Choice, Select and the spread. The defect was
+identical on each and the fix is the same: the tile prints what the figure
+WAS, with the move to today as its delta.
+
 The spread's two tiles were worse than vague. They were built as
 `tile("Spread Month Change", fmt(spd30), delta_html(spd30))` — **the change
 passed as both the value and the delta**, so the tile used its whole area to
@@ -1115,6 +1119,10 @@ ago".
 The caption prints **which session** each comparison lands on, because USDA
 does not publish every 30 days and "a month ago" is the last report at or
 before the date — Sep 04 for an Oct 07 reading.
+
+`tests/test_cutout_prior_level.py` also walks every `st.caption` on the page
+by AST and fails any that quotes two or more prices without `money_md()`,
+which is a standing guard rather than a check of the three that were wrong.
 
 ### Two unescaped dollar signs in one caption is LaTeX
 

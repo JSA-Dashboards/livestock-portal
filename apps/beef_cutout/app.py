@@ -1329,6 +1329,10 @@ spn, spd1, spd30, spd365 = changes(hist, "spread")
 # 1.11 from 21.41 in your head.
 sp_p30,  sp_p30_dt  = prior_level(hist, "spread", 30)
 sp_p365, sp_p365_dt = prior_level(hist, "spread", 365)
+c_p30,   c_p30_dt   = prior_level(hist, "choice", 30)
+c_p365,  c_p365_dt  = prior_level(hist, "choice", 365)
+s_p30,   _s_p30_dt  = prior_level(hist, "select", 30)
+s_p365,  _s_p365_dt = prior_level(hist, "select", 365)
 
 vol_rows = hist[hist["total_loads"].notna()]
 loads_now  = vol_rows.iloc[-1]["total_loads"]  if not vol_rows.empty else None
@@ -1398,9 +1402,9 @@ else:
     with cols[2]:
         st.markdown(tile("5-Day Avg", fmt(c5), delta_html(c5d), "tile-choice"), unsafe_allow_html=True)
     with cols[3]:
-        st.markdown(tile("Month Change", fmt(cd30), delta_html(cd30), "tile-choice"), unsafe_allow_html=True)
+        st.markdown(tile("A Month Ago", fmt(c_p30), delta_html(cd30), "tile-choice"), unsafe_allow_html=True)
     with cols[4]:
-        st.markdown(tile("Year Change", fmt(cd365), delta_html(cd365), "tile-choice"), unsafe_allow_html=True)
+        st.markdown(tile("A Year Ago", fmt(c_p365), delta_html(cd365), "tile-choice"), unsafe_allow_html=True)
 
     st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
@@ -1416,17 +1420,23 @@ else:
     with cols[2]:
         st.markdown(tile("5-Day Avg", fmt(s5), delta_html(s5d), "tile-select"), unsafe_allow_html=True)
     with cols[3]:
-        st.markdown(tile("Month Change", fmt(sd30), delta_html(sd30), "tile-select"), unsafe_allow_html=True)
+        st.markdown(tile("A Month Ago", fmt(s_p30), delta_html(sd30), "tile-select"), unsafe_allow_html=True)
     with cols[4]:
-        st.markdown(tile("Year Change", fmt(sd365), delta_html(sd365), "tile-select"), unsafe_allow_html=True)
+        st.markdown(tile("A Year Ago", fmt(s_p365), delta_html(sd365), "tile-select"), unsafe_allow_html=True)
 
-    st.caption(
+    _ago = ""
+    if c_p30_dt is not None and c_p365_dt is not None:
+        _ago = (f" **A Month Ago** and **A Year Ago** are levels, not moves — "
+                f"{c_p30_dt:%b %d, %Y} and {c_p365_dt:%b %d, %Y}, the last "
+                f"report on or before each date, with the move to today "
+                f"beside them.")
+    st.caption(money_md(
         "**5-Day Avg** is USDA's own simple average of the five sessions "
         "**before** this one, not a trailing five that includes it — the same "
         "window the daily letter and the client slide print, and the same "
         "figure USDA puts on the morning report. The delta beside it is where "
-        "the current print sits against that benchmark."
-    )
+        "the current print sits against that benchmark." + _ago
+    ))
 
     st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
