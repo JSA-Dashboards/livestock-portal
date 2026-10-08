@@ -2412,9 +2412,19 @@ count from 2 to 40.
 
 ## WASDE on Cash Cattle Trade — and why only there
 
-Added 2026-10-07, at the top of the Weekly tab. USDA's quarterly 5-Area steer
-price forecast, the calendar-year total, the month's revision and each
+Added 2026-10-07, and **on its own tab since later that day**, fifth and
+right of Packer Leverage — it sat at the top of the Weekly tab, which is
+named after prices it was pushing down the page. USDA's quarterly 5-Area
+steer price forecast, the calendar-year total, the month's revision and each
 quarter marked actual or projected.
+
+**The move had to keep the property the old placement existed for.** WASDE
+comes from ESMIS, over a different host from LMR, so the panel must survive
+an LMR outage — the one day a reader most wants a reference price. A tab body
+sits outside the Weekly tab's `if not load_ok` branch entirely, so it still
+does; dropping it anywhere inside that branch would have undone it with
+nothing raising. `tests/test_beef_trade.py` asserts the panel is called once,
+from its own tab, and appears nowhere inside the gated Weekly tab.
 
 **IT IS THIS PAGE'S OWN SERIES, NOT A RELATED INDICATOR PLACED NEARBY.**
 WASDE's footnote defines its steer price as *"5-Area, Direct, Total all
@@ -2426,6 +2436,36 @@ establish the comparison.
 What it adds that nothing else on the portal does: USDA **cut the 2026
 forecast from $245.35 to $237.35 in one month**, and the 2027 from $249 to
 $238. An $8 and an $11 revision, invisible here until now.
+
+### Every tile that quotes a move also prints the level it moved from
+
+The same correction the beef cutout's Month/Year tiles got two days earlier,
+and for the same reason in Ross's words: *"show what the prices are 12.98/cwt
+higher than so we don't have to do the math."* The tiles read
+
+    $237.35   ▼ $8.00 · 3.3% vs last month
+    +5.8%     ▲ $12.98/cwt
+    $238.00   ▼ $11.00 · 4.4% vs last month
+
+and nowhere said $245.35, $224.37 or $249.00. **The year-on-year tile was the
+worst of the three**, because its own value is a percentage — so $12.98 was a
+move against a number that was not on the tile at all, and no amount of
+mental arithmetic on what was shown would recover it.
+
+`_d()` now takes `base` and `base_label` and prints them under the delta.
+**Its own line, not more text on the delta's** — `.tile-delta-*` is
+`white-space:nowrap` and four tiles share a 1,250px row, so appending to it
+overflows the tile at anything below desktop width. `.tile-sub` is the class.
+
+The guard in `tests/test_beef_trade.py` is a standing one rather than a check
+of the three that were wrong: it walks the panel by AST and fails any `_d()`
+call that does not pass `base=`. A fourth tile added without one renders a
+move with no level, looks entirely fine, and is the defect again.
+
+**Cattle Weights has one tile with the same gap** — its production forecast
+quotes a revision with no prior, while its year-on-year tile already prints
+"2025 actual 27,543". Not changed, because the `sub` slot there carries the
+unit and "commercial" is load-bearing on that page.
 
 ### WASDE HAS NOTHING FOR THE OTHER ELEVEN PAGES, and that is checked
 
