@@ -535,6 +535,16 @@ def pace_panel(flow: str, forecast, year: int, through: int, cls: str):
     the disagreement IS the information -- see trade_flows.pace.
     """
     p = tf.pace(trade, flow, year, through, forecast)
+
+    # EVERY TILE NAMES ITS UNIT, and the two RATES name their period as well.
+    # A reader meeting 535 beside a 6,262 forecast has no way to tell they
+    # are different kinds of number -- one is a year, the other a month --
+    # and the gap between them looks like a collapse rather than a cadence.
+    # Flagged 2026-10-07; the WASDE row above had carried its units from the
+    # start and these four had not.
+    UNIT = "million lb"
+    RATE = "million lb per month"
+
     st.markdown("<div class='sec-header'>Actual pace against the "
                 "forecast</div>", unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4)
@@ -542,12 +552,12 @@ def pace_panel(flow: str, forecast, year: int, through: int, cls: str):
         st.markdown(tile(
             f"{year} {flow.lower()} so far", fmt(p["ytd"]),
             delta_html(p["yoy_pct"], "%", 1),
-            sub=f"Jan–{tf.month_name(through)} vs {year - 1}", cls=cls),
-            unsafe_allow_html=True)
+            sub=f"{UNIT} · Jan–{tf.month_name(through)} vs {year - 1}",
+            cls=cls), unsafe_allow_html=True)
     with c2:
         st.markdown(tile(
             "Recent monthly pace", fmt(p["run_rate"]),
-            sub="average of the last 3 months", cls=cls),
+            sub=f"{RATE} · average of the last 3 months", cls=cls),
             unsafe_allow_html=True)
     with c3:
         # THE RATIO IS PRINTED THE WAY IT IS READ. `gap_pct` is required
@@ -561,18 +571,18 @@ def pace_panel(flow: str, forecast, year: int, through: int, cls: str):
         st.markdown(tile(
             "Monthly pace needed", fmt(p["required"]),
             running_html(over),
-            sub=(f"to reach USDA's {forecast:,.0f}, "
+            sub=(f"{RATE} · to reach USDA's {forecast:,.0f}, "
                  f"{p['months_left']} months left" if forecast
-                 else f"{p['months_left']} months left"), cls=cls),
+                 else f"{RATE} · {p['months_left']} months left"), cls=cls),
             unsafe_allow_html=True)
     with c4:
         st.markdown(tile(
             f"{year} full-year projection", fmt(p["projection"]),
             projection_yoy_html(p["projection_yoy_pct"], year - 1,
                                 p["prior_year_total"]),
-            sub=(f"{year - 1} actual {fmt(p['prior_year_total'])}"
+            sub=(f"{UNIT} · {year - 1} actual {fmt(p['prior_year_total'])}"
                  if p["prior_year_total"] else
-                 "full year on the seasonal shape"), cls=cls),
+                 f"{UNIT} · full year on the seasonal shape"), cls=cls),
             unsafe_allow_html=True)
 
     if p["projection"] is not None and forecast:

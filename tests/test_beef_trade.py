@@ -890,3 +890,34 @@ def test_projection_yoy_is_none_until_the_prior_year_is_complete():
     p = tf.pace(df, "Imports", first, 8, 6000.0)
     assert p["prior_year_total"] is None
     assert p["projection_yoy_pct"] is None
+
+
+def test_every_pace_tile_states_its_unit_and_rates_state_their_period():
+    """
+    535 beside a 6,262 forecast gives the reader no way to tell they are
+    different kinds of number -- one is a year, the other a month -- and the
+    gap reads as a collapse rather than a cadence. Flagged on the live page
+    2026-10-07: the WASDE row had carried its units from the start and the
+    four pace tiles had not.
+
+    The two RATES must name the period as well as the unit; a bare
+    "million lb" on a per-month figure is the same ambiguity one step on.
+    """
+    src = (ROOT / "apps" / "beef_trade" / "app.py").read_text(encoding="utf-8")
+    body = src[src.index("def pace_panel("):src.index("def monthly_chart(")]
+
+    assert 'UNIT = "million lb"' in body
+    assert 'RATE = "million lb per month"' in body
+
+    # All four tiles carry one or the other.
+    assert body.count("{UNIT} ·") + body.count("{RATE} ·") >= 4
+
+    # The two rate tiles are the per-month ones, and they use RATE not UNIT.
+    recent = body[body.index('"Recent monthly pace"'):]
+    assert "{RATE} · average of the last 3 months" in recent[:300]
+    needed = body[body.index('"Monthly pace needed"'):]
+    assert "{RATE} · to reach USDA" in needed[:500]
+
+    # And the two totals use UNIT, not RATE -- a year is not a rate.
+    sofar = body[body.index("so far\", fmt(p[\"ytd\"])"):]
+    assert "{UNIT} · Jan" in sofar[:300]

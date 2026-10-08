@@ -35,6 +35,11 @@ same day:
 - **Jargon where a plain word exists.** Tile labels say **USDA**; the report
   is named **WASDE** only in the section header and the caption, where it is
   provenance rather than the point.
+- **A number without its unit — and a RATE without its period.** `535` beside
+  a `6,262` forecast gives no way to tell they are different kinds of number,
+  one a year and one a month, so the gap reads as a collapse rather than a
+  cadence. Every pace tile now says `million lb` and the two rates say
+  `million lb per month`. Spotted on the live page by Ross, 2026-10-07.
 - **A bare `0`.** "0 vs Aug" reads as a missing figure; USDA leaving a
   forecast alone is an answer, so it prints "unchanged".
 - **Parentheses around a number.** In USDA's reports they mean NEGATIVE.
