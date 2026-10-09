@@ -227,3 +227,57 @@ def test_the_installer_verifies_the_crontab_it_wrote():
     assert "crontab -l" in src and "grep -cF" in src
     i = src.index("installed=$(crontab -l")
     assert "exit 1" in src[i:i + 900], "the read-back is not fatal"
+
+
+# --- the expansion view ----------------------------------------------------
+
+def test_expansion_scores_are_the_out_of_sample_ones():
+    """The page must not quote 17/18.
+
+    That is the in-sample score of a cut fitted on the same 18 years it is
+    scored against, with one free parameter. Leave-one-out gives 15/18 against
+    a null of 13/18 for saying 'contract' every year. Both numbers are carried
+    so the caption can show the honest one and name the other as fitted.
+    """
+    sys.path.insert(0, str(ROOT / "apps" / "us_cow_herd"))
+    import expansion
+    s = expansion.SCORE
+    assert s["out_of_sample"] < s["in_sample"], (
+        "if these are equal the leave-one-out check was not actually run")
+    assert s["null"] < s["out_of_sample"] <= s["n"]
+    app = (ROOT / "apps" / "us_cow_herd" / "app.py").read_text(encoding="utf-8")
+    assert "_s['out_of_sample']" in app, "the caption must quote the honest score"
+
+
+def test_the_threshold_is_drawn_as_a_band_not_a_line():
+    """A hairline would claim a precision the fit has not got: refitting the
+    cut without each year moves it between 1.064 and 1.102."""
+    import expansion
+    lo, hi = expansion.CUT_BAND
+    assert hi > lo, "a band with no width is a line"
+    assert lo <= expansion.CUTS["ret"][0] <= hi, "the fitted cut sits outside its own band"
+    app = (ROOT / "apps" / "us_cow_herd" / "app.py").read_text(encoding="utf-8")
+    assert "add_hrect" in app and "CUT_BAND" in app
+
+
+def test_the_expansion_view_does_not_use_a_second_y_axis():
+    """The retention ratio sits near 1.0 and the two volume series near 40%.
+    A secondary axis lets whoever picks the scales draw any relationship they
+    like, so the view uses two frames instead."""
+    app = (ROOT / "apps" / "us_cow_herd" / "app.py").read_text(encoding="utf-8")
+    i = app.index('if _view == _EXP_VIEW:')
+    j = app.index('elif _view == _SE_VIEW:', i)
+    block = app[i:j]
+    assert "yaxis2" not in block and "secondary_y" not in block
+    assert block.count("st.plotly_chart") == 2, "expected two separate frames"
+
+
+def test_a_year_with_no_count_yet_is_not_called_a_contraction():
+    """None and False are different answers. The current year has no January
+    count behind it, and colouring it as a contraction would assert one."""
+    import expansion
+    src = (ROOT / "apps" / "us_cow_herd" / "expansion.py").read_text(encoding="utf-8")
+    assert '"expanded": None if grew is None else' in src
+    app = (ROOT / "apps" / "us_cow_herd" / "app.py").read_text(encoding="utf-8")
+    assert "_col = {True:" in app and "None:" in app, (
+        "the open year needs its own colour, not the contraction one")

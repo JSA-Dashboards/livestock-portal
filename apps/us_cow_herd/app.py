@@ -38,6 +38,7 @@ from herd import (BASELINE_YEARS, LEGACY_LAST_GOOD_WEEK, YTD_CUT, annual_ratio,
                   receipts_volume_annual,
                   latest_date,
                   receipts_yoy)
+import expansion
 import southeast
 from dairy_mix import (ASSUMED_DAIRY_NOW, ASSUMED_DAIRY_THEN,
                        ASSUMED_HEIFER_FRAC)
@@ -165,6 +166,10 @@ def load_all(schema=HERD_SCHEMA):
             # Read on the page's one connection and cached with everything
             # else, rather than re-queried on every widget interaction.
             "southeast": southeast.load(conn),
+            # Computed here rather than in the view branch so it shares the
+            # page's one connection and the same hour-long cache. It adds two
+            # NASS calls that the sections further down this page already make.
+            "expansion": expansion.load(conn),
             "classes": class_prices(conn),
             "receipts": receipts_yoy(conn),
         }
@@ -334,11 +339,17 @@ _ann = D["annual"]
 _SE = D.get("southeast")
 _PLAINS_VIEW = "Southern plains · 2019–2026"
 _SE_VIEW = "Southeastern · 2008–2026"
+_EXP_VIEW = "Did the herd expand? · 2008–2026"
 _view = _PLAINS_VIEW
 if _SE:
+    _opts = [_PLAINS_VIEW, _SE_VIEW, _EXP_VIEW]
     _view = st.segmented_control(
-        "Panel", [_PLAINS_VIEW, _SE_VIEW], default=_PLAINS_VIEW,
+        "Panel", _opts, default=_PLAINS_VIEW,
         label_visibility="collapsed", key="herd_ratio_panel") or _PLAINS_VIEW
+
+_EXP = D.get("expansion")
+if _view == _EXP_VIEW and not _EXP:
+    _view = _PLAINS_VIEW          # the data did not come; do not show an empty frame
 
 if _view == _SE_VIEW:
     _rows = [{"year": r["year"], "ratio": r["ratio"], "months": r["months"],
@@ -358,6 +369,7 @@ _last = _rows[-1]["year"] if _rows else None
 # the part year is labelled with the months it actually covers rather than with
 # its number alone -- the same reason YTD_CUT exists for the heifer-share chart
 # further down this page.
+_SHOW_BARS = _view != _EXP_VIEW
 _labels = [(f"{r['year']}<br><span style='font-size:0.72em'>{_span[0]}–{_span[1]}</span>"
             if (_span and r["year"] == _last) else str(r["year"])) for r in _rows]
 
@@ -407,11 +419,98 @@ _fig.update_layout(height=300, margin=dict(l=0, r=0, t=24, b=0),
 _fig.update_yaxes(showgrid=True, gridcolor="#f1f5f9",
                   range=[min(1.0, min(r["ratio"] for r in _rows) - 0.05),
                          max(r["ratio"] for r in _rows) * 1.12])
-st.plotly_chart(_fig, use_container_width=True)
+if _SHOW_BARS:
+    st.plotly_chart(_fig, use_container_width=True)
 _lo_sal = min(_ann, key=lambda a: a[3])
 _part = (f"**{_last} covers {_span[0]}–{_span[1]} only** and is not a whole-year "
          f"figure. " if _span else "")
-if _view == _SE_VIEW:
+if _view == _EXP_VIEW:
+    # TWO FRAMES, NOT ONE, AND DELIBERATELY NOT A DUAL AXIS. The retention
+    # incentive is a ratio near 1.0; the other two are percentages near 40. On
+    # a shared axis one of them flattens to nothing, and a secondary axis lets
+    # whoever picks the scales draw whatever relationship they like. Same x,
+    # two frames, each honest about its own units.
+    _er = [r for r in _EXP if r["ret"] is not None]
+    _yrs = [r["year"] for r in _er]
+    _col = {True: JPSI_BLUE, False: "#9fb8c8", None: "#e0a33a"}
+
+    _f1 = go.Figure()
+    _f1.add_trace(go.Bar(
+        x=_yrs, y=[r["ret"] for r in _er],
+        marker_color=[_col[r["expanded"]] for r in _er],
+        text=[f"{r['ret']:.2f}" for r in _er], textposition="inside",
+        insidetextanchor="end",
+        textfont=dict(color=["#ffffff" if r["expanded"] is not False else TEXT
+                             for r in _er], size=11),
+        customdata=[[("expanded" if r["expanded"] else "contracted")
+                     if r["expanded"] is not None else "not yet counted"]
+                    for r in _er],
+        hovertemplate="%{x}<br>retention %{y:.3f}"
+                      "<br>herd %{customdata[0]}<extra></extra>", name="ratio"))
+    # A BAND, NOT A LINE. The cut is fitted on these same 18 years with one free
+    # parameter; refitting it without each year in turn moves it between 1.064
+    # and 1.102. A hairline would claim a precision the fit has not got -- the
+    # same reason the southeastern panel is never shifted onto the plains axis.
+    _f1.add_hrect(y0=expansion.CUT_BAND[0], y1=expansion.CUT_BAND[1],
+                  fillcolor=MUTED, opacity=0.13, line_width=0, layer="below",
+                  annotation_text="above this band the herd has usually grown",
+                  annotation_position="top left",
+                  annotation_font=dict(size=11, color=MUTED))
+    _f1.update_layout(height=280, margin=dict(l=0, r=0, t=24, b=0),
+                      plot_bgcolor="white", paper_bgcolor="white",
+                      xaxis=dict(type="category"), showlegend=False,
+                      yaxis_title="bred value \u00f7 salvage value")
+    _f1.update_yaxes(showgrid=True, gridcolor="#f1f5f9",
+                     range=[min(r["ret"] for r in _er) - 0.06,
+                            max(r["ret"] for r in _er) * 1.10])
+    st.plotly_chart(_f1, use_container_width=True)
+
+    _f2 = go.Figure()
+    _f2.add_trace(go.Scatter(
+        x=_yrs, y=[r["hs"] for r in _er], mode="lines+markers",
+        name="heifer share of feeder receipts",
+        line=dict(color=JPSI_BLUE, width=2), connectgaps=False,
+        hovertemplate="%{x}<br>heifer share of receipts %{y:.1f}%<extra></extra>"))
+    _f2.add_trace(go.Scatter(
+        x=_yrs, y=[r["of"] for r in _er], mode="lines+markers",
+        name="heifers on feed",
+        line=dict(color=MUTED, width=2, dash="dot"),
+        hovertemplate="%{x}<br>heifers on feed %{y:.1f}%<extra></extra>"))
+    _f2.update_layout(height=250, margin=dict(l=0, r=0, t=10, b=0),
+                      plot_bgcolor="white", paper_bgcolor="white",
+                      xaxis=dict(type="category"),
+                      yaxis_title="per cent \u2014 falling means heifers kept back",
+                      legend=dict(orientation="h", y=1.2, x=0, font=dict(size=11)))
+    _f2.update_yaxes(showgrid=True, gridcolor="#f1f5f9")
+    st.plotly_chart(_f2, use_container_width=True)
+
+    _open = [r for r in _er if r["expanded"] is None]
+    _s = expansion.SCORE
+    st.caption(
+        f"**Blue years are ones the herd actually grew** \u2014 USDA's January 1 "
+        f"beef cow count, which is not a signal but the thing the signals are "
+        f"guessing at. A year is scored against the NEXT January's count, "
+        f"because decisions taken in a year show up in the following one's "
+        f"inventory. The retention incentive moves with that change at "
+        f"**r = +0.87** across {_s['n']} years, which needs no threshold and is "
+        f"the honest headline. "
+        f"**The band is fitted and is reported as fitted.** One cut gets "
+        f"{_s['in_sample']} of {_s['n']} years right in-sample \u2014 but "
+        f"refitting it without each year and then predicting that year gives "
+        f"**{_s['out_of_sample']} of {_s['n']}**, against {_s['null']} for simply "
+        f"saying the herd shrinks every year. Two years of edge is real and is "
+        f"not a rule to trade on by itself. Heifer share and heifers on feed "
+        f"have cuts of the same kind near 40.8% and 35.9%, and all three "
+        f"together score no better than retention alone \u2014 so what the other "
+        f"two add is their disagreement, not a vote."
+        + (f" **{_open[0]['year']} reads {_open[0]['ret']:.2f}**, above the band, "
+           f"while both volume lines are still on the contraction side. That "
+           f"split has happened twice, in 2018 and 2019, and the herd went a "
+           f"different way each time. The January {_open[0]['year'] + 1} count "
+           f"settles it." if _open else "")
+    )
+
+elif _view == _SE_VIEW:
     # Computed, never asserted. The first version of this caption said
     # "2010-2012 is the trough of the whole record", which was true of an
     # earlier five-barn panel and false of this one -- 2023 and 2022 are both
