@@ -46,6 +46,23 @@ def test_it_actually_reaches_the_years_it_exists_for():
     assert 2015 in years and 2011 in years
 
 
+def test_the_panel_is_balanced_every_barn_in_every_year():
+    """The invariant that failed silently the first time.
+
+    The first version of this panel carried Athens GA, which reports no bred
+    cows in 2010 or 2011, and Orangeburg SC, which all but stops after 2019 --
+    22 sale-dates that year, then 2, 1, 1, none, none, 4. So 2011 stood on
+    three barns and the whole modern half ran on four while the caption said
+    five. Neither shows up in the chart: fewer barns still draws a bar, at a
+    level set by whichever markets happened to report.
+    """
+    n = len(DATA["panel"])
+    for r in DATA["series"]:
+        assert r["barns"] == n, (
+            f"{r['year']} has {r['barns']} of {n} barns -- the panel is not "
+            f"balanced, so this year is measuring a different set of markets")
+
+
 def test_every_year_has_real_coverage():
     """A thin year is the failure that charts plausibly.
 
@@ -55,8 +72,7 @@ def test_every_year_has_real_coverage():
     """
     for r in DATA["series"]:
         assert r["months"] >= southeast.MIN_MONTHS, r
-        assert r["barns"] >= 3, r
-        assert r["n"] >= 50, r
+        assert r["n"] >= 150, r
 
 
 def test_a_part_year_declares_its_months():

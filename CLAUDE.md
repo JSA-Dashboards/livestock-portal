@@ -488,6 +488,35 @@ What survived the re-examination, and is why the two panels stay apart:
   archive's omission, but it is why the join is exact in dates and only
   approximate in level.
 
+**THE PANEL IS BALANCED AND THAT TOOK TWO GOES.** All seven barns -- Calhoun
+GA, Carrollton GA, Jackson GA, Saluda SC, Williamston SC, Norwood NC,
+Turnersburg NC -- report in every year 2008-2026, 268-323 paired sale-dates
+each. The first version shipped with five, chosen without checking per-year
+coverage, and two of them were bad: **Athens GA reports no bred cows in 2010 or
+2011**, so 2011 stood on three barns, and **Orangeburg SC all but stops after
+2019** (22 sale-dates that year, then 2, 1, 1, none, none, 4), so the modern
+half ran on four while the caption said five. Neither is visible on the chart:
+fewer barns still draws a bar, at a level set by whichever markets happened to
+report. `tests/test_southeast_retention.py` now asserts every year carries the
+full panel.
+
+**ONE SOURCE PER BARN, at that barn's own handover date.** Widening the panel
+broke the clean concatenation the first version relied on: Norwood and
+Turnersburg are carried by BOTH archives for a few weeks of mid-2019. They are
+transcriptions of the same AMS report and agree to the dollar, so summing them
+double-counts those barns in the median rather than disagreeing. MARS wins from
+the first date it carries a barn and the superseded legacy rows are dropped --
+the shape `feeder_receipts` already uses in `CHANNEL_LEGACY_THROUGH`, decided
+per barn rather than globally. The build asserts zero remaining overlap and
+**refuses to write** otherwise; that guard is what caught this.
+
+**DO NOT WRITE WHERE THE HIGH AND LOW SIT INTO PROSE.** An earlier version of
+this section and of the page caption said "2010-2012 is the trough of the whole
+record". True of the five-barn panel, false of the seven-barn one, where 2023
+(0.91) and 2022 (0.94) are both below 2011 (0.96). The caption reads the high
+and low off the series at render time now, so it cannot go stale against the
+chart above it.
+
 So it ships as **its own toggle**, the Cold Storage shape:
 `Southern plains . 2019-2026 | Southeastern . 2008-2026`, each on its own
 baseline, with a caption naming the five barns and saying read the shape, not
@@ -510,10 +539,10 @@ part year declares its months, ratios in a sane band (the $/cwt mix computes to
 the panel contains no plains barn, the baseline is this panel's own, and the
 generator's overlap check is fatal rather than cosmetic.
 
-**What the long view is actually for**, since it is not a level: 2010-2012 is
-the trough of the whole record and 2015-2016 ran above today. Over the overlap
-the two panels move together at first-difference r=0.964, which is the licence
-to read its shape and nothing more.
+**What the long view is actually for**, since it is not a level: the shape, and
+the years the plains feed cannot reach. On the seven-barn panel 2015 is the
+record high at 1.21, above today, and the low is 2023. Over the overlap the two
+panels move together, which is the licence to read shape and nothing more.
 
 ### Three rendering traps, two of them this file's own, caught only in a browser
 

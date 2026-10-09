@@ -409,18 +409,32 @@ _lo_sal = min(_ann, key=lambda a: a[3])
 _part = (f"**{_last} covers {_span[0]}–{_span[1]} only** and is not a whole-year "
          f"figure. " if _span else "")
 if _view == _SE_VIEW:
+    # Computed, never asserted. The first version of this caption said
+    # "2010-2012 is the trough of the whole record", which was true of an
+    # earlier five-barn panel and false of this one -- 2023 and 2022 are both
+    # lower than 2011. A sentence about where the high and low sit has to be
+    # read off the series it sits under, or it goes stale the moment the panel
+    # changes and nothing raises.
+    _se_lo = min(_rows, key=lambda r: r["ratio"])
+    _se_hi = max(_rows, key=lambda r: r["ratio"])
+    _se_now = _rows[-1]
+    _vs_now = ("above" if _se_hi["ratio"] > _se_now["ratio"] else "below")
     st.caption(
-        f"**Five southeastern barns — {', '.join(_SE['panel'])} — not the twelve "
-        f"markets above.** Median of every barn sale in the year, bred and salvage "
-        f"from the same market. {_part}"
+        f"**{len(_SE['panel'])} southeastern barns — {', '.join(_SE['panel'])} — "
+        f"not the twelve markets above.** Median of every barn sale in the year, "
+        f"bred and salvage from the same market, and every one of these barns "
+        f"reports in every year shown. {_part}"
         f"These are different cattle in a different region, so **read the shape, "
         f"not the level**: do not compare a number here with a number on the "
         f"southern-plains view. The gap between the two panels is not a constant — "
         f"measured before 2019 it runs anywhere from 0.09 to 0.31 — so no single "
         f"offset puts them on one axis. What this view is for is the years the "
-        f"plains feed cannot reach: 2010–2012 is the trough of the whole record "
-        f"and 2015–2016 ran above today. 2008–2018 is USDA's legacy auction "
-        f"archive, 2019 onward is the live feed, and the two share no sale date."
+        f"plains feed cannot reach: the record high is **{_se_hi['year']}** at "
+        f"{_se_hi['ratio']:.2f}, {_vs_now} today's {_se_now['ratio']:.2f}, and the "
+        f"low is **{_se_lo['year']}** at {_se_lo['ratio']:.2f}. "
+        f"2008–2018 is USDA's legacy auction archive and 2019 onward is the live "
+        f"feed; where a barn is carried by both, the live feed wins from its first "
+        f"sale, so no week is counted twice."
     )
 else:
     st.caption(

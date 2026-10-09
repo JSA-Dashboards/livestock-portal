@@ -23,15 +23,33 @@ B = "https://marsapi.ams.usda.gov/services/v1.2"
 DL = r"C:\Users\RossBaldwin\Downloads"
 
 # Five barns continuous on BOTH sides. Legacy LOCATION_NAME -> MARS slug.
+# THE PANEL IS FIXED AND EVERY BARN APPEARS IN EVERY YEAR. These seven each
+# clear 20 paired sale-dates in all of 2008-2026 -- no year leans on a
+# different set of markets than its neighbours, which is the whole reason a
+# fixed panel is worth the barns it costs.
+#
+# Athens GA and Orangeburg SC were in the first version of this panel and are
+# deliberately out. Athens reports no bred cows in 2010 or 2011 (it was why
+# 2011 stood on three barns), and Orangeburg all but stops after 2019 -- 22
+# sale-dates in 2019, then 2, 1, 1, none, none, 4 -- so a panel carrying it
+# silently ran on four barns through the modern half while claiming five.
+# Both failures are invisible in the chart: fewer barns still draws a bar.
 PANEL = {
     "Calhoun":     (1946, "Calhoun, GA"),
     "Carrollton":  (1949, "Carrollton, GA"),
-    "Athens":      (1940, "Athens, GA"),
+    "Jackson":     (1942, "Jackson, GA"),
     "Saluda":      (1961, "Saluda, SC"),
-    "Orangeburg":  (1964, "Orangeburg, SC"),
+    "Williamston": (1958, "Williamston, SC"),
+    "Norwood":     (2093, "Norwood, NC"),
+    "Turnersburg": (2088, "Turnersburg, NC"),
 }
-LEGACY_STATE = {"Calhoun": "GA", "Carrollton": "GA", "Athens": "GA",
-                "Saluda": "SC", "Orangeburg": "SC"}
+# The legacy archive keys on bare LOCATION_NAME, which is not unique across
+# states -- "Jackson" is a barn in GA and the MARS catalogue also lists a
+# Jackson County market in Ripley, WV. Matching on name alone silently pairs
+# one state's bred cows with another's. Every row is checked against this.
+LEGACY_STATE = {"Calhoun": "GA", "Carrollton": "GA", "Jackson": "GA",
+                "Saluda": "SC", "Williamston": "SC",
+                "Norwood": "NC", "Turnersburg": "NC"}
 
 # The legacy archive has NO price-unit column and quotes bred cows per cwt at
 # some barns and per head at others, in the same year, with SELLING_BASIS
@@ -109,7 +127,29 @@ mars = [(b, dt, (v["bd"] / v["bh"]) / (v["sd"] / v["sh"]))
         for (b, dt), v in mars_pairs.items() if v["bh"] and v["sh"]]
 print("mars paired barn-dates:", len(mars))
 
-# ---- the join must not overlap --------------------------------------------
+# ---- ONE SOURCE PER BARN, with the handover at that barn's own date --------
+# Most of these barns hand over cleanly -- legacy's last bred sale falls days
+# before MARS's first -- but not all of them: Norwood and Turnersburg are
+# carried by BOTH archives for a few weeks in mid-2019. Where that happens the
+# two are transcriptions of the same AMS report (checked: they agree to the
+# dollar, median ratio delta +0.0010), so this is a double-count rather than a
+# disagreement, and summing them would weight those barns twice in the median.
+#
+# MARS wins from the first date it carries that barn, which is the same shape
+# as feeder_receipts' CHANNEL_LEGACY_THROUGH: one source per channel per week,
+# decided per channel rather than globally. MARS is preferred because it
+# carries an explicit price_unit field, where the legacy archive leaves the
+# $/cwt-versus-$/head split to be inferred.
+first_mars = {}
+for b, dt, _ in mars:
+    if b not in first_mars or dt < first_mars[b]:
+        first_mars[b] = dt
+dropped = [(b, dt) for b, dt, _ in legacy if b in first_mars and dt >= first_mars[b]]
+legacy = [(b, dt, r) for b, dt, r in legacy
+          if not (b in first_mars and dt >= first_mars[b])]
+print("handover per barn:", {b: first_mars[b] for b in sorted(first_mars)})
+print("legacy rows dropped as superseded by MARS:", len(dropped), sorted(dropped)[:8])
+
 ldates = {(b, dt) for b, dt, _ in legacy}
 mdates = {(b, dt) for b, dt, _ in mars}
 overlap = ldates & mdates

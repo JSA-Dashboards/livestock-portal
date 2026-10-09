@@ -1,5 +1,5 @@
 """
-The same retention incentive, measured at five southeastern barns back to 2008.
+The same retention incentive, measured at seven southeastern barns since 2008.
 
 WHY A SECOND PANEL EXISTS AT ALL. The twelve markets behind the main chart --
 Joplin, OKC West, Oklahoma National, Woodward, Ozarks, Springfield, Ada, Tina,
@@ -24,10 +24,19 @@ back-window error 0.092, maximum 0.264. A small calibration-window sd does not
 buy out-of-window stability. So this line is drawn on its own baseline, against
 its own normal, and no number here is ever added to a plains number.
 
+THE PANEL IS BALANCED: all seven barns report in every year, 268-323 paired
+sale-dates each. That is not cosmetic. The first version carried Athens GA,
+which reports no bred cows in 2010 or 2011, and Orangeburg SC, which all but
+stops after 2019 -- so 2011 rested on three barns and the modern half ran on
+four while the caption said five. Fewer barns still draws a bar, at a level set
+by whichever markets happened to report, and nothing raises.
+
 WHAT IT IS GOOD FOR. Not a level, a shape. Over the overlap the two panels move
-together at first-difference r=0.964, and the long view answers the question the
-plains series cannot reach: 2010-2012 was the trough of the whole record, and
-2015-2016 ran above today.
+together, and the long view reaches years the plains series cannot. Do NOT
+restate where the high and low sit in prose, here or in the caption: the page
+reads them off the series at render time, because an earlier version of this
+note claimed 2010-2012 was the trough of the whole record -- true of the
+five-barn panel, false of this one, where 2023 and 2022 are both lower.
 
 HOW THE SERIES IS BUILT, and why it is a file rather than a query. The 2008-2018
 half comes from the USDA legacy auction archive, two zips totalling about 960MB
@@ -46,10 +55,16 @@ Three things in the build that look wrong and are not:
   changes any annual ratio by at most 0.002. Read naively, 2002-2007 computes to
   about 0.11 instead of 1.1: a factor of ten that looks like a market collapse,
   raises nothing, and charts plausibly.
-- **The two sources are concatenated, not spliced**, because they do not
-  overlap. Legacy's last bred sale at these barns falls 2019-04-15..04-29 and
-  MARS's first 2019-04-22..05-08, with **zero shared barn-dates** -- verified on
-  every build. There is nothing to double-count and no seam to calibrate.
+- **One source per barn, with the handover at that barn's own date.** Most of
+  these barns hand over cleanly -- legacy's last bred sale falls days before
+  MARS's first -- but Norwood and Turnersburg are carried by BOTH archives for
+  a few weeks of mid-2019. Where that happens the two are transcriptions of the
+  same AMS report and agree to the dollar, so it is a double-count rather than a
+  disagreement, and summing them would weight those barns twice in the median.
+  MARS wins from the first date it carries a barn; the superseded legacy rows
+  are dropped. Same shape as feeder_receipts' CHANNEL_LEGACY_THROUGH: one source
+  per channel per week, decided per channel rather than globally. The build then
+  asserts zero remaining overlap and refuses to write if any survives.
 - **The legacy archive has no `Bred Heifers` class at all**, while MARS carries
   it (15-21% of bred head, priced about 16% above bred cows). The pre-2019 half
   is therefore a slightly narrower definition than the post-2019 half. It is
