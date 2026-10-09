@@ -1083,6 +1083,57 @@ The pair of failures is worth keeping together: 10-05 had the tiles overwrite
 the call with the actual, 10-06 had the table rescore it at a point the call
 never stood at. Same invariant, opposite ends. Two tests pin it.
 
+### A thin POOL and a thin HISTORY are not the same thing
+
+`FORECAST_MIN_ANALOGUES = 10` was added 2026-10-08 on evidence that a pool of
+a few analogue weeks runs wildly high — ≤3 at +81.2% median signed, 4–6 at
++56.7%, neither ever landing at or below the print. That evidence is sound and
+**every case in it is Oct–Dec 2025**, when the daily history had barely
+started: a small pool meant there was nothing else behind the checkpoint.
+
+**It was applied to `pool`, which is `hist` AFTER the front-loading
+narrowing**, so from 2026 it also fired on a completely different population —
+weeks with deep history whose SHAPE few past weeks share. It cost a live call
+on **2026-10-09**: front-loading 0.748, **51 past weeks** at that checkpoint,
+5 of them a similar shape, and the page printed "Not enough history to
+forecast from" over 51 weeks of history.
+
+Measured over the 31 checkpoints since where narrowing left fewer than ten
+analogues with ten or more available:
+
+| what the page could show | median abs err | median signed | within 10% |
+|---|---|---|---|
+| the narrowed call it refused | **12.3%** | +7.7% | 45% |
+| the unnarrowed pool | 24.7% | +24.2% | 19% |
+| the recent-weeks median *(shown instead)* | 26.7% | −12.7% | 19% |
+
+So the guard was refusing the most accurate number on the page and showing
+the worst of the three in its place. The narrowed call is biased high — the
+actual landed at or below it on 23 of 31 — but nothing like the cold start's
+0 of 11 and 0 of 13, which is the signature the threshold was built to catch.
+
+**Falling back to the unnarrowed pool is the obvious fix and is WORSE than
+what it would replace**: closer than the recent-weeks median on 39% of those
+31, below a coin flip. Tried and rejected. The narrowing earns its keep
+precisely where it looks thinnest, which is the opposite of the intuition.
+
+The guard now reads `len(hist)`, so it stays pointed at what its evidence
+describes: a checkpoint with nothing behind it, from the history being
+rebuilt, the window shortened, or a new weekday/cut appearing. A pool of two
+still cannot reach a call, because narrowing only fires at five or more.
+
+**The no-call sentence now quotes `n_hist`, not `n`.** Those are different
+numbers whenever narrowing fires, and the sentence claims to be counting
+"past weeks [that] stand at this same point in the week" — the history. On
+10-09 it printed 5 where the honest number was 51, which is how a shape
+problem came to be reported as a history problem. `tests/test_cash_forecast.py`
+pins the two populations apart: deep history with a six-week narrowed pool
+still calls, the same six-week pool on a six-week history still does not.
+
+**The sample is modest — n=31, and n=11 at the 5–6 pool sizes this turns on.**
+Worth re-measuring once another quarter of checkpoints exists rather than
+treating 12.3% as settled.
+
 ### The suppression interaction is what moves it most
 
 When USDA withholds a region's daily volume for confidentiality it publishes

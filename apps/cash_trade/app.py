@@ -186,9 +186,34 @@ FORECAST_WEAK_MATURITY = 0.50
 # used to read 13.6%: it averaged the cold start in. On pools of 10 or more it
 # is 9.2% with a +1.4% bias.
 #
-# It costs nothing today -- no 2026 checkpoint has a pool under 20 -- so this is
-# a guard against the history being rebuilt, the window shortened, or a new
-# weekday/cut checkpoint appearing with nothing behind it.
+# IT IS MEASURED ON `hist` AND NOT ON `pool`, AND THOSE ARE TWO DIFFERENT
+# POPULATIONS. Every figure above comes from Oct-Dec 2025, when a small pool
+# meant a SHORT HISTORY -- there was nothing else behind the checkpoint. A
+# small pool today means something else entirely: deep history, narrowed hard
+# because the week's front-loading is a shape few past weeks share.
+#
+# Measured over the 31 checkpoints since where narrowing left fewer than ten
+# analogues WITH ten or more available, the small narrowed pool is the best
+# estimate on the page by a factor of two:
+#
+#     the narrowed call      median |err| 12.3%, signed  +7.7%, within 10% 45%
+#     the unnarrowed pool                 24.7%,         +24.2%,           19%
+#     the recent-weeks median             26.7%,         -12.7%,           19%
+#
+# So gating on `pool` refused the most accurate number available and showed
+# the worst of the three instead. It is biased high -- the actual landed at or
+# below the call on 23 of 31 -- but nothing like the cold start's 0 of 11 and
+# 0 of 13, which is the signature this guard was built to catch.
+#
+# Falling back to the unnarrowed pool was tried and is WORSE than the call it
+# would replace: closer than the recent-weeks median on 39% of those 31, which
+# is below a coin flip. The narrowing earns its keep precisely where it looks
+# thinnest.
+#
+# Gating on `hist` keeps the guard pointed at what the evidence describes: a
+# checkpoint with nothing behind it, from the history being rebuilt, the
+# window shortened, or a new weekday/cut appearing. A pool of two still cannot
+# arise there, because narrowing only fires at five or more.
 FORECAST_MIN_ANALOGUES = 10
 
 FORECAST_GAP_WEEKS = 4
@@ -1209,10 +1234,17 @@ def forecast_5area(vol: pd.DataFrame, published5: pd.Series) -> dict:
     # Maturity, not raw head, because a 45,000-head week in March is a full
     # week and in August is half of one. It is computed above, where the
     # narrowing needs it; this is only where it becomes a label.
-    # A pool too thin to forecast from is its own state, not a weak forecast.
-    # It outranks the maturity grades: a mature week read off three analogue
-    # weeks is still not a call.
-    thin_pool = (not done) and len(pool) < FORECAST_MIN_ANALOGUES
+    # A checkpoint with too little history behind it is its own state, not a
+    # weak forecast. It outranks the maturity grades: a mature week read off
+    # three analogue weeks is still not a call.
+    #
+    # ON `hist`, NOT ON `pool` -- see FORECAST_MIN_ANALOGUES. `pool` is `hist`
+    # after the front-loading narrowing, so gating on it conflates "there is
+    # no history here" with "this week has an unusual shape", and only the
+    # first is what the evidence for the threshold describes. The second
+    # backtests at 12.3% median absolute error, twice as good as anything the
+    # page shows in its place, and refusing it cost a call on 2026-10-09.
+    thin_pool = (not done) and len(hist) < FORECAST_MIN_ANALOGUES
     if done:
         grade = "final"
     elif thin_pool:
@@ -1255,6 +1287,11 @@ def forecast_5area(vol: pd.DataFrame, published5: pd.Series) -> dict:
             "narrowed": narrowed, "week": cur_week, "maturity": maturity,
             "typical": typical, "grade": grade, "too_green": too_green,
             "thin_pool": thin_pool, "no_call": no_call,
+            # The DEPTH BEHIND THE CHECKPOINT, which is what thin_pool now
+            # tests and what the no-call sentence has always claimed to be
+            # quoting. `n` below is the pool the call was actually built from
+            # and is a different number whenever narrowing fires.
+            "n_hist": int(len(hist)),
             "recent_lo": recent_lo, "recent_hi": recent_hi}
     if pool.empty or done:
         return {**base, "n": int(len(pool)), "central": wtd_now,
@@ -2643,8 +2680,8 @@ with tab_fcst:
             _why = (f'<b>{f5["maturity"]:.0%}</b> of a typical recent week, too little to '
                     f'estimate the rest from'
                     if f5["too_green"] else
-                    f'but only <b>{f5["n"]}</b> past weeks stand at this same point in the '
-                    f'week, too few to estimate the rest from')
+                    f'but only <b>{f5["n_hist"]}</b> past weeks stand at this same point '
+                    f'in the week, too few to estimate the rest from')
             st.markdown(
                 f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
                 f'<b>{f5["wtd"]:,.0f} hd</b> confirmed through the {_dow} {_cut.lower()} '
