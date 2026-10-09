@@ -37,7 +37,8 @@ def fc():
         APP, "_week_start", "weekly_5area_head", "weekly_national_head",
         "wtd_checkpoints", "_front_of", "forecast_5area", "forecast_national",
         consts=("CUT_ORDER", "FORECAST_GAP_WEEKS", "FORECAST_BAND_WEEKS",
-                "FORECAST_MAX_ANALOGUES", "FORECAST_WEAK_MATURITY"),
+                "FORECAST_MAX_ANALOGUES", "FORECAST_WEAK_MATURITY",
+                "FORECAST_MIN_ANALOGUES"),
         globals_={"pd": pd},
     )
 
@@ -203,8 +204,14 @@ def test_empty_when_there_is_nothing_to_score(fc):
 
 # ── the week in flight ───────────────────────────────────────────────────────
 
-def _live_week(fc, n_history=8, open_week="2026-03-02"):
-    """History of settled weeks, plus one open week standing at Friday 1:30."""
+def _live_week(fc, n_history=12, open_week="2026-03-30"):
+    """History of settled weeks, plus one open week standing at Friday 1:30.
+
+    TWELVE weeks, not eight: forecast_5area refuses to call off a pool thinner
+    than FORECAST_MIN_ANALOGUES, so a short history now produces a pending row
+    with no estimates and these tests would be exercising the blocked path
+    while reading like they exercise the live one.
+    """
     rows, fin = _history(n_history, start="2026-01-05")
     rows += _week_rows(open_week, [(None, None), (None, None), (None, 36000),
                                    (None, 36000), (40000, None)])
@@ -220,7 +227,7 @@ def test_the_open_week_appears_as_a_pending_row(fc):
                          fc["forecast_national"])
     assert len(row) == 1
     r = row.iloc[0]
-    assert r["week"] == pd.Timestamp("2026-03-02")
+    assert r["week"] == pd.Timestamp("2026-03-30")
     assert r["pending"] is True or bool(r["pending"])
     # The estimates are there...
     assert r["f5"] > 0 and r["fn"] > 0
@@ -237,7 +244,7 @@ def test_the_pending_row_vanishes_once_usda_prints(fc):
     blank -- and the blank one reads as a second call that failed.
     """
     vol, fin, nat = _live_week(fc)
-    week = pd.Timestamp("2026-03-02")
+    week = pd.Timestamp("2026-03-30")
     assert not sc.pending_row(vol, fin, nat, fc["forecast_5area"],
                               fc["forecast_national"]).empty
 

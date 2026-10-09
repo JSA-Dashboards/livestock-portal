@@ -1216,10 +1216,43 @@ two tiles, Step 1, Step 2 — plus `pending_row`, because a scorecard row still
 carrying the suppressed number would put it back on the page six inches below
 the tiles that withheld it.
 
-One thing found on the way and NOT acted on: above 0.50 the forecast runs
-**high** — median +7.1%, actual at or above the central only 30% of the time.
-Good estimate (13.6% median absolute), biased up. Fixing it needs its own
-measurement.
+### The "+7.1% high bias" was a cold start, and the headline accuracy was wrong
+
+Reported here and in two commit messages as a real bias above 0.50 maturity,
+with 13.6% median absolute error. Investigated 2026-10-09; **there is no bias
+to fix, and both figures were dragged by the start of the daily history.**
+
+Two plausible mechanisms were checked first and both are dead. The
+`late >= 0` filter in `forecast_5area` drops analogue weeks where USDA revised
+a week down — a one-sided cut that WOULD bias a median upward, except it fires
+**zero times**, max 0 across all 115 calls. And the suppression regime split
+had no contrast: every 20-week pool straddles the August break, so that test
+measured nothing.
+
+It is pool DEPTH. Over the same 115 at-or-above-0.50 checkpoints:
+
+    pool  <=3   +81.2% median signed, actual at or below the call   0 of 11
+    pool  4-6   +56.7%,               actual at or below the call   0 of 13
+    pool 7-10    +5.7%
+    pool 16-21   +3.0%, median absolute 9.1%
+
+All 32 thin-pool calls are Oct–Dec 2025, when the daily history had barely
+started. Their median signed error is **+52.8%**; everything else is **+1.4%**.
+
+**So the figures to quote for how this tab operates are +1.4% bias and 9.2%
+median absolute error, not +7.1% and 13.6%.** The old numbers are not false —
+they are the backtest over all available history — but they average in a cold
+start that describes nothing the page does now, and quoting them unsplit
+understated the method.
+
+What WAS real: `forecast_5area` had no minimum pool at all. It would call off
+two analogue weeks, run 81% high, never once land at or below the print, and
+label it "Firm". `FORECAST_MIN_ANALOGUES = 10` now blocks that, with `no_call`
+carrying it to the same no-forecast treatment a green week gets and a `thin`
+grade that says which reason applies. It costs nothing today — no 2026
+checkpoint has a pool under 20 — so it is a guard against the history being
+rebuilt, the window shortened, or a new weekday/cut appearing with nothing
+behind it.
 
 **NONE OF THIS TOUCHES THE LIVE FORECAST.** The tiles, Step 1 and Step 2 still
 re-forecast at every checkpoint as USDA publishes through the week, and the

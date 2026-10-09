@@ -41,7 +41,8 @@ def fc():
         APP, "_week_start", "weekly_5area_head", "weekly_national_head",
         "wtd_checkpoints", "_front_of", "forecast_5area", "forecast_national",
         consts=("CUT_ORDER", "FORECAST_GAP_WEEKS", "FORECAST_BAND_WEEKS",
-                "FORECAST_MAX_ANALOGUES", "FORECAST_WEAK_MATURITY"),
+                "FORECAST_MAX_ANALOGUES", "FORECAST_WEAK_MATURITY",
+                "FORECAST_MIN_ANALOGUES"),
         globals_={"pd": pd},
     )
 
@@ -491,7 +492,106 @@ def test_the_page_branches_on_too_green_everywhere_it_quotes_a_call():
     leaves a forecast on screen under a heading that says there isn't one.
     """
     src = APP.read_text(encoding="utf-8")
-    assert src.count('f5["too_green"]') >= 4, src.count('f5["too_green"]')
+    # the page asks `no_call` now -- too_green is one of its two reasons, and
+    # branching on it alone would let a thin-pool call through
+    assert src.count('f5["no_call"]') >= 4, src.count('f5["no_call"]')
     for marker in ('5-Area &mdash; recent weeks', 'National &mdash; recent weeks',
                    'too little to', 'No 5-Area call to carry across yet'):
         assert marker in src, marker
+
+
+# -- a pool too thin to forecast from ----------------------------------------
+#
+# Measured over 115 at-or-above-0.50 checkpoints, by pool depth:
+#
+#     pool <=3    +81.2% median signed error, actual at or below the call 0/11
+#     pool 4-6    +56.7%,                     actual at or below the call 0/13
+#     pool 7-10    +5.7%
+#     pool 16-21   +3.0%, median absolute 9.1%
+#
+# Nothing checked, so a two-week pool printed with "Firm" confidence. Every one
+# of those calls is Oct-Dec 2025, the start of the daily history -- which is
+# also why this tab's headline accuracy used to read 13.6%. On pools of 10 or
+# more it is 9.2% with a +1.4% bias.
+
+
+def test_a_thin_pool_blocks_the_call_even_on_a_mature_week(fc):
+    """
+    The point. Maturity says this week has traded; it says nothing about
+    whether there is any history to measure the rest against.
+    """
+    rows, finals = _history(3, 3000)          # only 3 analogue weeks
+    cur = pd.Timestamp("2026-01-26")
+    busy = rows + _week(cur, [(None, None), (None, None), (None, 36000),
+                              (None, 36000), (40000, None)])
+    f = fc["forecast_5area"](_vol(busy), finals)
+    assert f["maturity"] >= fc["FORECAST_WEAK_MATURITY"]
+    assert f["too_green"] is False            # the week is fine
+    assert f["thin_pool"] is True             # the history is not
+    assert f["no_call"] is True
+    assert f["grade"] == "thin"
+
+
+def test_a_full_pool_on_a_mature_week_still_calls(fc):
+    rows, finals = _history(13, 3000)
+    cur = pd.Timestamp("2026-04-06")
+    busy = rows + _week(cur, [(None, None), (None, None), (None, 36000),
+                              (None, 36000), (40000, None)])
+    f = fc["forecast_5area"](_vol(busy), finals)
+    assert f["thin_pool"] is False
+    assert f["no_call"] is False
+    assert f["n"] >= fc["FORECAST_MIN_ANALOGUES"]
+
+
+def test_the_minimum_sits_above_the_catastrophic_pool_sizes(fc):
+    """<=6 ran +57% to +81%; >=10 is +1.4%. The floor has to clear the first."""
+    assert fc["FORECAST_MIN_ANALOGUES"] >= 7
+    assert fc["FORECAST_MIN_ANALOGUES"] <= 16
+
+
+def test_a_closed_week_is_never_blocked(fc):
+    """
+    Friday's final is the answer. Suppressing it for want of analogues would
+    hide a number that needs none.
+    """
+    rows, finals = _history(2, 3000)
+    cur = pd.Timestamp("2026-01-19")
+    shut = rows + _week(cur, [(None, None), (None, None), (None, 36000),
+                              (None, 36000), (40000, 43000)])
+    f = fc["forecast_5area"](_vol(shut), finals)
+    assert f["done"] is True
+    assert f["thin_pool"] is False
+    assert f["no_call"] is False
+
+
+def test_the_page_asks_no_call_not_too_green():
+    """
+    Two reasons, one outcome. A page still branching on `too_green` would
+    print a three-week-pool call on a mature week -- the +81% case.
+    """
+    src = APP.read_text(encoding="utf-8")
+    body = src[src.index("with tab_fcst:") if "with tab_fcst:" in src
+               else src.index("Monday Print Forecast"):]
+    assert 'f5["too_green"]' not in body or 'f5["no_call"]' in body
+    assert src.count('f5["no_call"]') >= 4
+
+
+def test_every_grade_has_a_rendering():
+    """
+    forecast_5area can return "thin" now. A grade without an entry is a
+    KeyError on the live page, which is worse than a wrong label.
+    """
+    src = APP.read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    produced = set()
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id == "grade"
+                and isinstance(node.value, ast.Constant)):
+            produced.add(node.value.value)
+    assert produced, "no grade assignments found"
+    start = src.index("_GRADE = {")
+    rendered = src[start:src.index("_gc, _gl, _gt = _GRADE[", start)]
+    for g in produced:
+        assert f'"{g}":' in rendered, g

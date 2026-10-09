@@ -53,7 +53,8 @@ def fc():
         APP, "_week_start", "weekly_5area_head", "weekly_national_head",
         "wtd_checkpoints", "_front_of", "forecast_5area", "forecast_national",
         consts=("CUT_ORDER", "FORECAST_GAP_WEEKS", "FORECAST_BAND_WEEKS",
-                "FORECAST_MAX_ANALOGUES", "FORECAST_WEAK_MATURITY"),
+                "FORECAST_MAX_ANALOGUES", "FORECAST_WEAK_MATURITY",
+                "FORECAST_MIN_ANALOGUES"),
         globals_={"pd": pd},
     )
 

@@ -170,6 +170,27 @@ FORECAST_MAX_ANALOGUES = 20
 # front-loading narrowing below.
 FORECAST_WEAK_MATURITY = 0.50
 
+# A pool thinner than this cannot be forecast from, whatever the week has done.
+# Measured over 115 at-or-above-0.50 checkpoints, by how many analogue weeks
+# the pool held:
+#
+#     pool  <=3   +81.2% median signed error, actual at or below the call 0/11
+#     pool  4-6   +56.7%,                     actual at or below the call 0/13
+#     pool 7-10    +5.7%
+#     pool 16-21   +3.0%, median absolute 9.1%
+#
+# A two-week pool is not a weak forecast, it is a different number entirely --
+# and it printed with "Firm" confidence and no warning, because nothing checked.
+# Every one of those thin-pool calls is from Oct-Dec 2025, the start of the
+# daily history, which is also why the headline accuracy quoted for this tab
+# used to read 13.6%: it averaged the cold start in. On pools of 10 or more it
+# is 9.2% with a +1.4% bias.
+#
+# It costs nothing today -- no 2026 checkpoint has a pool under 20 -- so this is
+# a guard against the history being rebuilt, the window shortened, or a new
+# weekday/cut checkpoint appearing with nothing behind it.
+FORECAST_MIN_ANALOGUES = 10
+
 FORECAST_GAP_WEEKS = 4
 # Band is drawn from a slightly longer window so it spans a real range of
 # outcomes rather than the four points the centre is built from.
@@ -1188,8 +1209,14 @@ def forecast_5area(vol: pd.DataFrame, published5: pd.Series) -> dict:
     # Maturity, not raw head, because a 45,000-head week in March is a full
     # week and in August is half of one. It is computed above, where the
     # narrowing needs it; this is only where it becomes a label.
+    # A pool too thin to forecast from is its own state, not a weak forecast.
+    # It outranks the maturity grades: a mature week read off three analogue
+    # weeks is still not a call.
+    thin_pool = (not done) and len(pool) < FORECAST_MIN_ANALOGUES
     if done:
         grade = "final"
+    elif thin_pool:
+        grade = "thin"
     elif maturity != maturity:
         grade = "unknown"
     elif maturity >= 0.85:
@@ -1220,10 +1247,14 @@ def forecast_5area(vol: pd.DataFrame, published5: pd.Series) -> dict:
     # error, beating the naive alternative on 56% of checkpoints.
     too_green = (not done) and (maturity != maturity
                                 or maturity < FORECAST_WEAK_MATURITY)
+    # The page asks ONE question -- is there a call to print? -- and the two
+    # reasons answer it the same way while needing different words.
+    no_call = too_green or thin_pool
 
     base = {"wtd": wtd_now, "checkpoint": cp, "done": done, "front": front,
             "narrowed": narrowed, "week": cur_week, "maturity": maturity,
             "typical": typical, "grade": grade, "too_green": too_green,
+            "thin_pool": thin_pool, "no_call": no_call,
             "recent_lo": recent_lo, "recent_hi": recent_hi}
     if pool.empty or done:
         return {**base, "n": int(len(pool)), "central": wtd_now,
@@ -2515,7 +2546,7 @@ with tab_fcst:
             # is labelled as history because that is what it is -- the page
             # is not allowed to imply it is a call on this week.
             with c2:
-                if f5["too_green"]:
+                if f5["no_call"]:
                     st.markdown(tile("5-Area &mdash; recent weeks",
                                      f'{f5["recent_lo"]:,.0f}&ndash;'
                                      f'{f5["recent_hi"]:,.0f}',
@@ -2528,7 +2559,7 @@ with tab_fcst:
                                      hd_delta_html(f5["central"], _prev5),
                                      "tile-d14"), unsafe_allow_html=True)
             with c3:
-                if f5["too_green"]:
+                if f5["no_call"]:
                     st.markdown(tile("National &mdash; recent weeks",
                                      f'{fn["recent_lo"]:,.0f}&ndash;'
                                      f'{fn["recent_hi"]:,.0f}',
@@ -2566,6 +2597,11 @@ with tab_fcst:
                      "an estimate is no closer than simply quoting recent weeks, and lands "
                      "above the eventual print as often as below it &mdash; so the tiles show "
                      "what recent weeks actually did instead of a call on this one."),
+            "thin": (NEG, "Not enough history to forecast from", "This weekday and cut has "
+                     "too few past weeks behind it to estimate the rest of the week. "
+                     "Backtested, calls built on three analogue weeks or fewer ran a median "
+                     "81% high and never once landed at or below the eventual print, so no "
+                     "call is shown &mdash; the tiles give what recent weeks did instead."),
             "unknown": (MUTED, "Unrated", "Not enough published weekly history to judge how far "
                         "through the week this is."),
         }
@@ -2600,12 +2636,19 @@ with tab_fcst:
                 f'{"inside" if _in5 else "<b>outside</b>"} the '
                 f'{_scored["f5_lo"]:,.0f}&ndash;{_scored["f5_hi"]:,.0f} hd range we gave.'
                 f'</div>', unsafe_allow_html=True)
-        elif f5["too_green"]:
+        elif f5["no_call"]:
+            # TWO REASONS, ONE OUTCOME. Too green is about this week; a thin
+            # pool is about the history behind this checkpoint. Printing the
+            # maturity sentence for a thin pool would name the wrong cause.
+            _why = (f'<b>{f5["maturity"]:.0%}</b> of a typical recent week, too little to '
+                    f'estimate the rest from'
+                    if f5["too_green"] else
+                    f'but only <b>{f5["n"]}</b> past weeks stand at this same point in the '
+                    f'week, too few to estimate the rest from')
             st.markdown(
                 f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
                 f'<b>{f5["wtd"]:,.0f} hd</b> confirmed through the {_dow} {_cut.lower()} '
-                f'&mdash; <b>{f5["maturity"]:.0%}</b> of a typical recent week, too little to '
-                f'estimate the rest from. The last 13 weeks printed '
+                f'&mdash; {_why}. The last 13 weeks printed '
                 f'<b>{f5["recent_lo"]:,.0f}&ndash;{f5["recent_hi"]:,.0f} hd</b>, median '
                 f'<b>{f5["typical"]:,.0f} hd</b>.</div>',
                 unsafe_allow_html=True)
@@ -2627,7 +2670,7 @@ with tab_fcst:
                if _scored is not None else
                'So the only unknown is the trade still to come &mdash; which this early is '
                'most of the week, and is why no estimate of it is shown.'
-               if f5["too_green"] else
+               if f5["no_call"] else
                f'So the only unknown is trade reported after the last cut, estimated from '
                f'the <b>{f5["n"]}</b> past weeks standing at the same point'
                + (f' with similar front-loading (the previous cut held {_front_s} of the '
@@ -2660,7 +2703,7 @@ with tab_fcst:
                 f'{"inside" if _inn else "<b>outside</b>"} the range we gave. '
                 f'The gap actually came in at <b>{_gap_real:,.0f} hd</b>.</div>',
                 unsafe_allow_html=True)
-        elif f5["too_green"]:
+        elif f5["no_call"]:
             # Nothing to carry across: this step starts from the 5-Area call,
             # and there isn't one. The gap is still worth printing because it
             # is what separates the two figures whenever they are quoted.
@@ -2840,7 +2883,7 @@ with tab_fcst:
                     + ('It carries no estimate because the week is too green for '
                        'one &mdash; the same reason the tiles above show recent weeks '
                        'instead of a call. '
-                       if f5.get("too_green") else
+                       if f5.get("no_call") else
                        'It is the same call as the tiles above &mdash; estimates and '
                        'confidence only. ')
                     + f'There is no actual to score against until USDA prints the week '

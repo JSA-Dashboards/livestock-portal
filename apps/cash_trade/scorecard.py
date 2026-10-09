@@ -348,7 +348,7 @@ def pending_row(vol: pd.DataFrame, published5: pd.Series, national: pd.Series,
     # under a footnote saying it is "the same call as the tiles above". Same
     # shape as the letter-vs-dashboard disagreements this file keeps hitting:
     # both halves truthful, together a contradiction.
-    green = bool(live.get("too_green"))
+    green = bool(live.get("no_call"))
     f5c, f5lo, f5hi = ((nan, nan, nan) if green
                        else (live["central"], live["low"], live["high"]))
     fnc, fnlo, fnhi = ((nan, nan, nan) if (green or not fn)
