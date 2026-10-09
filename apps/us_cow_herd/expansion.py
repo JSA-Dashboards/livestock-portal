@@ -41,13 +41,14 @@ from statistics import mean
 
 import herd
 import inventory
+import nass_cache_client as nc
 import on_feed
 import southeast
 
 # Bump when load() changes the shape of what it returns -- app.py passes it into
 # the cached loader, which is otherwise blind to this module. The leverage.SCHEMA
 # trap, recorded in CLAUDE.md.
-SCHEMA = 1
+SCHEMA = 2
 
 # A year counts as expansion when the herd grew by more than this. Flat years
 # are neither, and calling a +0.1% year an expansion would manufacture signal.
@@ -63,10 +64,54 @@ CUTS = {"ret": (1.068, "above"), "hs": (40.8, "below"), "of": (35.9, "below")}
 # plains axis.
 CUT_BAND = (1.064, 1.102)
 
+# SCORE A REGION'S PRICE AGAINST THAT REGION'S HERD. The plains barns price
+# plains cattle, and the plains herd does not move with the national one: it
+# turned up a year earlier in 2013, turned down two years earlier in 2017, and
+# GREW 1.2% in 2024 while the national count was still falling. Four of
+# eighteen years disagree outright. Scoring a plains signal against a national
+# count asks it to predict a herd it is not part of.
+REGION_STATES = {
+    "plains": ("OKLAHOMA", "MISSOURI", "KANSAS", "MONTANA"),
+    "southeast": ("GEORGIA", "SOUTH CAROLINA", "NORTH CAROLINA", "TENNESSEE"),
+}
+
+# NASS STOPPED PUBLISHING NC AND SC SEPARATELY AFTER 2024, folding them into an
+# aggregate with eighteen other states. So the southeastern herd is complete
+# only through 2024 and its last two years cannot be scored at all. They come
+# back as unknown rather than as contractions -- "we have no count" and "the
+# herd shrank" are different answers, and NASS withdrawing a series is not a
+# market event. The plains four are all still published.
+BEEF_COWS_STATE = {"agg_level_desc": "STATE",
+                   "short_desc": "CATTLE, COWS, BEEF - INVENTORY"}
+
+
+def _state_herd(states):
+    """{year: head} summed over `states`, only for years ALL of them report.
+
+    A year missing a state would read as a step down of that state's whole
+    herd -- which is what makes a quietly dropped series look like a
+    liquidation.
+    """
+    per = {}
+    for st in states:
+        try:
+            rows = nc.fetch_cached({**BEEF_COWS_STATE, "state_name": st}).get("data", [])
+        except Exception:
+            return {}
+        for x in rows:
+            if x.get("reference_period_desc") != "FIRST OF JAN":
+                continue
+            try:
+                v = float(str(x["Value"]).replace(",", ""))
+            except (KeyError, ValueError):
+                continue
+            per.setdefault(int(x["year"]), {})[st] = v
+    return {y: sum(v.values()) for y, v in per.items() if len(v) == len(states)}
+
 SCORE = {"in_sample": 17, "out_of_sample": 15, "null": 13, "n": 18}
 
 
-def load(conn):
+def load(conn, region=None):
     """
     [{year, ret, hs, of, cows, grew, expanded, votes}] oldest first.
 
@@ -92,11 +137,16 @@ def load(conn):
         of = {}
 
     cows = {}
-    try:
-        for r in inventory.replacement_ratio() or []:
-            cows[r["year"]] = r["cows"]
-    except Exception:
-        cows = {}
+    if region in REGION_STATES:
+        cows = _state_herd(REGION_STATES[region])
+    if not cows:
+        # National, and the fallback when a regional series cannot be built.
+        try:
+            for r in inventory.replacement_ratio() or []:
+                cows[r["year"]] = r["cows"]
+        except Exception:
+            cows = {}
+        region = "national"
 
     if not ret or not cows:
         return None
@@ -106,7 +156,7 @@ def load(conn):
         c, nxt = cows.get(y), cows.get(y + 1)
         grew = (nxt - c) / c * 100.0 if c and nxt else None
         row = {"year": y, "ret": ret.get(y), "hs": hs.get(y), "of": of.get(y),
-               "cows": c, "grew": grew,
+               "cows": c, "grew": grew, "region": region,
                "expanded": None if grew is None else grew > GROWTH_EPS}
         votes = {}
         for k, (cut, d) in CUTS.items():

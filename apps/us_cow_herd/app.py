@@ -420,10 +420,57 @@ _fig.update_yaxes(showgrid=True, gridcolor="#f1f5f9",
                   range=[min(1.0, min(r["ratio"] for r in _rows) - 0.05),
                          max(r["ratio"] for r in _rows) * 1.12])
 if _SHOW_BARS:
+    # SHADE THE YEARS THE HERD ACTUALLY GREW, behind the bars. USDA's January 1
+    # beef cow count, not a signal -- see expansion.py. Drawn by finding runs of
+    # consecutive expansion years and shading each run, so a future expansion
+    # appears here on its own without anyone editing a date in.
+    #
+    # ON THE PLAINS VIEW THIS IS CURRENTLY EMPTY, and that is the finding rather
+    # than a bug: the last expansion ran 2014-2018 and this panel starts in
+    # 2019, so every year it shows is a liquidation year. The caption says so.
+    # The moment a year in range turns, the band draws itself.
+    _grew = {r["year"] for r in (_EXP or []) if r["expanded"]}
+    _idx = {r["year"]: i for i, r in enumerate(_rows)}
+    _run = []
+    for _y in sorted(_grew & set(_idx)):
+        if _run and _y == _run[-1][-1] + 1:
+            _run[-1].append(_y)
+        else:
+            _run.append([_y])
+    for _k, _block in enumerate(_run):
+        _fig.add_vrect(
+            x0=_idx[_block[0]] - 0.5, x1=_idx[_block[-1]] + 0.5,
+            fillcolor=POS, opacity=0.08, line_width=0, layer="below",
+            annotation_text="herd expanded" if _k == 0 else None,
+            annotation_position="top left",
+            annotation_font=dict(size=11, color=MUTED))
     st.plotly_chart(_fig, use_container_width=True)
 _lo_sal = min(_ann, key=lambda a: a[3])
 _part = (f"**{_last} covers {_span[0]}–{_span[1]} only** and is not a whole-year "
          f"figure. " if _span else "")
+
+# Shaded years are the ones USDA's count later showed the herd grew. Saying so
+# only when there are none would leave the shading unexplained when there are;
+# saying it only when there are some would leave an all-liquidation chart
+# looking like the band had been forgotten. Both cases get a sentence.
+_shaded = sorted({r["year"] for r in (_EXP or []) if r["expanded"]}
+                 & {r["year"] for r in _rows})
+if _shaded:
+    _herd_note = (f" Shaded years are the ones the herd actually grew, on USDA's "
+                  f"January 1 beef cow count: **{_shaded[0]}–{_shaded[-1]}**.")
+elif _EXP:
+    _herd_note = (
+        " **No year on this chart was a national herd expansion.** USDA's "
+        "January 1 beef cow count fell every year from 2019, so there is nothing "
+        "to shade — the last national expansion ran 2014–2018, before this panel "
+        "begins, and the southeastern view reaches it. "
+        "Note this is the NATIONAL count. The four states these barns sit in "
+        "(OK, MO, KS, MT) do not move with it — their herd grew 1.2% in 2024 "
+        "while the national one fell — but the page cannot show that: state-level "
+        "beef cow inventory is not in the NASS cache this page reads, and nothing "
+        "here fetches NASS live by design.")
+else:
+    _herd_note = ""
 if _view == _EXP_VIEW:
     # TWO FRAMES, NOT ONE, AND DELIBERATELY NOT A DUAL AXIS. The retention
     # incentive is a ratio near 1.0; the other two are percentages near 40. On
@@ -537,6 +584,7 @@ elif _view == _SE_VIEW:
         f"2008–2018 is USDA's legacy auction archive and 2019 onward is the live "
         f"feed; where a barn is carried by both, the live feed wins from its first "
         f"sale, so no week is counted twice."
+        + _herd_note
     )
 else:
     st.caption(
@@ -548,6 +596,7 @@ else:
         f"a high ratio in a year like that says what packers were paying, not what "
         f"producers wanted, which is why the banner above always names the side that "
         f"moved."
+        + _herd_note
     )
 
 with st.expander("ℹ️  How to read the retention incentive"):
