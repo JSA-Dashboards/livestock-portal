@@ -595,3 +595,110 @@ def test_every_grade_has_a_rendering():
     rendered = src[start:src.index("_gc, _gl, _gt = _GRADE[", start)]
     for g in produced:
         assert f'"{g}":' in rendered, g
+
+
+# -- a thin POOL and a thin HISTORY are two different things -----------------
+#
+# The guard was written on evidence from Oct-Dec 2025, where a small pool meant
+# a short history -- nothing else stood behind the checkpoint. It was applied
+# to `pool`, which is `hist` AFTER the front-loading narrowing, so from 2026 it
+# also fired on weeks with deep history and an unusual shape. Those backtest at
+# 12.3% median absolute error against 24.7% for the unnarrowed pool and 26.7%
+# for the recent-weeks median the page showed instead: it was refusing the best
+# number it had. Live casualty 2026-10-09, front-loading 0.748, 51 weeks of
+# history, 5 of them a similar shape.
+
+def _shaped(monday, thu, fri_cut, final):
+    """One week with a chosen front-loading: thu/fri_cut is the ratio."""
+    return _week(monday, [(None, None), (None, None), (None, thu - 4000),
+                          (None, thu), (fri_cut, None)]), float(final)
+
+
+def _mixed_history(n_plain, n_rare, start="2025-01-06"):
+    """`n_plain` weeks front-loaded 0.90, then `n_rare` front-loaded 0.70.
+
+    The two shapes carry DIFFERENT late trade -- 3,000 head against 8,000 --
+    so which pool a call is built from is visible in the answer rather than
+    having to be asserted on a count.
+    """
+    rows, finals = [], {}
+    base = pd.Timestamp(start)
+    for i in range(n_plain):
+        wk = base + pd.Timedelta(days=7 * i)
+        r, f = _shaped(wk, 36000, 40000, 43000)
+        rows += r
+        finals[wk] = f
+    for j in range(n_rare):
+        wk = base + pd.Timedelta(days=7 * (n_plain + j))
+        r, f = _shaped(wk, 28000, 40000, 48000)
+        rows += r
+        finals[wk] = f
+    return rows, pd.Series(finals), base + pd.Timedelta(days=7 * (n_plain + n_rare))
+
+
+def test_a_rare_shaped_week_with_deep_history_still_calls(fc):
+    """
+    THE REGRESSION. 26 past weeks stand at this checkpoint and only 6 share
+    the week's shape. Gating on the narrowed pool refused the call outright;
+    gating on the history behind the checkpoint keeps it.
+    """
+    rows, finals, cur = _mixed_history(20, 6)
+    r, _ = _shaped(cur, 28000, 40000, 0)          # front 0.70, like the rare six
+    f = fc["forecast_5area"](_vol(rows + r), finals)
+
+    assert f["maturity"] >= fc["FORECAST_WEAK_MATURITY"]
+    assert f["thin_pool"] is False, "deep history was read as no history"
+    assert f["no_call"] is False
+    assert f["n_hist"] == 26                       # what stands at this point
+    assert f["narrowed"] is True
+    assert f["n"] == 6                             # what resembles this week
+
+    # AND IT IS THE NARROWED CALL, not the full pool's. The six rare weeks ran
+    # 8,000 head late; the twenty plain ones ran 3,000. 48,000 is the first.
+    assert f["central"] == pytest.approx(48000.0)
+
+
+def test_the_same_narrow_pool_on_a_SHALLOW_history_is_still_refused(fc):
+    """
+    The other half, and why this is not simply a lower threshold. Same six
+    analogue weeks, same shape, same maturity -- but nothing else behind the
+    checkpoint. That is the population the +57%/+81% evidence describes and it
+    is still blocked.
+    """
+    rows, finals, cur = _mixed_history(0, 6)
+    r, _ = _shaped(cur, 28000, 40000, 0)
+    f = fc["forecast_5area"](_vol(rows + r), finals)
+
+    assert f["n_hist"] == 6
+    assert f["thin_pool"] is True
+    assert f["no_call"] is True
+    assert f["grade"] == "thin"
+
+
+def test_n_hist_is_the_history_and_n_is_the_pool(fc):
+    """
+    They are equal until narrowing fires and must not be read for each other:
+    the no-call sentence quotes "past weeks stand at this same point in the
+    week", which is the history, while the band and the central come from the
+    pool. Printing `n` there told a reader 51 weeks of history were 5.
+    """
+    rows, finals, cur = _mixed_history(20, 6)
+    r, _ = _shaped(cur, 28000, 40000, 0)
+    narrowed = fc["forecast_5area"](_vol(rows + r), finals)
+    assert narrowed["n_hist"] > narrowed["n"]
+
+    plain, finals2 = _history(13, 3000)
+    cur2 = pd.Timestamp("2026-04-06")
+    same = plain + _week(cur2, [(None, None), (None, None), (None, 36000),
+                                (None, 36000), (40000, None)])
+    f = fc["forecast_5area"](_vol(same), finals2)
+    assert f["n_hist"] == f["n"], "identical weeks should narrow to themselves"
+
+
+def test_the_no_call_sentence_quotes_the_history_not_the_pool():
+    """A standing guard: the two are different numbers whenever narrowing
+    fires, and the sentence is about the history."""
+    src = APP.read_text(encoding="utf-8")
+    i = src.index("past weeks stand at this same point")
+    window = src[i - 300:i]
+    assert 'f5["n_hist"]' in window, "the no-call sentence is back on the pool"
