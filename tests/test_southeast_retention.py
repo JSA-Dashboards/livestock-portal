@@ -138,3 +138,92 @@ def test_the_generator_refuses_to_write_when_the_sources_overlap():
     assert "sys.exit(" in src and "overlap" in src
     i = src.index("if overlap:")
     assert "sys.exit(" in src[i:i + 600], "overlap is detected but not fatal"
+
+
+# --- the droplet job -------------------------------------------------------
+
+DEPLOY = ROOT / "deploy"
+REFRESH = DEPLOY / "refresh_southeast.py"
+WRAPPER = DEPLOY / "run_southeast_retention.sh"
+INSTALLER = DEPLOY / "install_southeast_cron.sh"
+FROZEN = ROOT / "apps" / "us_cow_herd" / "data" / "southeast_legacy.json"
+
+
+def test_the_refresh_job_does_not_reimplement_the_archive_parse():
+    """It reads the frozen legacy half; it must never re-derive it.
+
+    The archive is 960MB of CSV and static. A second parser of it, running
+    unattended on a droplet where nobody would see it drift, is the
+    snowflake_db.py-times-five problem with no renderer to catch it -- and a
+    job that recomputed the past weekly could quietly produce a different one.
+    """
+    import ast
+    tree = ast.parse(REFRESH.read_text(encoding="utf-8"))
+    imported = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            imported |= {a.name.split(".")[0] for a in n.names}
+        elif isinstance(n, ast.ImportFrom) and n.module:
+            imported.add(n.module.split(".")[0])
+    assert "zipfile" not in imported, "the refresh job is parsing the archive"
+    assert "csv" not in imported, "the refresh job is parsing the archive"
+
+
+def test_the_frozen_half_matches_the_panel_it_was_built_for():
+    """A frozen file from a different barn set would merge into a series that
+    is half one panel and half another, and still draw nineteen bars."""
+    frozen = json.loads(FROZEN.read_text(encoding="utf-8"))
+    assert set(frozen["panel"]) == set(frozen["slugs"]), "panel/slug maps disagree"
+    assert set(frozen["handover"]) <= set(frozen["panel"]), "handover names a stranger"
+    obs_barns = {o[0] for o in frozen["obs"]}
+    assert obs_barns <= set(frozen["panel"]), f"observations from {obs_barns - set(frozen['panel'])}"
+    assert sorted(frozen["panel"].values()) == sorted(DATA["panel"]), \
+        "the frozen half was built for a different panel than the series ships"
+
+
+def test_the_frozen_half_stops_at_every_barns_handover():
+    """The legacy rows must already be filtered. If any survive past a barn's
+    first MARS date the refresh job would merge a week the live feed also
+    carries, double-counting that barn in the median."""
+    frozen = json.loads(FROZEN.read_text(encoding="utf-8"))
+    h = frozen["handover"]
+    bad = [(b, d) for b, d, _ in frozen["obs"] if b in h and d >= h[b]]
+    assert not bad, f"{len(bad)} legacy rows past the handover, e.g. {bad[:3]}"
+
+
+def test_cron_calls_the_wrapper_and_never_python_directly():
+    """The droplet keeps credentials in a .env FILE, not root's environment.
+    A crontab line calling .venv/bin/python gets none of it, so the job would
+    install cleanly and record nothing for ever. Sourcing .env is the whole
+    reason the wrapper exists."""
+    src = INSTALLER.read_text(encoding="utf-8")
+    line = next(l for l in src.splitlines() if l.startswith("CRON_LINE="))
+    assert "run_southeast_retention.sh" in line
+    assert "/bin/python" not in line and "python3" not in line
+    # The line invokes $ALERT, so check both halves: that the line goes
+    # through it, and that it resolves to the host's alerting wrapper.
+    assert "$ALERT" in line, (
+        "this host has no MAILTO and no MTA -- a bare entry fails silently")
+    alert = next(l for l in src.splitlines() if l.startswith("ALERT="))
+    assert "cron-alert" in alert, alert
+    assert 'if [ ! -x "$ALERT" ]' in src, (
+        "a missing cron-alert must be a hard stop, not a warning")
+
+
+def test_the_wrapper_handles_a_missing_flock_explicitly():
+    """`if ! flock -n 9` reads as 'could not get the lock' when flock is simply
+    absent: command-not-found is 127, ! makes it true, and the job exits 0
+    having done nothing while looking healthy."""
+    src = WRAPPER.read_text(encoding="utf-8")
+    assert "command -v flock" in src
+    i = src.index("cd \"$APP_DIR\"")
+    assert i < src.index("mkdir -p"), "cd must come before anything is created"
+
+
+def test_the_installer_verifies_the_crontab_it_wrote():
+    """A sibling installer reported success on a host where nothing had been
+    installed. The write is not the install."""
+    src = INSTALLER.read_text(encoding="utf-8")
+    assert "crontab -l" in src and "grep -cF" in src
+    i = src.index("installed=$(crontab -l")
+    assert "exit 1" in src[i:i + 900], "the read-back is not fatal"

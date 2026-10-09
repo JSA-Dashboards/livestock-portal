@@ -163,6 +163,24 @@ if overlap:
     print("  ", sorted(overlap)[:10])
     sys.exit("ABORT: the two sources overlap; concatenation would double-count")
 
+# FREEZE THE LEGACY HALF. The archive is static -- it will never gain a row
+# -- and it is 960MB of CSV that has no business on a droplet. Writing the
+# post-handover legacy observations out once lets deploy/refresh_southeast.py
+# rebuild the series from MARS alone, which is the only half that moves.
+#
+# The handover dates are frozen with them on purpose: they are a property of
+# when each barn appeared in MARS, which is history and cannot change. The
+# refresh job reads them rather than recomputing, so it can never shift the
+# boundary and silently re-admit a legacy week the live feed already covers.
+frozen = (pathlib.Path(__file__).resolve().parent.parent / 'apps'
+          / 'us_cow_herd' / 'data' / 'southeast_legacy.json')
+json.dump({'panel': {b: v[1] for b, v in PANEL.items()},
+           'slugs': {b: v[0] for b, v in PANEL.items()},
+           'handover': first_mars,
+           'obs': sorted([[b, dt, round(r, 6)] for b, dt, r in legacy])},
+          open(frozen, 'w'), indent=0)
+print('froze', len(legacy), 'legacy observations ->', frozen)
+
 allobs = [(b, dt, r, "legacy") for b, dt, r in legacy] + \
          [(b, dt, r, "mars") for b, dt, r in mars]
 

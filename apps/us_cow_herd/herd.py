@@ -110,7 +110,8 @@ UNPAIRABLE_BARNS = ("Salina, KS",)
 # 2  same-barn pairing: rows gained `barn` and `gap_days`, decompose() gained
 #    n_dates/n_barns/n_base_dates/unpairable, annual_ratio() gained months and
 #    barns and now drops years under MIN_ANNUAL_MONTHS.
-SCHEMA = 2
+# 3  load_all() gained the southeastern panel, read from Snowflake.
+SCHEMA = 3
 
 
 def _rows(conn, since_iso=None):

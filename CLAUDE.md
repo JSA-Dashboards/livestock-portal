@@ -532,6 +532,65 @@ barn (2019-04-15..04-29) falls before MARS's first (2019-04-22..05-08) with zero
 shared dates. If USDA ever back-fills the archive, the build must stop rather
 than double-count the shared weeks into a median.
 
+### The refresh cron — `deploy/refresh_southeast.py`
+
+Added 2026-10-09, because the committed JSON is a seed and not a live series:
+it only moves when somebody runs the full rebuild against 960MB of archive on
+a machine that has it.
+
+**ONLY HALF OF THIS SERIES CAN GO STALE.** The 2008-2018 half is the legacy
+archive -- static, closed, it will never gain a row. The 2019-onward half is
+the live MARS feed and moves every week. So the legacy half is **frozen** into
+`apps/us_cow_herd/data/southeast_legacy.json` (3,323 post-handover barn-date
+observations, 151KB, written by `scripts/build_southeast_retention.py`) and
+the job rebuilds only from MARS. That keeps two zips totalling 960MB off the
+droplet, and it means a weekly job cannot silently produce a different past.
+The handover dates are frozen with the observations on purpose -- they are a
+property of when each barn first appeared in MARS, which is history -- so the
+job can never shift the boundary and re-admit a legacy week the live feed
+already covers. A test asserts the frozen rows all stop at their barn's
+handover, and that `refresh_southeast.py` imports neither `zipfile` nor `csv`.
+
+**THE PAGE CANNOT DO THIS ITSELF**, which is the whole reason a cron exists:
+`marsapi.ams.usda.gov` rejects Streamlit Community Cloud's IPs, the constraint
+already recorded for Beef Trimmings. The droplet can reach it.
+
+Output goes to `JSA.CME_FEEDER_CATTLE.SOUTHEAST_RETENTION`, append-only and
+newest-wins per year -- the `JSA.BOXED_BEEF.CUTOUT_AM` shape, for the same
+reasons. `southeast.load(conn)` prefers that table and **falls back to the
+committed JSON** when Snowflake is empty or unreachable, so the page renders
+even if this job never runs. It stops advancing; it does not vanish. That also
+means **a silent failure here is invisible on the chart** — check `RECORDED_AT`
+in the table, not the page.
+
+    deploy/refresh_southeast.py          the job (--dry-run, --write-json)
+    deploy/run_southeast_retention.sh    the cron wrapper
+    deploy/install_southeast_cron.sh     installer, --check to report only
+
+    40 7 * * 1,4   cron-alert ... deploy/run_southeast_retention.sh
+
+Twice a week, times **America/Chicago**, and that is generous rather than
+casual: the series is ANNUAL, so exactly one bar can move and it moves by
+thousandths. Thursday is insurance against Monday failing. 07:40 keeps clear
+of the 07:00 beef-trimmings Monday catch-up. The write skips any year whose
+ratio and sample are unchanged, so the second run normally costs seven MARS
+fetches and writes nothing -- which is what lets the schedule be blunt, with
+no DST arithmetic and no holiday calendar.
+
+`MARS_API_KEY` is on the installer's required list and is **not** on the other
+installers' lists: this is the first job on that host to read marsapi.
+
+Two bugs found while building it, both of which rendered perfectly:
+
+- **`CREATE SCHEMA` is attempted and its failure ignored.** The schema exists;
+  `CME_INGEST_ROLE` does not hold CREATE SCHEMA on `JSA` and raising there
+  would stop a job whose schema is in front of it. If it really is missing,
+  the CREATE TABLE says so.
+- **The panel is stored as JSON, never comma-joined.** Every barn name
+  contains a comma ("Calhoun, GA"), so `", ".join(...)` then splitting gives
+  **fourteen** barns from seven -- and the caption prints that number. The
+  first write did exactly that; the table was dropped and rewritten.
+
 `tests/test_southeast_retention.py` pins the shipped file: contiguous years, it
 actually reaches 2010, every year has >=6 months and >=3 barns and >=50 sales, a
 part year declares its months, ratios in a sane band (the $/cwt mix computes to

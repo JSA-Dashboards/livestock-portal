@@ -96,19 +96,82 @@ SCHEMA = 1
 BASELINE_YEARS = (2021, 2025)
 
 
-def load():
-    """{'panel': [barn names], 'series': [{year, ratio, n, months, barns, source}]}
+TABLE = "JSA.CME_FEEDER_CATTLE.SOUTHEAST_RETENTION"
 
-    Returns None rather than raising if the file is missing, so a packaging
-    slip costs the toggle and not the page.
-    """
+
+def _from_file():
     try:
-        d = json.loads(DATA.read_text(encoding="utf-8"))
+        return json.loads(DATA.read_text(encoding="utf-8"))
     except Exception:
         return None
-    rows = [r for r in d.get("series", []) if r.get("months", 0) >= MIN_MONTHS]
+
+
+def _from_snowflake(conn):
+    """Newest row per year. Returns None on any trouble -- never raises.
+
+    The committed JSON is a seed, not a live series: it only moves when someone
+    runs scripts/build_southeast_retention.py against 960MB of archive on a
+    machine that has it. deploy/refresh_southeast.py keeps this table current
+    from the droplet instead, which is the only place that can -- marsapi
+    rejects Streamlit Community Cloud's IPs, so the page cannot fetch its own
+    MARS half.
+    """
+    try:
+        cur = conn.cursor().execute(
+            f"SELECT YEAR, RATIO, N, MONTHS, BARNS, SOURCE, SPAN, PANEL FROM {TABLE} "
+            f"QUALIFY ROW_NUMBER() OVER (PARTITION BY YEAR ORDER BY RECORDED_AT DESC) = 1 "
+            f"ORDER BY YEAR")
+        rows = cur.fetchall()
+    except Exception:
+        return None
     if not rows:
         return None
+    series, panel = [], None
+    for y, ratio, n, months, barns, source, span, pan in rows:
+        rec = {"year": int(y), "ratio": float(ratio), "n": n,
+               "months": months, "barns": barns, "source": source}
+        if span:
+            try:
+                rec["span"] = json.loads(span)
+            except Exception:
+                pass
+        series.append(rec)
+        panel = pan or panel
+    # PANEL is a JSON list. It must not be comma-split: every barn name
+    # contains a comma, so a split turns seven barns into fourteen and the
+    # caption says so. A row written before that was fixed parses as nothing
+    # here, and load() then falls back to the file's panel.
+    try:
+        names = json.loads(panel) if panel else []
+        if not isinstance(names, list):
+            names = []
+    except Exception:
+        names = []
+    return {"panel": names, "series": series}
+
+
+def load(conn=None):
+    """{'panel': [barn names], 'series': [{year, ratio, n, months, barns, source}]}
+
+    Snowflake first, the committed file as a fallback. Returns None rather than
+    raising if neither answers, so a packaging slip or an outage costs the
+    toggle and not the page.
+
+    THE FALLBACK IS NOT DECORATION. If the droplet job has never run, or the
+    table is empty, or Snowflake is unreachable, the page still draws the
+    series as of the last full rebuild. It stops advancing; it does not vanish.
+    """
+    d = _from_snowflake(conn) if conn is not None else None
+    if not d or not d.get("series"):
+        d = _from_file()
+    if not d:
+        return None
+    rows = [r for r in d.get("series", []) if (r.get("months") or 0) >= MIN_MONTHS]
+    if not rows:
+        return None
+    if not d.get("panel"):
+        f = _from_file() or {}
+        d["panel"] = f.get("panel", [])
     d["series"] = sorted(rows, key=lambda r: r["year"])
     return d
 

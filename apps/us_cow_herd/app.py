@@ -162,6 +162,9 @@ def load_all(schema=HERD_SCHEMA):
             "current": decompose(conn),
             "annual": annual_ratio(conn),
             "span": annual_span(conn, (latest_date(conn) or "0")[:4]),
+            # Read on the page's one connection and cached with everything
+            # else, rather than re-queried on every widget interaction.
+            "southeast": southeast.load(conn),
             "classes": class_prices(conn),
             "receipts": receipts_yoy(conn),
         }
@@ -328,7 +331,7 @@ _ann = D["annual"]
 # letter-versus-dashboard failure this file records three times. The switch is
 # the Cold Storage shape, and it is cheap here because the southeastern series
 # is a 2KB precomputed file rather than a fetch.
-_SE = southeast.load()
+_SE = D.get("southeast")
 _PLAINS_VIEW = "Southern plains · 2019–2026"
 _SE_VIEW = "Southeastern · 2008–2026"
 _view = _PLAINS_VIEW
