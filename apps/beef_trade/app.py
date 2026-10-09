@@ -161,7 +161,7 @@ def pct(new, base):
     return (new / base - 1.0) * 100.0
 
 
-def delta_pair(value, percent, suffix="", digits=0):
+def delta_pair(value, percent, suffix="", digits=0, base=None, base_label=""):
     """
     An absolute change and its percentage on one line: "+/- 130 . 2.1% vs Aug".
 
@@ -182,11 +182,28 @@ def delta_pair(value, percent, suffix="", digits=0):
     THE ARROW CARRIES THE SIGN, so neither figure after it is signed. The
     first version printed the percentage with `:+` as well and produced
     "v -0.8%", a double negative.
+
+    `base` PRINTS THE LEVEL THE MOVE IS MEASURED FROM, on its own line under
+    it. "+/- 130 . 2.1% vs Aug" over 6,262 never said USDA forecast 6,132 in
+    August -- the reader subtracts, which is Ross's complaint about the beef
+    cutout tiles on 2026-10-07 and the same defect fixed on Cash Cattle Trade
+    and Cattle Weights since. It is a separate line rather than more text on
+    this one because `sub` here carries the UNIT, and on this page the unit is
+    load-bearing: these are carcass weight, and the FAS export figures JSA
+    also publishes are product weight.
     """
+    _b = ""
+    if base is not None:
+        _b = (f'<div class="tile-sub">{base_label} '
+              f'{base:,.{digits}f}</div>')
     if value is None and percent is None:
-        return '<div class="tile-delta-neu">&mdash;</div>'
+        return '<div class="tile-delta-neu">&mdash;</div>' + _b
     if value == 0 or (value is None and percent == 0):
-        return f'<div class="tile-delta-neu">unchanged{suffix}</div>'
+        # NO LEVEL LINE HERE. An unchanged forecast means the base IS the
+        # tile's own value, and printing it underneath is the "same number
+        # twice" the beef cutout tiles were corrected for -- it fills the
+        # space without adding a figure.
+        return f'<div class="tile-delta-neu">unchanged{suffix}</div>' 
     ref = value if value is not None else percent
     arrow = "▲" if ref > 0 else "▼"
     bits = []
@@ -195,7 +212,7 @@ def delta_pair(value, percent, suffix="", digits=0):
     if percent is not None:
         bits.append(f"{abs(percent):,.1f}%")
     return (f'<div class="tile-delta-neu">{arrow} '
-            f'{" · ".join(bits)}{suffix}</div>')
+            f'{" · ".join(bits)}{suffix}</div>' + _b)
 
 
 def running_html(over_pct):
@@ -442,7 +459,8 @@ def wasde_panel(attribute: str, label: str, key: str):
         st.markdown(tile(
             f"USDA {year} {noun} forecast", fmt(now),
             delta_pair(rev, rev_pct,
-                       " vs " + (s["prior_month"] or "last month")),
+                       " vs " + (s["prior_month"] or "last month"),
+                       base=was, base_label=(s["prior_month"] or "last month")),
             sub="calendar year · million lb, carcass weight",
             cls="tile-wasde"),
             unsafe_allow_html=True)
@@ -456,12 +474,15 @@ def wasde_panel(attribute: str, label: str, key: str):
     with c3:
         nxt_sub = "WASDE adds the next year in May"
         if nxt_val:
-            if nxt_rev_pct is None:
+            nxt_prior = nxt["prior"].get(attribute) if nxt else None
+            if nxt_prior is None:
                 nxt_sub = "million lb"
-            elif nxt_rev_pct == 0:
+            elif nxt_rev == 0:
+                # A level identical to the value is noise; "unchanged" is the
+                # answer, and USDA leaving a forecast alone IS an answer.
                 nxt_sub = f"unchanged vs {nxt['prior_month']} · million lb"
             else:
-                nxt_sub = (f"{nxt_rev_pct:+,.1f}% vs {nxt['prior_month']}"
+                nxt_sub = (f"{nxt['prior_month']} {fmt(nxt_prior)}"
                            f" · million lb")
         st.markdown(tile(
             f"USDA {year + 1} {noun} forecast", fmt(nxt_val),
@@ -947,9 +968,16 @@ with tab_net:
         with c1:
             net_rev = ((n_net - p_net)
                        if (n_net is not None and p_net is not None) else None)
+            # p_net IS THE LEVEL AND IT IS ALREADY IN HAND. The two sides of
+            # it are on the tiles either side, but a reader should not have to
+            # subtract last month's imports from last month's exports -- and
+            # last month's figures are not on the row at all, only this
+            # month's. So the net tile carries its own base.
             st.markdown(tile(f"WASDE {n_year} net imports", fmt(n_net),
                              delta_pair(net_rev, pct(n_net, p_net),
-                                        " vs " + (nb["prior_month"] or "last month")),
+                                        " vs " + (nb["prior_month"] or "last month"),
+                                        base=p_net,
+                                        base_label=(nb["prior_month"] or "last month")),
                              sub="imports less exports · calendar year",
                              cls="tile-wasde"),
                         unsafe_allow_html=True)
@@ -1019,10 +1047,17 @@ with tab_net:
         ytd_net = float(cur["net"].sum())
         ytd_prev = float(prev_y[prev_y["month"] <= THROUGH]["net"].sum()) if not prev_y.empty else None
         with c1:
+            # NOT A WASDE TILE, SAME DEFECT. "▲ 774 · 38.5% vs 2025" over
+            # 2,784 never said last year's Jan-Aug was 2,010, and unlike the
+            # forecast rows there is no neighbouring tile carrying it -- the
+            # other two on this row are THIS year's exports and imports. The
+            # label names the window, so the base says the year.
             st.markdown(tile(f"{YEAR} YTD net imports", fmt(ytd_net),
                              delta_pair((ytd_net - ytd_prev) if ytd_prev else None,
                                         pct(ytd_net, ytd_prev),
-                                        f" vs {YEAR - 1}"),
+                                        f" vs {YEAR - 1}",
+                                        base=ytd_prev,
+                                        base_label=f"{YEAR - 1} same months"),
                              sub=f"Jan–{tf.month_name(THROUGH)}",
                              cls="tile-net"), unsafe_allow_html=True)
         with c2:
