@@ -164,6 +164,12 @@ FORECAST_CAL_DAYS = 365
 # determinism for nothing, which is why it is not tuned any tighter.
 FORECAST_MAX_ANALOGUES = 20
 
+# The "weak" line: below this share of a typical week, the week has not traded
+# enough for anything measured off it to mean much. It does two jobs, and they
+# are the same judgement -- it labels the call's confidence, and it GATES the
+# front-loading narrowing below.
+FORECAST_WEAK_MATURITY = 0.50
+
 FORECAST_GAP_WEEKS = 4
 # Band is drawn from a slightly longer window so it spans a real range of
 # outcomes rather than the four points the centre is built from.
@@ -1123,8 +1129,33 @@ def forecast_5area(vol: pd.DataFrame, published5: pd.Series) -> dict:
     # is not a shape to project forward onto a cumulative count.
     hist = hist[hist["late"] >= 0]
 
+    # MATURITY IS COMPUTED HERE RATHER THAN BELOW because the narrowing now
+    # depends on it. It reads only published5 and cur_week, so moving it up
+    # changes nothing it sees.
+    prior_weeks = published5[published5.index < cur_week]
+    typical = float(prior_weeks.tail(13).median()) if len(prior_weeks) else float("nan")
+    maturity = (wtd_now / typical) if typical and typical == typical else float("nan")
+
+    # THE NARROWING IS GATED ON MATURITY, AND THAT IS NOT THE SAME AS SELECTING
+    # ON IT. Picking analogues BY maturity was tried on 2026-10-02 and is worse
+    # than picking by front-loading (12.2% against 7.8%); that stands, and the
+    # pool below is still chosen on `front`. What changed on 2026-10-09 is WHEN
+    # `front` is allowed to choose at all.
+    #
+    # `front` is the previous checkpoint's share of the current one. Early in
+    # the week both terms are a few hundred head, so the ratio is noise -- and
+    # selecting on noise cuts the pool from 20 analogue weeks to about 7.
+    # Measured over 455 (week, checkpoint) pairs, on the rows the narrowing
+    # actually fired below this line: 28.8% median absolute error narrowed
+    # against 23.7% unnarrowed. Above it the narrowing is what makes the
+    # forecast work at all -- 6.7% against 14.2% once the week is fully traded.
+    #
+    # Gating at the weak line costs nothing where the forecast earns its keep
+    # and recovers about a point where it does not: overall 23.8% -> 22.9%,
+    # below the line 26.1% -> 24.9%, at or above it unchanged at 13.6%, and
+    # the p10-p90 band below the line holds 70% -> 75% of the time.
     pool, narrowed = hist, False
-    if front is not None and not hist.empty:
+    if front is not None and not hist.empty and maturity >= FORECAST_WEAK_MATURITY:
         hist["front"] = [
             _front_of(cps, r.week, r.weekday, r.order, r.wtd)
             for r in hist.itertuples()
@@ -1149,20 +1180,15 @@ def forecast_5area(vol: pd.DataFrame, published5: pd.Series) -> dict:
     # band, utterly different thing to hand someone.
     #
     # Maturity, not raw head, because a 45,000-head week in March is a full
-    # week and in August is half of one. MATURITY IS A LABEL HERE AND NOT A
-    # SELECTOR -- picking analogues on it was tried and is worse than picking
-    # on front-loading (median absolute error 12.2% against 7.8% over the same
-    # 52 weeks), which is why the pool above is still chosen on `front`.
-    prior_weeks = published5[published5.index < cur_week]
-    typical = float(prior_weeks.tail(13).median()) if len(prior_weeks) else float("nan")
-    maturity = (wtd_now / typical) if typical and typical == typical else float("nan")
+    # week and in August is half of one. It is computed above, where the
+    # narrowing needs it; this is only where it becomes a label.
     if done:
         grade = "final"
     elif maturity != maturity:
         grade = "unknown"
     elif maturity >= 0.85:
         grade = "firm"
-    elif maturity >= 0.50:
+    elif maturity >= FORECAST_WEAK_MATURITY:
         grade = "provisional"
     else:
         grade = "weak"

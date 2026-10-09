@@ -1100,8 +1100,19 @@ against the naive alternative of ignoring the week and printing a typical one:
     forecast  19.4%  30.9%  34.4%  45.1%  35–47%   39.2%   20.9%    14.3%    6.7%
     naive     17.8%  17.9%  19.1%  41.4%  26–27%   32.3%   22.9%     5.9%   26.7%
 
-**The forecast beats naive NOWHERE below 0.50**, which is a live question about
-the mid-week product and not just about the scorecard. It is not acted on.
+Comparing those two rows is how the gap was first reported, and it OVERSTATES
+it: medians of two separate distributions are not a paired comparison. Paired
+per checkpoint below 0.50, the forecast is closer than naive on 153 of 340
+(45% against a coin flip's 50%, p = 0.037) and a median 0.9 points worse — real,
+small, not the rout the table above reads as. Above 0.50 it wins 56% and is a
+median 3.7 points better. And naive has no band at all, where the forecast's
+p10-p90 holds 75% of the time below the line.
+
+**What the measurement DID find is that the narrowing was the culprit, and that
+is fixed** — see `FORECAST_WEAK_MATURITY` in the forecast section. What remains
+open is only whether a sub-0.50 point estimate is worth printing at all when it
+is a coin flip; the page already labels it "Weak ... treat the number as a
+floor, not a forecast", which is the argument for leaving it.
 
 **NONE OF THIS TOUCHES THE LIVE FORECAST.** The tiles, Step 1 and Step 2 still
 re-forecast at every checkpoint as USDA publishes through the week, and the

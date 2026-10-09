@@ -40,7 +40,7 @@ def fc():
         APP, "_week_start", "weekly_5area_head", "weekly_national_head",
         "wtd_checkpoints", "_front_of", "forecast_5area", "forecast_national",
         consts=("CUT_ORDER", "FORECAST_GAP_WEEKS", "FORECAST_BAND_WEEKS",
-                "FORECAST_MAX_ANALOGUES"),
+                "FORECAST_MAX_ANALOGUES", "FORECAST_WEAK_MATURITY"),
         globals_={"pd": pd},
     )
 
@@ -281,3 +281,91 @@ def test_the_call_does_not_move_when_the_fetch_window_rolls(fc):
     assert len(set(calls)) == 1, (
         f"the call moved with the fetch window: {calls} — the analogue cap is "
         f"not holding the pool steady")
+
+
+# ── the narrowing is gated on maturity ───────────────────────────────────────
+#
+# `front` is the previous checkpoint's share of the current one. Early in the
+# week both terms are a few hundred head, so the ratio is noise -- and
+# selecting on noise cut the analogue pool from 20 weeks to about 7. Measured
+# over 455 (week, checkpoint) pairs, on the rows where the narrowing actually
+# fired below the weak line: 28.8% median absolute error narrowed against
+# 23.7% unnarrowed. Above the line it is what makes the forecast work at all,
+# 6.7% against 14.2% once the week is fully traded.
+#
+# GATING IS NOT SELECTING. Choosing analogues BY maturity was tried on
+# 2026-10-02 and is worse than choosing by front-loading (12.2% against 7.8%).
+# That stands; the pool is still chosen on `front`. What is gated is when
+# `front` is allowed to choose at all.
+
+
+def test_the_weak_line_is_one_constant_not_three(fc):
+    """
+    It labels the call AND gates the narrowing, because it is the same
+    judgement about the same threshold. A second literal 0.50 in the grade
+    ladder is how the two drift apart.
+    """
+    assert fc["FORECAST_WEAK_MATURITY"] == 0.50
+    src = APP.read_text(encoding="utf-8")
+    start = src.index("def forecast_5area(")
+    body = src[start:src.index("\ndef ", start + 10)]
+    assert "maturity >= FORECAST_WEAK_MATURITY" in body
+    assert "maturity >= 0.50" not in body, "the grade ladder still hardcodes it"
+
+
+def test_a_green_week_does_not_narrow(fc):
+    """
+    The whole change. Ten identical past weeks make `front` match everywhere,
+    so the narrowing WOULD fire -- it is the maturity gate that stops it, and
+    the pool stays whole.
+    """
+    rows, finals = _history(10, 3000)
+    cur = pd.Timestamp("2026-03-16")
+    # 1,200 head against a ~43,000 typical week: maturity ~0.03
+    green = rows + _week(cur, [(None, None), (None, None), (None, 1000),
+                               (None, 1000), (1200, None)])
+    f = fc["forecast_5area"](_vol(green), finals)
+    assert f["maturity"] < fc["FORECAST_WEAK_MATURITY"]
+    assert f["narrowed"] is False
+    assert f["n"] == 10, f["n"]          # every past week, not a front-matched few
+
+
+def test_a_mature_week_still_narrows(fc):
+    """
+    The gate must not switch the narrowing off altogether -- above the line it
+    is the difference between 6.7% and 14.2%.
+    """
+    rows, finals = _history(10, 3000)
+    cur = pd.Timestamp("2026-03-16")
+    busy = rows + _week(cur, [(None, None), (None, None), (None, 36000),
+                              (None, 36000), (40000, None)])
+    f = fc["forecast_5area"](_vol(busy), finals)
+    assert f["maturity"] >= fc["FORECAST_WEAK_MATURITY"]
+    assert f["narrowed"] is True
+
+
+def test_maturity_is_known_before_the_pool_is_chosen(fc):
+    """
+    The gate reads `maturity`, which used to be computed below the narrowing.
+    Moving it up is what makes the gate possible, and moving it back down
+    would be a NameError rather than a quiet wrong answer -- but only if the
+    order is actually what this asserts.
+    """
+    src = APP.read_text(encoding="utf-8")
+    start = src.index("def forecast_5area(")
+    body = src[start:src.index("\ndef ", start + 10)]
+    assert body.index("maturity = ") < body.index("pool, narrowed = hist, False")
+
+
+def test_the_gate_does_not_touch_a_week_with_no_typical(fc):
+    """
+    maturity is NaN when there is no history to measure against, and
+    `NaN >= 0.50` is False -- so the narrowing is skipped rather than raising
+    or silently firing. Skipping is the safe side: the full pool.
+    """
+    rows, finals = _history(1, 3000)
+    cur = pd.Timestamp("2026-01-12")
+    one = rows + _week(cur, [(None, None), (None, None), (None, 20000),
+                             (None, 20000), (30000, None)])
+    f = fc["forecast_5area"](_vol(one), finals)
+    assert f["narrowed"] is False
