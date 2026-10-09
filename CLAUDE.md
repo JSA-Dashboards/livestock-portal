@@ -1137,11 +1137,30 @@ small, not the rout the table above reads as. Above 0.50 it wins 56% and is a
 median 3.7 points better. And naive has no band at all, where the forecast's
 p10-p90 holds 75% of the time below the line.
 
-**What the measurement DID find is that the narrowing was the culprit, and that
-is fixed** — see `FORECAST_WEAK_MATURITY` in the forecast section. What remains
-open is only whether a sub-0.50 point estimate is worth printing at all when it
-is a coin flip; the page already labels it "Weak ... treat the number as a
-floor, not a forecast", which is the argument for leaving it.
+**Both halves are now acted on.** The narrowing was the culprit and is gated —
+see `FORECAST_WEAK_MATURITY`. And the sub-0.50 estimate is no longer printed at
+all, because the argument for keeping it did not survive checking:
+
+- **It was not a floor**, though the page said to treat it as one. The actual
+  lands at or above the central on **50%** of sub-0.50 checkpoints — 50/50/48%
+  across 0–5%, 5–20% and 20–50% maturity. A coin flip at every level.
+- **The band did not rescue it.** p10–p90 covered 75% at a median width of
+  **86% of the week**; the recent-weeks band covered 67% at **64%**. Wider, and
+  less coverage per unit of width. That band was my argument for keeping the
+  estimate and it is the wrong way round.
+
+Below the line the tiles now show the confirmed count and what the last 13
+weeks printed, labelled as history. It costs little: **77% of weeks clear 0.50
+before Friday's final**, and the ones that do not are the ones a forecast could
+not have helped with. `too_green` drives all four places that quote a call —
+two tiles, Step 1, Step 2 — plus `pending_row`, because a scorecard row still
+carrying the suppressed number would put it back on the page six inches below
+the tiles that withheld it.
+
+One thing found on the way and NOT acted on: above 0.50 the forecast runs
+**high** — median +7.1%, actual at or above the central only 30% of the time.
+Good estimate (13.6% median absolute), biased up. Fixing it needs its own
+measurement.
 
 **NONE OF THIS TOUCHES THE LIVE FORECAST.** The tiles, Step 1 and Step 2 still
 re-forecast at every checkpoint as USDA publishes through the week, and the

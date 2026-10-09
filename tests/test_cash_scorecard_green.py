@@ -272,3 +272,39 @@ def test_no_prose_under_the_table_names_the_live_checkpoint():
     para = src[start:src.index("published by then", start)]
     assert "_sc_dow_lbl" in para and "_sc_cut_lbl" in para
     assert "{_dow}" not in para, "the replay paragraph still names the live checkpoint"
+
+
+def test_the_pending_row_carries_no_call_when_the_week_is_too_green(fc):
+    """
+    The tiles stop printing an estimate below the weak line; a pending row
+    that still carried one would put the suppressed number back on the page
+    six inches lower, under a footnote calling it "the same call as the tiles
+    above". Both halves truthful, together a contradiction -- the shape this
+    page keeps producing.
+    """
+    rows, finals = _history(13)
+    cur = pd.Timestamp("2026-04-06")
+    green = rows + _week_rows(cur, [(None, None), (None, None), (None, 500),
+                               (None, 500), (600, None)])
+    vol = _vol(green)
+    assert fc["forecast_5area"](vol, finals)["too_green"] is True
+    pend = sc.pending_row(vol, finals, finals * 1.5,
+                          fc["forecast_5area"], fc["forecast_national"])
+    assert not pend.empty
+    r = pend.iloc[0]
+    assert r["wtd"] == 600                      # the fact stays
+    for col in ("f5", "f5_lo", "f5_hi", "fn", "fn_lo", "fn_hi"):
+        assert pd.isna(r[col]), col             # the call does not
+
+
+def test_the_pending_row_still_carries_a_call_when_the_week_is_mature(fc):
+    rows, finals = _history(13)
+    cur = pd.Timestamp("2026-04-06")
+    busy = rows + _week_rows(cur, [(None, None), (None, None), (None, 36000),
+                              (None, 36000), (40000, None)])
+    vol = _vol(busy)
+    assert fc["forecast_5area"](vol, finals)["too_green"] is False
+    r = sc.pending_row(vol, finals, finals * 1.5,
+                       fc["forecast_5area"], fc["forecast_national"]).iloc[0]
+    assert r["f5"] == 43000
+    assert not pd.isna(r["fn"])

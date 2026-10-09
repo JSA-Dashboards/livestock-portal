@@ -341,6 +341,19 @@ def pending_row(vol: pd.DataFrame, published5: pd.Series, national: pd.Series,
 
     fn = forecast_national(live, published5, national) if not national.empty else None
     nan = float("nan")
+
+    # NO CALL MEANS NO CALL, HERE TOO. Once the week is too green the tiles
+    # above stop printing an estimate, and a pending row that still carried
+    # one would put the suppressed number back on the page six inches lower --
+    # under a footnote saying it is "the same call as the tiles above". Same
+    # shape as the letter-vs-dashboard disagreements this file keeps hitting:
+    # both halves truthful, together a contradiction.
+    green = bool(live.get("too_green"))
+    f5c, f5lo, f5hi = ((nan, nan, nan) if green
+                       else (live["central"], live["low"], live["high"]))
+    fnc, fnlo, fnhi = ((nan, nan, nan) if (green or not fn)
+                       else (fn["central"], fn["low"], fn["high"]))
+
     return pd.DataFrame([{
         "week": week,
         # Present but empty: this row is the LIVE checkpoint by definition, and
@@ -350,11 +363,9 @@ def pending_row(vol: pd.DataFrame, published5: pd.Series, national: pd.Series,
         "cp_weekday": nan, "cp_order": nan,
         "wtd": live["wtd"],
         "grade": live.get("grade"),
-        "f5": live["central"], "f5_lo": live["low"], "f5_hi": live["high"],
+        "f5": f5c, "f5_lo": f5lo, "f5_hi": f5hi,
         "a5": nan,
-        "fn": fn.get("central") if fn else nan,
-        "fn_lo": fn.get("low") if fn else nan,
-        "fn_hi": fn.get("high") if fn else nan,
+        "fn": fnc, "fn_lo": fnlo, "fn_hi": fnhi,
         "an": nan,
         "miss5": nan, "pct5": nan, "in5": False,
         "missn": nan, "pctn": nan, "inn": False,

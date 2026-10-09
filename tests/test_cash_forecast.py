@@ -20,6 +20,7 @@ The rest are the places this would be wrong quietly rather than loudly:
     python -m pytest tests/test_cash_forecast.py -q
 """
 
+import ast
 import sys
 from pathlib import Path
 
@@ -369,3 +370,128 @@ def test_the_gate_does_not_touch_a_week_with_no_typical(fc):
                              (None, 20000), (30000, None)])
     f = fc["forecast_5area"](_vol(one), finals)
     assert f["narrowed"] is False
+
+
+# ── too green to forecast ────────────────────────────────────────────────────
+#
+# Measured over 338 sub-0.50 (week, checkpoint) pairs on the live feed:
+#
+#   * the central is NOT a floor -- the actual lands at or above it on 50% of
+#     checkpoints, and 50% / 50% / 48% across 0-5%, 5-20% and 20-50% maturity.
+#     The page used to tell the reader to treat it as a floor. That was false.
+#   * it does not beat ignoring the week: closer than the recent-weeks median
+#     on 153 of 340, 45% against a coin flip's 50%.
+#   * the band does not rescue it: 75% coverage at a median width of 86% OF
+#     THE WEEK, against the recent-weeks band's 67% at 64%.
+#
+# So below the weak line the page prints the confirmed count and what recent
+# weeks did, and no call on this week.
+
+
+def test_too_green_tracks_the_weak_line(fc):
+    rows, finals = _history(10, 3000)
+    cur = pd.Timestamp("2026-03-16")
+    green = rows + _week(cur, [(None, None), (None, None), (None, 1000),
+                               (None, 1000), (1200, None)])
+    f = fc["forecast_5area"](_vol(green), finals)
+    assert f["maturity"] < fc["FORECAST_WEAK_MATURITY"]
+    assert f["too_green"] is True
+
+    busy = rows + _week(cur, [(None, None), (None, None), (None, 36000),
+                              (None, 36000), (40000, None)])
+    g = fc["forecast_5area"](_vol(busy), finals)
+    assert g["maturity"] >= fc["FORECAST_WEAK_MATURITY"]
+    assert g["too_green"] is False
+
+
+def test_a_finished_week_is_never_too_green(fc):
+    """
+    `done` means Friday's final has landed and the number is a fact, not an
+    estimate. Suppressing THAT would hide the answer.
+    """
+    rows, finals = _history(10, 3000)
+    cur = pd.Timestamp("2026-03-16")
+    shut = rows + _week(cur, [(None, None), (None, None), (None, 36000),
+                              (None, 36000), (40000, 43000)])
+    f = fc["forecast_5area"](_vol(shut), finals)
+    assert f["done"] is True
+    assert f["too_green"] is False
+
+
+def test_an_unknown_maturity_is_treated_as_green(fc):
+    """
+    No history to measure against is not a licence to forecast. NaN must not
+    fall through a `<` comparison into the confident branch.
+
+    Maturity is NaN only when NOTHING precedes the live week -- one prior week
+    is enough to give a typical, which is why this builds a published series
+    that starts at the current week rather than a short one.
+    """
+    rows, _ = _history(3, 3000)
+    cur = pd.Timestamp("2026-01-26")
+    rows += _week(cur, [(None, None), (None, None), (None, 20000),
+                        (None, 20000), (30000, None)])
+    finals = pd.Series({cur: 43000.0})          # nothing published before `cur`
+    f = fc["forecast_5area"](_vol(rows), finals)
+    assert f["maturity"] != f["maturity"]       # NaN
+    assert f["too_green"] is True
+
+
+def test_the_recent_range_brackets_the_typical(fc):
+    """
+    What the tiles show in place of a call. p10-p90 and the median come from
+    one sample, so they have to be ordered.
+    """
+    rows, finals = _history(13, 3000)
+    cur = pd.Timestamp("2026-04-06")
+    green = rows + _week(cur, [(None, None), (None, None), (None, 500),
+                               (None, 500), (600, None)])
+    f = fc["forecast_5area"](_vol(green), finals)
+    assert f["recent_lo"] <= f["typical"] <= f["recent_hi"]
+
+
+def test_the_national_half_carries_a_recent_range_too(fc):
+    """Step 2 has nothing to carry across when step 1 made no call."""
+    rows, finals = _history(13, 3000)
+    cur = pd.Timestamp("2026-04-06")
+    green = rows + _week(cur, [(None, None), (None, None), (None, 500),
+                               (None, 500), (600, None)])
+    f = fc["forecast_5area"](_vol(green), finals)
+    n = fc["forecast_national"](f, finals, finals * 1.5)
+    assert n["recent_lo"] <= n["recent_mid"] <= n["recent_hi"]
+
+
+def test_the_page_does_not_call_a_green_week_a_floor():
+    """
+    The specific false claim this change removes. It is worth a test because
+    it is prose, and prose drifting from the measurement is this repo's
+    recurring defect.
+
+    Read through ast rather than as text: the comment explaining why the
+    wording went necessarily QUOTES the wording, so a substring search over
+    the source finds it forever. ast sees the string literals and no comments.
+    """
+    tree = ast.parse(APP.read_text(encoding="utf-8"))
+    grades = None
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id == "_GRADE"):
+            grades = node.value
+    assert grades is not None, "_GRADE is gone"
+    text = " ".join(n.value for n in ast.walk(grades)
+                    if isinstance(n, ast.Constant) and isinstance(n.value, str))
+    assert "floor, not a forecast" not in text
+    assert "Too early to forecast" in text
+
+
+def test_the_page_branches_on_too_green_everywhere_it_quotes_a_call():
+    """
+    Four places quote the call: the two tiles, Step 1 and Step 2. Missing one
+    leaves a forecast on screen under a heading that says there isn't one.
+    """
+    src = APP.read_text(encoding="utf-8")
+    assert src.count('f5["too_green"]') >= 4, src.count('f5["too_green"]')
+    for marker in ('5-Area &mdash; recent weeks', 'National &mdash; recent weeks',
+                   'too little to', 'No 5-Area call to carry across yet'):
+        assert marker in src, marker

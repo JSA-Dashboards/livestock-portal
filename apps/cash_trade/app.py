@@ -1133,8 +1133,14 @@ def forecast_5area(vol: pd.DataFrame, published5: pd.Series) -> dict:
     # depends on it. It reads only published5 and cur_week, so moving it up
     # changes nothing it sees.
     prior_weeks = published5[published5.index < cur_week]
-    typical = float(prior_weeks.tail(13).median()) if len(prior_weeks) else float("nan")
+    recent = prior_weeks.tail(13)
+    typical = float(recent.median()) if len(recent) else float("nan")
     maturity = (wtd_now / typical) if typical and typical == typical else float("nan")
+    # WHAT RECENT WEEKS ACTUALLY DID, which is what the page shows instead of a
+    # forecast while the week is too green to make one. Same 13 weeks the
+    # typical comes from, so the range and the median describe one sample.
+    recent_lo = float(recent.quantile(0.10)) if len(recent) else float("nan")
+    recent_hi = float(recent.quantile(0.90)) if len(recent) else float("nan")
 
     # THE NARROWING IS GATED ON MATURITY, AND THAT IS NOT THE SAME AS SELECTING
     # ON IT. Picking analogues BY maturity was tried on 2026-10-02 and is worse
@@ -1193,9 +1199,32 @@ def forecast_5area(vol: pd.DataFrame, published5: pd.Series) -> dict:
     else:
         grade = "weak"
 
+    # TOO GREEN TO FORECAST, AND THE PAGE STOPS PRINTING ONE. Measured over
+    # 338 sub-0.50 (week, checkpoint) pairs on the live feed:
+    #
+    #   * the central is NOT a floor. The actual lands at or above it on 50%
+    #     of checkpoints -- 50% / 50% / 48% across 0-5%, 5-20% and 20-50%
+    #     maturity, a coin flip at every level of greenness. The page used to
+    #     say "treat the number as a floor, not a forecast"; that was false.
+    #   * it does not beat ignoring the week. Closer than the recent-weeks
+    #     median on 153 of 340, 45% against a coin flip's 50%.
+    #   * and the band does not rescue it. p10-p90 covers 75% at a median
+    #     width of 86% OF THE WEEK, against the recent-weeks band's 67% at
+    #     64% -- wider, and less coverage per unit of width.
+    #
+    # So below the weak line there is no honest sentence to put under a
+    # number, and the page prints the confirmed count and what recent weeks
+    # did instead. It costs little: 77% of weeks clear 0.50 before Friday's
+    # final, and the ones that do not are the ones a forecast could not have
+    # helped with. Above the line nothing changes -- 13.6% median absolute
+    # error, beating the naive alternative on 56% of checkpoints.
+    too_green = (not done) and (maturity != maturity
+                                or maturity < FORECAST_WEAK_MATURITY)
+
     base = {"wtd": wtd_now, "checkpoint": cp, "done": done, "front": front,
             "narrowed": narrowed, "week": cur_week, "maturity": maturity,
-            "typical": typical, "grade": grade}
+            "typical": typical, "grade": grade, "too_green": too_green,
+            "recent_lo": recent_lo, "recent_hi": recent_hi}
     if pool.empty or done:
         return {**base, "n": int(len(pool)), "central": wtd_now,
                 "low": wtd_now, "high": wtd_now, "late_median": 0.0}
@@ -1231,10 +1260,17 @@ def forecast_national(f5: dict, published5: pd.Series, national: pd.Series) -> d
     if recent.empty:
         return {}
     gap = float(recent.median())
+    # What recent national weeks actually printed, for the state where the
+    # 5-Area half is too green to forecast and this half therefore has nothing
+    # to carry across. Same 13-week window the 5-Area recent range uses.
+    nat_recent = pair.tail(13)["nat"]
     return {"central": f5["central"] + gap,
             "low": f5["low"] + float(band.min()),
             "high": f5["high"] + float(band.max()),
             "gap": gap, "gap_lo": float(band.min()), "gap_hi": float(band.max()),
+            "recent_lo": float(nat_recent.quantile(0.10)),
+            "recent_hi": float(nat_recent.quantile(0.90)),
+            "recent_mid": float(nat_recent.median()),
             "n": int(len(recent)), "pair": pair}
 
 
@@ -2474,16 +2510,36 @@ with tab_fcst:
                                  fmt_hd(f5["wtd"]),
                                  f'<div class="tile-delta-neu">{_dow} {_cut}, published</div>',
                                  "tile-conf"), unsafe_allow_html=True)
+            # TOO GREEN: WHAT RECENT WEEKS DID, NOT WHAT THIS ONE WILL DO.
+            # See forecast_5area's `too_green` for the measurement. The range
+            # is labelled as history because that is what it is -- the page
+            # is not allowed to imply it is a call on this week.
             with c2:
-                st.markdown(tile("5-Area &mdash; forecast print",
-                                 fmt_hd(f5["central"]),
-                                 hd_delta_html(f5["central"], _prev5),
-                                 "tile-d14"), unsafe_allow_html=True)
+                if f5["too_green"]:
+                    st.markdown(tile("5-Area &mdash; recent weeks",
+                                     f'{f5["recent_lo"]:,.0f}&ndash;'
+                                     f'{f5["recent_hi"]:,.0f}',
+                                     f'<div class="tile-delta-neu">hd, last 13 weeks '
+                                     f'&middot; median {f5["typical"]:,.0f}</div>',
+                                     "tile-neu"), unsafe_allow_html=True)
+                else:
+                    st.markdown(tile("5-Area &mdash; forecast print",
+                                     fmt_hd(f5["central"]),
+                                     hd_delta_html(f5["central"], _prev5),
+                                     "tile-d14"), unsafe_allow_html=True)
             with c3:
-                st.markdown(tile("National &mdash; forecast print",
-                                 fmt_hd(fn["central"]),
-                                 hd_delta_html(fn["central"], _prevn),
-                                 "tile-del"), unsafe_allow_html=True)
+                if f5["too_green"]:
+                    st.markdown(tile("National &mdash; recent weeks",
+                                     f'{fn["recent_lo"]:,.0f}&ndash;'
+                                     f'{fn["recent_hi"]:,.0f}',
+                                     f'<div class="tile-delta-neu">hd, last 13 weeks '
+                                     f'&middot; median {fn["recent_mid"]:,.0f}</div>',
+                                     "tile-neu"), unsafe_allow_html=True)
+                else:
+                    st.markdown(tile("National &mdash; forecast print",
+                                     fmt_hd(fn["central"]),
+                                     hd_delta_html(fn["central"], _prevn),
+                                     "tile-del"), unsafe_allow_html=True)
             with c4:
                 st.markdown(tile("National &mdash; last week printed",
                                  fmt_hd(_prevn),
@@ -2500,10 +2556,16 @@ with tab_fcst:
                      "holds the answer 92% of the time."),
             "provisional": (D30_COLOR, "Provisional", "Roughly half to four-fifths of a normal "
                             "week is in. Comparable weeks land within a median 7&ndash;11%."),
-            "weak": (NEG, "Weak &mdash; the week has not traded yet", "Only a small fraction of a "
-                     "normal week is on the board, and most of the trade is still to come. "
-                     "Comparable weeks were a median 36% out and the band held only 38% of the "
-                     "time. Treat the number as a floor, not a forecast."),
+            # NO FORECAST IS PRINTED IN THIS STATE, so this text says why
+            # rather than hedging a number. It used to end "treat the number
+            # as a floor, not a forecast" -- measured over 338 sub-0.50
+            # checkpoints the actual lands at or above the central on 50% of
+            # them, so it was never a floor.
+            "weak": (NEG, "Too early to forecast", "Only a small fraction of a normal week "
+                     "is on the board and most of the trade is still to come. At this point "
+                     "an estimate is no closer than simply quoting recent weeks, and lands "
+                     "above the eventual print as often as below it &mdash; so the tiles show "
+                     "what recent weeks actually did instead of a call on this one."),
             "unknown": (MUTED, "Unrated", "Not enough published weekly history to judge how far "
                         "through the week this is."),
         }
@@ -2538,6 +2600,15 @@ with tab_fcst:
                 f'{"inside" if _in5 else "<b>outside</b>"} the '
                 f'{_scored["f5_lo"]:,.0f}&ndash;{_scored["f5_hi"]:,.0f} hd range we gave.'
                 f'</div>', unsafe_allow_html=True)
+        elif f5["too_green"]:
+            st.markdown(
+                f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
+                f'<b>{f5["wtd"]:,.0f} hd</b> confirmed through the {_dow} {_cut.lower()} '
+                f'&mdash; <b>{f5["maturity"]:.0%}</b> of a typical recent week, too little to '
+                f'estimate the rest from. The last 13 weeks printed '
+                f'<b>{f5["recent_lo"]:,.0f}&ndash;{f5["recent_hi"]:,.0f} hd</b>, median '
+                f'<b>{f5["typical"]:,.0f} hd</b>.</div>',
+                unsafe_allow_html=True)
         else:
             st.markdown(
                 f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
@@ -2554,6 +2625,9 @@ with tab_fcst:
             + ('So the call above was the week-to-date plus the late trade seen in '
                'comparable past weeks at the same point.'
                if _scored is not None else
+               'So the only unknown is the trade still to come &mdash; which this early is '
+               'most of the week, and is why no estimate of it is shown.'
+               if f5["too_green"] else
                f'So the only unknown is trade reported after the last cut, estimated from '
                f'the <b>{f5["n"]}</b> past weeks standing at the same point'
                + (f' with similar front-loading (the previous cut held {_front_s} of the '
@@ -2585,6 +2659,17 @@ with tab_fcst:
                 f'({abs(_mn) / _scored["an"]:.1%})</b>, '
                 f'{"inside" if _inn else "<b>outside</b>"} the range we gave. '
                 f'The gap actually came in at <b>{_gap_real:,.0f} hd</b>.</div>',
+                unsafe_allow_html=True)
+        elif f5["too_green"]:
+            # Nothing to carry across: this step starts from the 5-Area call,
+            # and there isn't one. The gap is still worth printing because it
+            # is what separates the two figures whenever they are quoted.
+            st.markdown(
+                f'<div style="font-size:0.9rem;color:{JPSI_DARK};margin:-2px 0 4px;">'
+                f'No 5-Area call to carry across yet. The recent gap between the two is '
+                f'<b>{fn["gap"]:,.0f} hd</b>, and the last 13 national weeks printed '
+                f'<b>{fn["recent_lo"]:,.0f}&ndash;{fn["recent_hi"]:,.0f} hd</b>, median '
+                f'<b>{fn["recent_mid"]:,.0f} hd</b>.</div>',
                 unsafe_allow_html=True)
         else:
             st.markdown(
@@ -2751,10 +2836,15 @@ with tab_fcst:
                 _prints = (_pw + pd.Timedelta(days=7)).strftime("%a %b %d")
                 st.markdown(
                     f'<div class="note" style="margin-top:6px;">'
-                    f'<b>The top row is this week, still open.</b> It is the same '
-                    f'call as the tiles above &mdash; estimates and confidence only, '
-                    f'with no actual to score against until USDA prints the week of '
-                    f'{_pw.strftime("%b %d")} on <b>{_prints}</b>. '
+                    f'<b>The top row is this week, still open.</b> '
+                    + ('It carries no estimate because the week is too green for '
+                       'one &mdash; the same reason the tiles above show recent weeks '
+                       'instead of a call. '
+                       if f5.get("too_green") else
+                       'It is the same call as the tiles above &mdash; estimates and '
+                       'confidence only. ')
+                    + f'There is no actual to score against until USDA prints the week '
+                    f'of {_pw.strftime("%b %d")} on <b>{_prints}</b>. '
                     f'It is <b>not</b> in the accuracy figures above, which cover the '
                     f'{stats["n"]} settled calls; when the print lands this row is '
                     f'scored like any other and the averages take it in.</div>',
