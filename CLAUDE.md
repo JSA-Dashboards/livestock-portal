@@ -2611,6 +2611,48 @@ forecasting no change" and "there is nothing to compare against" are
 different answers, and the panel would otherwise print a confident `+0.0%`
 where it has nothing. Same rule as `Wasde.revision`.
 
+### Every tile that quotes a revision prints the level it moved from
+
+Corrected 2026-10-09, the fourth page to get this and the same defect each
+time — the beef cutout's Month/Year tiles, Cash Cattle Trade's WASDE panel,
+Cattle Weights, now here. Ross's words on the first: *"you have to do the
+math in your head."*
+
+    USDA 2026 import forecast   6,262   ▲ 130 · 2.1% vs Aug   ->  Aug 6,132
+    WASDE 2026 net imports      3,919   ▲ 120 · 3.2% vs Aug   ->  Aug 3,799
+    2026 YTD net imports        2,784   ▲ 774 · 38.5% vs 2025 ->  2025 2,010
+
+**The level goes on its own line, not into `sub`**, for the reason this page
+exists to keep straight: `sub` carries *"calendar year · million lb, carcass
+weight"*, and carcass weight is the distinction between this page and the FAS
+export figures JSA also publishes. Spending the slot on a level would trade a
+missing number for a missing basis.
+
+**Two tiles are deliberately NOT in the rule.** The year-on-year tiles already
+spend `sub` on "2025 actual 5,388", so they never had it; and the next-year
+tile's delta is measured against THIS year, whose level is the first tile on
+the same row — the reasoning that leaves the cutout's Day Change as a change.
+What the next-year tile *did* need was its `sub`, which quoted the
+month-over-month revision as a bare percentage with no absolute and no base.
+It prints the prior month's level instead, and `nxt_rev` — computed since the
+panel was written and never used — now decides the unchanged branch.
+
+**An unchanged forecast prints no level line.** The base is then the tile's
+own value, and printing it underneath is the "same number twice" the cutout
+tiles were corrected for.
+
+#### The guard has to walk the MODULE, not a function
+
+The first version of the test walked `wasde_panel` and passed while the Net
+trade tab still shipped `▲ 120 · 3.2% vs Aug` over 3,919 with 3,799 nowhere
+on the page. That tile is built in its own block, so a per-function guard
+could not see it — **it was caught in a browser, not by the test.** The guard
+now walks every `delta_pair` call in the file and fails any whose first
+argument is a `*rev` local without `base=`.
+
+That is also why it keys on the ARGUMENT rather than on a count of calls: a
+count forces a level onto the two tiles that correctly do without one.
+
 ### The annual chart names its own landmarks — per flow
 
 A thirty-seven-year bar chart has obvious features a reader can see and

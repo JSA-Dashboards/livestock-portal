@@ -1406,3 +1406,107 @@ def test_the_production_levels_are_the_fixtures_own_arithmetic():
     # worth undoing.
     assert w["base"] == pytest.approx(26003.0)
     assert w["base"] + w["yoy_abs"] == pytest.approx(w["value"])
+
+
+# -- US Beef Trade: the same tiles, the same correction ----------------------
+
+def _trade_delta():
+    sys.path.insert(0, str(ROOT / "tests"))
+    from streamlit_source import load_from_app
+    return load_from_app(ROOT / "apps" / "beef_trade" / "app.py", "delta_pair")
+
+
+def test_every_trade_tile_that_quotes_a_revision_also_quotes_its_base():
+    """
+    A STANDING GUARD OVER THE WHOLE MODULE, and it has to be: the first
+    version of this walked `wasde_panel` alone and passed while the Net trade
+    tab still shipped "▲ 120 · 3.2% vs Aug" over 3,919 with 3,799 printed
+    nowhere. That tile is built in its own block, so a per-function guard
+    could never have seen it. Caught in a browser, not by the test.
+
+    KEYED ON THE ARGUMENT, NOT ON A COUNT OF CALLS. The year-on-year tiles
+    already spend `sub` on "2025 actual 5,388", so they never had the defect
+    and must not be made to print a second level; the next-year tile's delta
+    is measured against THIS year, whose level is the first tile on its row --
+    the same reason the cutout's Day Change tile is left as a change. Only a
+    month-over-month revision is in the rule, and those are the locals whose
+    names end in `rev`.
+    """
+    import ast
+    src = (ROOT / "apps" / "beef_trade" / "app.py").read_text(encoding="utf-8")
+    calls = [n for n in ast.walk(ast.parse(src))
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+             and n.func.id == "delta_pair"]
+    revisions = [c for c in calls
+                 if c.args and isinstance(c.args[0], ast.Name)
+                 and c.args[0].id.endswith("rev")]
+    assert len(revisions) == 2, (
+        f"expected the forecast and net-imports revision tiles, found "
+        f"{[c.args[0].id for c in revisions]}")
+    for c in revisions:
+        kw = {k.arg for k in c.keywords}
+        assert "base" in kw and "base_label" in kw, (
+            f"a tile at line {c.lineno} quotes a revision with no level to "
+            f"measure it from")
+
+    # and the year-on-year tiles still carry their own level in `sub`
+    assert 'sub=f"{year - 1} actual {fmt(base)}"' in src
+    assert 'sub=f"{n_year - 1} actual net {fmt(base_net)}"' in src
+
+
+def test_the_trade_delta_renders_the_base_under_the_move():
+    delta_pair = _trade_delta()
+
+    out = delta_pair(130, 2.12, " vs Aug", base=6132, base_label="Aug")
+    assert "▲ 130 · 2.1% vs Aug" in out
+    assert "Aug 6,132" in out
+    assert out.count("<div") == 2
+
+    # An UNCHANGED forecast prints no level, because the base is the tile's
+    # own value and printing it twice is the defect this exists to remove.
+    flat = delta_pair(0, 0.0, " vs Aug", base=6262, base_label="Aug")
+    assert "unchanged vs Aug" in flat
+    assert "6,262" not in flat
+    assert flat.count("<div") == 1
+
+    # Nothing to compare against prints no line rather than a bare label.
+    assert "tile-sub" not in delta_pair(None, None, " vs Aug")
+
+
+def test_the_next_year_tile_quotes_a_level_not_a_bare_percentage():
+    """
+    It used to read "+2.1% vs Aug · million lb" — a revision with no absolute,
+    no base, and nothing else on the page to recover either from. The level is
+    the figure that cannot be derived, so that is the one printed.
+
+    `nxt_rev` was computed for this and then never used; it decides the
+    unchanged case now.
+    """
+    import ast
+    src = (ROOT / "apps" / "beef_trade" / "app.py").read_text(encoding="utf-8")
+    fn = next(n for n in ast.walk(ast.parse(src))
+              if isinstance(n, ast.FunctionDef) and n.name == "wasde_panel")
+    panel = ast.get_source_segment(src, fn)
+    assert "nxt_rev_pct:+,.1f}% vs" not in panel, "the bare percentage is back"
+    assert "nxt_prior" in panel and "fmt(nxt_prior)" in panel
+    assert "elif nxt_rev == 0:" in panel      # the dead local, now load-bearing
+    assert "elif nxt_rev == 0:" in panel          # the dead local, now load-bearing
+
+
+def test_the_fixture_levels_are_what_the_trade_tiles_will_print():
+    """base + move == value on the real September 2026 release."""
+    w = _parsed()
+    for attr, now, was, base in (("imports", 6262.0, 6132.0, 5388.0),
+                                 ("exports", 2343.0, 2333.0, 2579.0)):
+        assert w.value("Beef", attr) == pytest.approx(now)
+        assert w.get("Beef").prior[attr] == pytest.approx(was)
+        assert w.value("Beef", attr, 2025) == pytest.approx(base)
+        assert was + (now - was) == pytest.approx(now)
+        assert base + (now - base) == pytest.approx(now)
+
+    # 2027 imports were left alone that month, which is the unchanged branch
+    # the tile must not fill with a level identical to its own value.
+    nxt = w.get("Beef", 2027)
+    assert nxt.current["imports"] == nxt.prior["imports"] == pytest.approx(6050.0)
+    # exports were NOT, so both branches are exercised by one fixture.
+    assert nxt.current["exports"] != nxt.prior["exports"]
