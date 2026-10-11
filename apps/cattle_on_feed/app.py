@@ -11,14 +11,12 @@ Data source: USDA NASS QuickStats API (https://quickstats.nass.usda.gov)
 """
 
 import io
-import os
 import sys
 from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
-import requests
 import streamlit as st
 
 # Sibling modules for the COF Recap tab and the Cold Storage view. Safe under
@@ -28,6 +26,7 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).parent))
 import cof_recap  # noqa: E402
 import cold_storage  # noqa: E402
+from nass_cache_client import fetch_cached  # noqa: E402
 
 # ── JSA brand ────────────────────────────────────────────────────────────────
 JSA_GREEN    = "#5e7164"
@@ -47,18 +46,10 @@ HEIFER_COLOR = "#6fa8c4"
 JSA_LOGO_FULL  = "https://www.jpsi.com/wp-content/themes/gate39media/img/logo-full.png"
 JSA_LOGO_WHITE = "https://www.jpsi.com/wp-content/themes/gate39media/img/logo-white.png"
 
-# NASS key comes from Streamlit secrets (Cloud) or the environment (dev); no
-# key is committed to the repo. This dashboard's six Cattle on Feed series are
-# now cached by usda-nass-etl (jobs/cattle_on_feed.py), so it can be moved onto
-# nass_cache_client and drop the key entirely -- see that job list's docstring
-# for the year-bound change the app needs first.
-try:
-    API_KEY = st.secrets.get("NASS_API_KEY", "")
-except Exception:
-    API_KEY = ""
-API_KEY = API_KEY or os.environ.get("NASS_API_KEY", "")
-
-BASE_URL = "https://quickstats.nass.usda.gov/api/api_GET/"
+# Cattle on Feed and Cold Storage read NASS through the shared, scheduled-pull
+# cache (usda-nass-etl: jobs/cattle_on_feed.py and jobs/cold_storage.py), so this
+# page needs no NASS API key. nass_cache_client.py is vendored; keep it
+# byte-identical to that repo's copy.
 
 # The 13 states NASS publishes individually in the Cattle on Feed report
 # (1,000+ head feedlots); "OT" is NASS's "Other States" catch-all.
@@ -188,19 +179,6 @@ st.markdown(f"""
 
 # ── Data fetching ──────────────────────────────────────────────────────────────
 
-def _nass_get(params: dict) -> dict:
-    for attempt in range(3):
-        try:
-            r = requests.get(BASE_URL, params=params, timeout=60)
-            return r.json()
-        except requests.exceptions.Timeout:
-            if attempt < 2:
-                continue
-        except Exception:
-            pass
-    return {}
-
-
 def _month_num(reference_period_desc: str):
     if not reference_period_desc:
         return None
@@ -210,20 +188,23 @@ def _month_num(reference_period_desc: str):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_series(short_desc: str, years: tuple, domaincat_filter: str = None) -> pd.DataFrame:
-    # Single ranged request (year__GE/year__LE) instead of one call per year —
-    # NASS API supports range suffixes and this stays well under its 50k-row cap.
+    # Reads the shared NASS cache (usda-nass-etl jobs/cattle_on_feed.py), not NASS
+    # live. The ETL caches ONE broad, unfiltered pull per series -- no year bounds,
+    # no domaincat_desc -- because a key built from year__GE/year__LE (which shift
+    # every January) would go stale annually and silently miss. The year range and
+    # the 1,000+-head domaincat filter are applied locally below instead.
     params = {
-        "key":               API_KEY,
         "source_desc":       "SURVEY",
         "sector_desc":       "ANIMALS & PRODUCTS",
         "group_desc":        "LIVESTOCK",
         "commodity_desc":    "CATTLE",
         "short_desc":        short_desc,
-        "year__GE":          min(years),
-        "year__LE":          max(years),
-        "format":            "JSON",
     }
-    payload = _nass_get(params)
+    try:
+        payload = fetch_cached(params)
+    except Exception as e:
+        st.error(f"NASS cache error: {e}")
+        return pd.DataFrame(columns=["year", "month", "date", "agg_level_desc", "state_alpha", "Value"])
     data = payload.get("data") if isinstance(payload, dict) else None
     if not data:
         return pd.DataFrame(columns=["year", "month", "date", "agg_level_desc", "state_alpha", "Value"])
@@ -237,6 +218,7 @@ def fetch_series(short_desc: str, years: tuple, domaincat_filter: str = None) ->
     df = df.dropna(subset=["Value", "month"]).copy()
     df["month"] = df["month"].astype(int)
     df["year"] = df["year"].astype(int)
+    df = df[(df["year"] >= min(years)) & (df["year"] <= max(years))]
     df["date"] = pd.to_datetime(dict(year=df["year"], month=df["month"], day=1))
     df["state_alpha"] = df["state_alpha"].where(df["agg_level_desc"] != "NATIONAL", "US")
     keep = ["year", "month", "date", "agg_level_desc", "state_alpha", "Value"]
@@ -483,7 +465,7 @@ CS_HEADLINE = ["Beef, total", "Pork, total", cold_storage.TOTAL_RED_MEAT]
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _cs_fetch(label: str) -> pd.DataFrame:
-    return cold_storage.fetch_series(cold_storage.SERIES[label], API_KEY, _month_num)
+    return cold_storage.fetch_series(cold_storage.SERIES[label], _month_num)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -687,7 +669,7 @@ def render_cold_storage() -> None:
 
     if not kpi:
         st.error("No data returned from USDA NASS QuickStats for this series — "
-                 "check the NASS_API_KEY in st.secrets.")
+                 "the shared NASS cache has no rows for it (usda-nass-etl jobs/cold_storage.py).")
         return
 
     tab_over, tab_hist, tab_season, tab_data = st.tabs([

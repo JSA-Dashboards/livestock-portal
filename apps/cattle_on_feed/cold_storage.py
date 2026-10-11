@@ -5,8 +5,8 @@ Data comes from QuickStats, NOT from the monthly PDF at
 `esmis.nal.usda.gov/.../cost{MM}{YY}.pdf`. The PDF is one month with two
 comparison columns; QuickStats carries the same numbers back to **1917** for
 beef, pork, lamb, turkey and cheese, and to 1915 for butter, which is what
-makes a real MoM/YoY history possible at all. Same API and same NASS_API_KEY
-the rest of this dashboard already uses, so the Cold Storage view needs no new
+makes a real MoM/YoY history possible at all. Read through the shared NASS cache
+(usda-nass-etl jobs/cold_storage.py), so the view needs no NASS key and no new
 secret.
 
 USDA REVISES THE PRIOR MONTH, AND QUICKSTATS CARRIES THE REVISION. Each
@@ -37,9 +37,8 @@ the repo, so the by-name `sys.modules` collision the portal lives with does not
 apply — same footing as `cof_recap`.
 """
 import pandas as pd
-import requests
 
-BASE_URL = "https://quickstats.nass.usda.gov/api/api_GET/"
+from nass_cache_client import fetch_cached
 
 # Label -> QuickStats short_desc. Order is the order of USDA's own Frozen Red
 # Meat table, beef first, with the headline poultry and dairy lines after it so
@@ -92,32 +91,25 @@ def report_url(year: int, month: int) -> str:
     return REPORT_URL.format(mm=month, yy=year % 100)
 
 
-def fetch_series(short_desc: str, api_key: str, month_num) -> pd.DataFrame:
+def fetch_series(short_desc: str, month_num) -> pd.DataFrame:
     """One series, whole history, as date/value. Empty frame on any failure.
 
-    No year bounds: the point of this view is the full run, and the longest
-    series is ~1,300 rows against NASS's 50,000-row cap. `month_num` is
-    app._month_num, passed in so the two pages cannot drift on how
+    Read from the shared NASS cache: the ETL pulls each series NATIONAL, with no
+    year bounds, so the cache key never goes stale and the params here must hash
+    identically to jobs/cold_storage.py. The longest series is ~1,300 rows.
+    `month_num` is app._month_num, passed in so the two pages cannot drift on how
     "END OF AUG" is read.
     """
     params = {
-        "key":            api_key,
         "source_desc":    "SURVEY",
         "sector_desc":    "ANIMALS & PRODUCTS",
         "short_desc":     short_desc,
         "agg_level_desc": "NATIONAL",
-        "format":         "JSON",
     }
-    payload = {}
-    for attempt in range(3):
-        try:
-            payload = requests.get(BASE_URL, params=params, timeout=60).json()
-            break
-        except requests.exceptions.Timeout:
-            if attempt == 2:
-                return pd.DataFrame(columns=["date", "value"])
-        except Exception:
-            return pd.DataFrame(columns=["date", "value"])
+    try:
+        payload = fetch_cached(params)
+    except Exception:
+        return pd.DataFrame(columns=["date", "value"])
 
     data = payload.get("data") if isinstance(payload, dict) else None
     if not data:
