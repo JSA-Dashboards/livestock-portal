@@ -696,11 +696,62 @@ if len(_versions) > 1:
                     st.session_state[f"wcr_{_key}"] = "\n".join(_back.get(_key, []))
                 st.rerun()
 
+# -- which contract month the technical read is about --------------------------
+#
+# BEFORE hints(), and that ordering is the whole of it. `hints()` quotes the
+# 9-day, 20-day, swing high/low and prior range off ctx["tech_lc"], and
+# `render.technicals_block` prints the heading off the same dict. Applying the
+# dropdown after hints() had been computed would show Dec in the heading over
+# October's figures for one rerun -- a letter and its own reference numbers
+# disagreeing, which is the failure this repo keeps recording.
+#
+# Seeded from the saved ctx rather than left to default, so a month chosen
+# before a reboot survives. Written back to the ctx file so `build.main
+# --no-fetch`, the run that makes the emailed PDF, renders the month that was
+# previewed rather than the nearby one.
+_TECH_PICKERS = {
+    "technicals_lc": (("tech_lc", "Live cattle"),),
+    "technicals_fc": (("tech_fc", "Feeders"),),
+    # The Tue/Wed/Thu recap has ONE written technicals section covering both
+    # products, and hints() still quotes both -- so both pickers belong on it.
+    "technicals": (("tech_lc", "Live cattle"), ("tech_fc", "Feeders")),
+}
+
+for _tk in letter_build.TECH_KEYS:
+    _state = f"wcr_{_tk}_month"
+    if _state not in st.session_state and ctx.get(f"{_tk}_month"):
+        st.session_state[_state] = ctx[f"{_tk}_month"]
+    if st.session_state.get(_state):
+        ctx[f"{_tk}_month"] = st.session_state[_state]
+letter_build.select_technicals(ctx)
+
+# Persist only on an actual change -- this script reruns on every keystroke in
+# the commentary boxes, and rewriting the ctx each time would be a disk write
+# per character.
+if data_path.exists():
+    import json as _json
+    _saved = _json.loads(data_path.read_text(encoding="utf-8"))
+    if any(_saved.get(f"{k}_month") != ctx.get(f"{k}_month")
+           for k in letter_build.TECH_KEYS):
+        for _k in letter_build.TECH_KEYS:
+            _saved[f"{_k}_month"] = ctx.get(f"{_k}_month")
+        data_path.write_text(
+            _json.dumps(_saved, indent=2, default=letter_build._jsonable),
+            encoding="utf-8")
+
 hints = letter_build.hints(ctx, kind)
 edited = {}
 for key, title in commentary.sections_for(kind):
     with st.container(border=True):
         st.markdown(f"**{title}**")
+        for _tk, _plabel in _TECH_PICKERS.get(key, ()):
+            _opts = [m for m in letter_build.technical_months(ctx, _tk)
+                     if m in (ctx.get(f"{_tk}_all") or {})]
+            if len(_opts) > 1:
+                st.selectbox(
+                    f"{_plabel} month", _opts, key=f"wcr_{_tk}_month",
+                    help="Which contract this read is about. The heading and "
+                         "the figures below follow it.")
         if hints.get(key):
             with st.expander("Figures for reference", expanded=False):
                 for line in hints[key]:

@@ -3367,6 +3367,68 @@ computed moving averages for both products print above it; the written read is
 passed to **neither** sub-block, because handing the same bullets to both prints
 it twice, once under each product.
 
+### The technical read picks its own month
+
+Added 2026-10-12 at Ross's request: *"can we make a drop down where I can
+select what technical month I would like to talk about instead of always
+defaulting to the nearby contract?"* Two selectboxes, one per product, each
+sitting directly above the Technicals box it governs.
+
+**It was already wrong on the page that day.** The saved Monday draft read
+"Dec live cattle holding support at 100-day MA at 225.675" under a heading
+that said **Oct**, beside October's 9-day and 20-day. The letter had always
+run technicals on `live_cattle[0]` — the front contract — and the front
+contract is not always the one worth writing about, least of all on a roll
+week.
+
+**EVERY CONTRACT IS FETCHED, NOT JUST THE SELECTED ONE.** `gather()` builds
+all `N_CONTRACTS` per product into `ctx["tech_lc_all"]` / `["tech_fc_all"]`,
+keyed by month. That costs four extra `/aggs` calls per build and buys two
+things: the dropdown is instant, and **`build.main --no-fetch` can render
+any month with no network at all**. A fetch-on-change design would have
+broken the second quietly, and the PDF is made on that path — so the first
+sign would have been a deck going out on the wrong month.
+
+**ONE RESOLVER, CALLED FROM THREE PLACES.** `build.select_technicals(ctx)`
+turns `tech_lc_month` into `ctx["tech_lc"]`; the fetch calls it, the page
+calls it, and `main --no-fetch` calls it. That is deliberate rather than
+tidy: `render.technicals_block` prints the heading off `tech["month"]` and
+`hints()` quotes the averages off the same dict, so two callers each
+resolving it their own way is how the letter ends up saying Dec over
+October's numbers — the letter-versus-dashboard failure recorded three
+times above, arriving inside one file.
+
+**The page applies the choice BEFORE `hints()` runs**, and that ordering is
+the only subtle thing here. `hints()` reads `ctx["tech_lc"]`, so applying
+the dropdown after it would show the new month's heading over the old
+month's figures for one rerun. Script order again — the same shape as the
+`NameError` recorded for the WASDE panel.
+`tests/test_technicals_month.py` compares the two line numbers; verified it
+fails when the call is moved after.
+
+Four behaviours that look like edge cases and are the normal ones:
+
+- **It still defaults to the front contract**, so nobody's letter moves
+  until they pick a month.
+- **The two products are independent.** Dec live cattle against Jan feeders
+  is an ordinary pair of reads.
+- **A month that has rolled off falls back to the front**, not to nothing.
+  The choice is stored per issue date and the contracts roll under it —
+  feeders went Sep to Oct/Nov/Jan mid-week on 2026-09-25. Falling back to
+  nothing would cost the section its figures and its heading.
+- **A month whose fetch failed stays in the dropdown, with its error.**
+  Dropping it would make a dark feed look like a contract that does not
+  exist, and the Massive cattle series has gone silent for a fortnight
+  before now.
+
+The choice persists into `data_<slug>_<date>.json`, written only when it
+actually changes — the page reruns on every keystroke in the commentary
+boxes, so writing unconditionally would be a disk write per character.
+
+The **Tue/Wed/Thu recap gets both pickers on its single Technicals section**,
+because `hints()` quotes both products there even though the written read is
+one block.
+
 ### Only Friday quotes the week, and that was a decision
 
 `config.CHANGE_BASIS_BY_KIND`. Monday through Thursday quote the prior session;

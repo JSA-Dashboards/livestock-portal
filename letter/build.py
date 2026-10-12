@@ -281,6 +281,49 @@ def report_source_health(ctx: dict, issue: date, kind: str, errors: list) -> Non
             "Snowflake credentials for the live values.")
 
 
+TECH_KEYS = ("tech_lc", "tech_fc")
+
+
+def technical_months(ctx: dict, key: str) -> list:
+    """The months offered for one product, front first."""
+    rows = ctx.get("live_cattle" if key == "tech_lc" else "feeder_cattle") or []
+    ordered = [c.get("month") for c in rows if c.get("month")]
+    built = ctx.get(key + "_all") or {}
+    # Contract order, then anything built that the futures list no longer
+    # carries -- a month can survive in the cached technicals across a roll.
+    return ordered + [m for m in built if m not in ordered]
+
+
+def select_technicals(ctx: dict) -> None:
+    """
+    Resolve ctx['tech_lc'] and ['tech_fc'] from the chosen month.
+
+    ONE PLACE, CALLED FROM THREE. The fetch sets it, the page sets it when
+    the dropdown moves, and `main --no-fetch` sets it before rendering --
+    so a letter, its PDF and the figures Ross writes against can never be
+    about different months. `render.technicals_block` prints the heading
+    off `tech["month"]` and `hints()` quotes the averages off the same
+    dict, which is exactly the pairing that goes wrong when two callers
+    each resolve it their own way.
+
+    Falls back to the front contract when the stored choice is absent or
+    has rolled off, rather than to nothing: an unavailable month must not
+    cost the section its figures.
+    """
+    for key in TECH_KEYS:
+        built = ctx.get(key + "_all") or {}
+        if not built:
+            continue
+        months = technical_months(ctx, key)
+        chosen = ctx.get(key + "_month")
+        if chosen not in built:
+            chosen = next((m for m in months if m in built), None)
+        if chosen is None:
+            continue
+        ctx[key + "_month"] = chosen
+        ctx[key] = built[chosen]
+
+
 def gather(issue: date, errors: list, kind: str = "tuesday", cof_guesses: dict = None) -> dict:
     api_key = os.environ.get("MASSIVE_API_KEY", "").strip()
     if not api_key:
@@ -356,13 +399,36 @@ def gather(issue: date, errors: list, kind: str = "tuesday", cof_guesses: dict =
         # decided further down, once the commentary and the day's moves are
         # known -- see build_chart().
 
-        # Technicals run on the front contract of each -- the one the letter names.
-        if ctx["live_cattle"]:
-            ctx["tech_lc"] = _try("live cattle technicals", lambda: technicals.build(
-                ctx["live_cattle"][0]["ticker"], api_key, config.MA_WINDOWS), errors)
-        if ctx["feeder_cattle"]:
-            ctx["tech_fc"] = _try("feeder technicals", lambda: technicals.build(
-                ctx["feeder_cattle"][0]["ticker"], api_key, config.MA_WINDOWS), errors)
+        # EVERY CONTRACT, NOT JUST THE FRONT ONE. Ross picks which month the
+        # technical read is about -- it is not always the nearby, and on a
+        # roll week it is routinely not. Asked for 2026-10-12.
+        #
+        # All three are fetched up front rather than on demand, which costs
+        # four extra /aggs calls per build and buys two things: the dropdown
+        # is instant, and `build.main --no-fetch` -- the run that makes the
+        # emailed PDF -- can render any month without a network at all. A
+        # fetch-on-change design would have broken the second quietly, which
+        # is the half nobody would notice until a PDF came out on the wrong
+        # month.
+        #
+        # A month whose fetch fails is still RECORDED, with its error, so it
+        # stays in the dropdown and says why. Dropping it would make a failed
+        # feed look like a contract that does not exist.
+        for key, label, rows in (("tech_lc", "live cattle", ctx["live_cattle"]),
+                                 ("tech_fc", "feeder", ctx["feeder_cattle"])):
+            built = {}
+            for c in rows:
+                month = c.get("month")
+                if not month:
+                    continue
+                built[month] = _try(
+                    f"{label} technicals {month}",
+                    lambda c=c: technicals.build(c["ticker"], api_key,
+                                                 config.MA_WINDOWS),
+                    errors) or {"ticker": c.get("ticker"), "month": month,
+                                "error": "no bars returned"}
+            ctx[key + "_all"] = built
+        select_technicals(ctx)
 
     ctx["cash"] = _try("cash trade (LM_CT150/CT154)", sources.fetch_cash_trade, errors) or {}
     ctx["cutout"] = _try("boxed beef (LM_XB403/LSWFEDCC)", sources.fetch_cutout, errors) or {}
@@ -1022,6 +1088,12 @@ def main(argv=None) -> int:
     # 2026-09-24 says "week" for every letter. A --no-fetch re-render would
     # quote week-over-week on a Monday and print [[?]] for it.
     ctx["change_basis"] = config.change_basis_for(kind)
+
+    # FROM THE CACHE, unlike the basis above, because this one IS a choice --
+    # which month Ross decided to write about. A --no-fetch re-render must
+    # reproduce the letter he just previewed, so the stored month is honoured
+    # and only falls back to the front contract when it is missing.
+    select_technicals(ctx)
 
     # AFTER the commentary is read, because the commentary is the best evidence
     # of what the morning is about -- see chart.pick. Re-picked on a --no-fetch
