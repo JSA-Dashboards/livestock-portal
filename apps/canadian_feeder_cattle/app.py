@@ -33,6 +33,7 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).parent))
 
 import ca_prices as cap
+import ca_trade as ct
 
 
 # ── JSA Brand Colors (shared with the rest of the portal shell) ─────────────
@@ -189,6 +190,51 @@ seventeen days, rather than against its weekly cadence. A rule written from
 """
 
 
+# Module level, beside _CA_METHOD and for the same reason.
+_CA_TRADE_METHOD = """
+**Source.** USDA ERS, `cattle-monthly-us-trade-head.csv` — monthly US cattle
+trade by partner country, in HEAD, 1989 to date. Keyless, plain CSV, and the
+**adjacent download** to the beef file `apps/beef_trade/trade_flows.py`
+already reads: media/29545 against 29544 on the same ERS product page.
+
+**Why not Census.** The obvious route is the Census trade API, which the
+cme-feeder-cattle-index repo already uses for the Mexican head counts. Probed
+on 2026-10-12 and rejected on four measured grounds: US exports to Canada
+collapse into a single Schedule B code with no weight, sex or purpose split;
+bison runs ~24,000 head a year under `0102*` and would contaminate a naive
+sum; the sub-90kg codes are **bob calves** at 96–98 lb average, not feeders,
+and the sibling repo's classifier buckets them as feeder; and the HS
+vocabulary breaks at 2012-01 so a continuous series needs an explicit code
+map. ERS has already made all four decisions, in USDA's own classes.
+
+**The directions are not symmetric.** Imports split into *cattle and calves
+for feeding*, *for immediate slaughter* and *for breeding*. Exports are one
+figure, all cattle, for every country in the file. The page reads that off the
+data on every load rather than asserting it here, so if ERS ever adds an
+export class the caption stops being true instead of quietly misleading.
+
+**The class split starts 2012; the total runs from 1989.** The earlier years
+are USDA not publishing a breakdown, not a collapse in feeder trade, so the
+chart says which year the split begins rather than leaving the axis to imply
+it.
+
+**`World total` is a row in this file.** Summing every country doubles the
+answer, and a doubled cattle import figure is wrong and entirely plausible.
+Every figure here is filtered to a named country, and Canada's share is taken
+against USDA's own `World total` row rather than a sum.
+
+**The free audit.** The three import classes must sum to `Cattle, total`.
+Zero error across all 176 Canadian months on 2026-10-12, so the tolerance is
+zero — slack on an integer identity published by one agency in one file is a
+hole rather than a safeguard. The page prints the result either way.
+
+**Cross-checked against Statistics Canada**, table 32-10-0139, which publishes
+the same flow from the other side with no key. The two agencies agree to the
+rounding step on every half-year tested — which also establishes that
+essentially all Canadian cattle exports are US-bound.
+"""
+
+
 # ── Data ────────────────────────────────────────────────────────────────────
 
 #: The rung this page headlines. 701-800 lb is the weight the CME feeder index
@@ -219,6 +265,34 @@ def load_ca(schema: int = cap.SCHEMA):
         return {"prices": prices, "slaughter": slaughter}
     except Exception as e:
         st.session_state["_ca_error"] = f"{type(e).__name__}: {e}"
+        return None
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def load_trade(schema: int = ct.SCHEMA):
+    """The ERS cattle trade file. None on any failure.
+
+    Six hours, not thirty minutes: ERS publishes this monthly and it runs
+    about six weeks behind, so a shorter TTL buys nothing and costs a 425KB
+    download. `schema` is hashed into the cache key and the caller passes it --
+    both halves of the trap, neither of which works alone.
+
+    The ERS fetch is DELIBERATELY SEPARATE from the Snowflake one. They are
+    different hosts on different protocols, and an AMS 3213 outage must not
+    blank a trade panel that has no AMS in it -- the four-line shape the
+    Saturday Slaughter view and the morning cutout panel both use.
+    """
+    try:
+        df = ct.fetch()
+        latest = ct.latest_month(df)
+        if latest is None:
+            return None
+        return {"df": df, "latest": latest,
+                "audit": ct.reconciles(df),
+                "export_classes": ct.export_classes(df),
+                "class_floor": ct.class_floor(df)}
+    except Exception as e:
+        st.session_state["_ca_trade_error"] = f"{type(e).__name__}: {e}"
         return None
 
 
@@ -274,8 +348,8 @@ if _stale:
         f"stopped."
     )
 
-tab_prices, tab_kill = st.tabs(
-    ["Feeder Prices", "Canadian Slaughter"])
+tab_prices, tab_kill, tab_trade = st.tabs(
+    ["Feeder Prices", "Canadian Slaughter", "Imports & Exports"])
 
 # ── Feeder prices ───────────────────────────────────────────────────────────
 with tab_prices:
@@ -473,8 +547,183 @@ with tab_kill:
         )
 
 st.markdown("<hr style='margin:18px 0 8px;'>", unsafe_allow_html=True)
+# ── Imports & exports ───────────────────────────────────────────────────────
+with tab_trade:
+    st.markdown('<div class="sec-header">US–Canada Cattle Trade</div>',
+                unsafe_allow_html=True)
+
+    T = load_trade(ct.SCHEMA)
+    if T is None:
+        st.error("Could not load the ERS cattle trade file.")
+        st.caption(
+            "This tab reads `cattle-monthly-us-trade-head.csv` from "
+            "`ers.usda.gov` — a keyless CSV, the adjacent download to the beef "
+            "file the US Beef Trade page already fetches."
+        )
+        if st.session_state.get("_ca_trade_error"):
+            st.caption(f"Detail: `{st.session_state['_ca_trade_error']}`")
+    else:
+        TD = T["df"]
+        _y, _m = T["latest"]
+        _mon = date(_y, _m, 1).strftime("%b")
+
+        # THE ASYMMETRY IS STATED FIRST, and it is read off the data rather
+        # than asserted: export_classes() returns what ERS actually publishes.
+        # A feeder import figure beside a total export figure under one heading
+        # would be two different populations wearing one label.
+        _exp_classes = T["export_classes"]
+        if _exp_classes == [ct.TOTAL]:
+            st.warning(
+                "**USDA publishes a feeder class on imports only.** The import "
+                "side splits into *cattle and calves for feeding*, *for "
+                "immediate slaughter* and *for breeding*; the export side is "
+                "**all cattle, one figure**, for every country in the file. So "
+                "there is a Canadian feeder *import* number below and there is "
+                "no Canadian feeder *export* number to put beside it — that is "
+                "what USDA publishes, not a gap in this page."
+            )
+
+        _f_now, _ = ct.ytd(TD, ct.IMPORTS, ct.FEEDER, _y, through_month=_m)
+        _f_prv, _ = ct.ytd(TD, ct.IMPORTS, ct.FEEDER, _y - 1, through_month=_m)
+        _i_now, _ = ct.ytd(TD, ct.IMPORTS, ct.TOTAL, _y, through_month=_m)
+        _i_prv, _ = ct.ytd(TD, ct.IMPORTS, ct.TOTAL, _y - 1, through_month=_m)
+        _e_now, _ = ct.ytd(TD, ct.EXPORTS, ct.TOTAL, _y, through_month=_m)
+        _e_prv, _ = ct.ytd(TD, ct.EXPORTS, ct.TOTAL, _y - 1, through_month=_m)
+
+        def _hd(now, prv, label):
+            """A head tile with its year-ago LEVEL, not just the percentage.
+
+            The standing rule in CLAUDE.md, corrected on five other pages, in
+            Ross's words: "you have to do the math in your head"."""
+            if now is None:
+                return sub(label)
+            if not prv:
+                return sub(f"{label} · no year-ago figure")
+            pct = (now - prv) / prv * 100.0
+            kind = "pos" if pct > 0 else ("neg" if pct < 0 else "neu")
+            arrow = "▲" if pct > 0 else ("▼" if pct < 0 else "")
+            return (f'<div class="tile-delta-{kind}">{arrow} '
+                    f'{abs(pct):.1f}%</div>'
+                    + sub(f"{label} · {_y - 1} was {prv:,} head"))
+
+        c = st.columns(4)
+        with c[0]:
+            st.markdown(tile(
+                f"Feeder Cattle Imported from Canada, {_y} YTD",
+                f"{_f_now:,}" if _f_now else "—",
+                _hd(_f_now, _f_prv, f"head · Jan–{_mon}")),
+                unsafe_allow_html=True)
+        with c[1]:
+            st.markdown(tile(
+                f"All Cattle Imported from Canada, {_y} YTD",
+                f"{_i_now:,}" if _i_now else "—",
+                _hd(_i_now, _i_prv, f"head · Jan–{_mon}")),
+                unsafe_allow_html=True)
+        with c[2]:
+            st.markdown(tile(
+                f"All Cattle Exported to Canada, {_y} YTD",
+                f"{_e_now:,}" if _e_now else "—",
+                _hd(_e_now, _e_prv, f"head · Jan–{_mon}")),
+                unsafe_allow_html=True)
+        with c[3]:
+            # NET, and it is the figure that has actually moved. Imports down
+            # and exports up compound into each other here, so the net falls
+            # far faster than either leg -- which is the thing a reader would
+            # otherwise have to subtract for themselves.
+            _n_now = (_i_now - _e_now) if (_i_now and _e_now) else None
+            _n_prv = (_i_prv - _e_prv) if (_i_prv and _e_prv) else None
+            st.markdown(tile(
+                f"Net Cattle Imports from Canada, {_y} YTD",
+                f"{_n_now:,}" if _n_now is not None else "—",
+                _hd(_n_now, _n_prv, f"head in minus head out · Jan–{_mon}")),
+                unsafe_allow_html=True)
+
+        _share = ct.share_of_us_imports(TD, _y, _m)
+        _audit = T["audit"]
+        st.caption(
+            f"Through **{_mon} {_y}**, the newest month ERS has published — "
+            f"this file runs about six weeks behind. Canada is "
+            f"**{_share:.1f}%** of all US cattle imports this year, so for "
+            f"practical purposes this *is* the US cattle import trade."
+            + (f" The three import classes sum to USDA's own total exactly "
+               f"across all {_audit['checked']} months checked."
+               if _audit.get("ok") else
+               f" ⚠️ The import classes no longer sum to USDA's published "
+               f"total — worst gap {_audit.get('worst')} head. Treat the class "
+               f"split below with suspicion.")
+        )
+
+        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+
+        t_class, t_both, t_tmethod = st.tabs(
+            ["Imports by class", "Both directions", "How this is built"])
+
+        with t_class:
+            fig = go.Figure()
+            for com, colour in ((ct.FEEDER, JPSI_BLUE),
+                                (ct.SLAUGHTER, "#B07A2A"),
+                                (ct.BREEDING, "#16a34a")):
+                a = ct.annual(TD, ct.IMPORTS, com)
+                if a.empty:
+                    continue
+                fig.add_trace(go.Bar(
+                    # CATEGORY, not a numeric axis. Plotly type-sniffs, and
+                    # year strings build a LINEAR axis on which a non-numeric
+                    # label is never drawn -- the trap beef_trade.annual_figure
+                    # records, where a whole bar silently vanished.
+                    x=[str(int(v)) for v in a["year"]],
+                    y=a["head"], name=com, marker_color=colour))
+            fig.update_layout(
+                barmode="stack", height=360,
+                margin=dict(l=10, r=10, t=30, b=10),
+                xaxis=dict(type="category"),
+                yaxis_title="head per year", xaxis_title=None,
+                plot_bgcolor="white",
+                legend=dict(orientation="h", y=1.16, x=0))
+            st.plotly_chart(fig, use_container_width=True)
+            _floor = T["class_floor"]
+            st.caption(
+                f"Complete calendar years only — the year in progress is left "
+                f"off, because a part year beside full ones is a true number "
+                f"telling a false story. **The class split starts {_floor}**, "
+                f"though `Cattle, total` in this file runs back to "
+                f"{int(TD['year'].min())}; the earlier years are not a "
+                f"collapse in feeder trade, they are USDA not publishing the "
+                f"breakdown yet."
+            )
+
+        with t_both:
+            fig = go.Figure()
+            for flow, colour, nm in ((ct.IMPORTS, JPSI_BLUE,
+                                      "Imports from Canada"),
+                                     (ct.EXPORTS, "#B07A2A",
+                                      "Exports to Canada")):
+                s = ct.series(TD, flow, ct.TOTAL)
+                if s.empty:
+                    continue
+                fig.add_trace(go.Scatter(
+                    x=[pd.Timestamp(int(r.year), int(r.month), 1)
+                       for r in s.itertuples()],
+                    y=s["head"], mode="lines", name=nm,
+                    line=dict(color=colour, width=2)))
+            fig.update_layout(
+                height=360, margin=dict(l=10, r=10, t=30, b=10),
+                yaxis_title="head per month", xaxis_title=None,
+                plot_bgcolor="white",
+                legend=dict(orientation="h", y=1.14, x=0))
+            st.plotly_chart(fig, use_container_width=True)
+            st.caption(
+                "**All cattle, both directions** — the only basis on which the "
+                "two are comparable, since USDA publishes no export class "
+                "split. Monthly, back to "
+                f"{int(TD['year'].min())}."
+            )
+
+        with t_tmethod:
+            st.markdown(_CA_TRADE_METHOD)
+
 st.markdown(
     f'<div class="srcline">JSA · John Stewart &amp; Associates &nbsp;·&nbsp; '
-    f'USDA AMS 3213, Weekly Canadian Livestock and Poultry Summary '
-    f'&nbsp;·&nbsp; week ending {fmt_date(_week)}</div>',
+    f'Prices and slaughter USDA AMS 3213, week ending {fmt_date(_week)} '
+    f'&nbsp;·&nbsp; Trade USDA ERS monthly cattle trade, head</div>',
     unsafe_allow_html=True)
