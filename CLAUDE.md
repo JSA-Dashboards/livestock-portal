@@ -3097,6 +3097,150 @@ Saturday Slaughter, for the reason that branch already exists: ESMIS is a
 different host and a NASS outage must not take down a forecast that has no
 NASS in it.
 
+## Canadian Feeder Cattle — the fifteenth dashboard
+
+Added 2026-10-12. Alberta, Saskatchewan and Ontario feeder prices by weight and
+class, Canadian federally-inspected slaughter, and US–Canada cattle trade in
+head both directions. Three tabs: `Feeder Prices | Canadian Slaughter |
+Imports & Exports`.
+
+    apps/canadian_feeder_cattle/ca_prices.py   AMS 3213, via Snowflake
+    apps/canadian_feeder_cattle/ca_trade.py    USDA ERS monthly cattle trade
+    JSA.CME_FEEDER_CATTLE.CA_LIVESTOCK_PRICES  3,298 rows, 2024-06 onward
+    JSA.CME_FEEDER_CATTLE.CA_SLAUGHTER         642 rows
+
+**MOST OF ca_prices.py WAS WRITTEN ON 2026-10-07 BY A SESSION THAT NEVER
+COMMITTED IT**, and sat untracked for five days with 43 passing tests, no page,
+no home and not a single row in Snowflake. The parsing is good and was kept.
+Three things it needed, and the third is the one worth remembering.
+
+- It was in `apps/mexican_feeder_imports/`, which only made sense under a
+  toggle plan Ross replaced with a separate dashboard.
+- The droplet job had never run anywhere, so the tables did not exist.
+- **It could not have run as written.** Its DDL opened with an unconditional
+  `CREATE SCHEMA IF NOT EXISTS JSA.CME_FEEDER_CATTLE`, which needs the grant
+  even when it would do nothing, and aborted with "Insufficient privileges to
+  operate on database 'JSA'" against a schema sitting in front of it. The
+  comment defending it argued the capability was proven because the portal
+  created `JSA.BOXED_BEEF` on first run — but that is the DEPLOYED identity,
+  KOLTENPOSTIN as ACCOUNTADMIN, and this job runs as neither. **A capability
+  demonstrated by one role says nothing about another**, which is the same
+  mistake recorded above as "a read test does not clear an ETL". Attempted and
+  ignored now, the shape `deploy/refresh_southeast.py` already carries.
+
+### "THERE IS NO US-CANADA CROSSINGS REPORT. ANYWHERE" — half right
+
+`ca_prices.py` asserted it and it is load-bearing, so it was checked rather
+than inherited. **The MARS/LMR half is exactly right**: the catalogue counts
+reproduce to the record (1,051 and 151 reports), and searching every field for
+Canada leaves AMS 3213 as the only Canadian livestock report. The complete
+*International Livestock* surface is seven reports and none is a US-Canada
+crossings series.
+
+**"Anywhere" is false.** USDA ERS publishes
+`cattle-monthly-us-trade-head.csv` — monthly US cattle trade by partner
+country, **in head**, 1989 to date, keyless — and it is the **adjacent
+download** to the beef file `apps/beef_trade/trade_flows.py` already reads:
+media/**29545** against **29544**, same columns, same product page.
+
+**A booby trap for whoever looks next.** AMS 3629 carries
+`country_of_origin = 'Canada'` on 1,273 rows and reads like a Canadian
+crossings series. Every one is `destination = Mexico` — Canadian-origin
+animals transiting the US and crossing the SOUTHERN border. `destination` is
+never 'Canada' across all 18,033 rows.
+
+### Census was probed and rejected, on four measured grounds
+
+The obvious route is the Census trade API, which cme-feeder-cattle-index
+already uses for the Mexican head counts. It is the worse source here:
+
+- **US exports to Canada collapse into one Schedule B code.** `0102290000`
+  carries 99% of volume with no weight band, no sex and no purpose split.
+- **Bison would contaminate a naive `0102*` sum** — 70,884 head over
+  2024-2026, the fifth largest Canadian line.
+- **The sub-90kg codes are BOB CALVES, not feeders**: 96–98 lb average,
+  newborn dairy bull calves, ~111k head over three years. The sibling repo's
+  `classify_commodity()` buckets them as "feeder", and that is about 40% of
+  what it would call Canadian feeder trade.
+- **The HS vocabulary breaks at 2012-01** (010210/010290 → 010221/010229), so
+  a continuous series needs an explicit code map.
+
+ERS has already made all four decisions, in USDA's own classes. Also worth not
+re-deriving: a missing `CENSUS_API_KEY` fails as **HTTP 200 with an HTML
+"Missing Key" page**, so a client checking only `status_code` sees success —
+the "200 that means no" trap recorded for slug 2452.
+
+### The two directions are NOT symmetric
+
+Imports split into `Cattle and calves for feeding`, `for immediate slaughter`
+and `for breeding`. **Exports are one figure, all cattle, for every country in
+the file.** So there is a Canadian feeder *import* number and there is no
+feeder *export* number to put beside it. That is what USDA publishes, not a
+gap in the page, and the panel says so above the tiles rather than below them.
+
+`export_classes()` reads it off the data on every load rather than asserting
+it in prose, so if ERS ever adds an export class the caption stops being true
+instead of quietly misleading.
+
+**The free audit**: the three import classes must sum to USDA's own
+`Cattle, total`. Zero error across all 176 Canadian months and 161 Mexican
+ones, so `tolerance` is **0** — slack on an integer identity published by one
+agency in one file is a hole rather than a safeguard, the argument
+`leverage.py` makes for `OI_TOLERANCE`. Cross-checked against Statistics
+Canada table 32-10-0139, keyless, which agrees to the rounding step on every
+half-year tested and incidentally establishes that essentially all Canadian
+cattle exports are US-bound.
+
+### Things that look wrong and are not
+
+- **No exchange rate anywhere on this page.** AMS converts 3213 before
+  publishing, so the prices are already US$/cwt and compare directly with a US
+  quote — the opposite of the Mexican page, where converting pesos is half the
+  arithmetic. A reader who assumes Canadian dollars is out by about a third
+  with nothing looking wrong, so the page states it in the open. A test
+  asserts the page references no FX symbol at all.
+- **It leads with price, not head counts**, because nothing publishes
+  US-Canada crossings daily. The Mexican page leads with crossings because AMS
+  3486 and 3629 do.
+- **The class split starts 2012 while `Cattle, total` runs from 1989.** The
+  chart names the floor; the earlier years are USDA not publishing a
+  breakdown, not feeders collapsing for twenty-three years.
+- **Staleness is measured against the feed's own 9–17 day publication lag**,
+  not its weekly cadence. A rule written from "it is weekly" marks 3213 stale
+  every single week on current data.
+- **A week is an ISO week, never a 7-day step.** The series carries one Sunday
+  `week_ending`, and date arithmetic across it finds nothing and reports no
+  change on a week that has one.
+- **The year-end closure is TWO ISO weeks** (52 and 1). A missing-week check
+  excluding only week 1 reports the annual shutdown as a data gap every
+  January.
+- **Canada is 99.4% of US cattle imports** — 410,942 head YTD against Mexico's
+  2,557 — so this is effectively the US cattle import trade, and more material
+  than the Mexican page it sits beside.
+
+**The net is the tile that moved.** 2026 YTD through August: imports 410,942
+(−16.0%), exports 306,334 (+31.9%), **net 104,608, down 59.3%**. The two legs
+compound into each other, so the net more than halved while neither leg moved
+by a third.
+
+### One defect found by loading the page, not by the suite
+
+The YTD slaughter tiles read `.get("ytd_year_ago")` where the module produces
+`ytd_prior`. `.get()` returns None, the conditional falls through, and both
+tiles rendered a bare percentage with their levels gone — the standing rule
+broken silently. **1,233 tests passed it.** `tests/test_ca_page.py` walks the
+page's AST and asserts every slaughter key it reads is one `slaughter_summary`
+actually returns.
+
+### Still outstanding
+
+**The droplet cron is not installed.** `deploy/ca_livestock.py`,
+`run_ca_livestock.sh` and `install_ca_livestock_cron.sh` exist and the job has
+been run once by hand from Ross's machine to create and fill the tables. Until
+the cron is in, the price and slaughter tabs stop advancing at the week ending
+2026-09-26. The trade tab is unaffected — it fetches ERS directly and needs no
+job at all.
+
 ## The Saturday Slaughter view
 
 Added 2026-10-02 as the **fifth tab**, between AMS Weekly Slaughter and Beef
