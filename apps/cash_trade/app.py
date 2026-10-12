@@ -351,6 +351,45 @@ def hd_delta_html(cur, prior):
     return f'<div class="tile-delta-{color}">{sign} {abs(diff):,.0f} hd{pct_str}</div>'
 
 
+def miss_delta_html(actual, call):
+    """
+    How far a CALL sat from the print, for the scoreboard tiles.
+
+    NOT `hd_delta_html`, and the difference is the whole point. That helper
+    answers "how much has this figure moved", so it divides by the PRIOR --
+    correct for week-ago and year-ago tiles, where the base is a real earlier
+    state of the world. Here the base is our own estimate, and dividing by it
+    reports the miss as a share of a number USDA never printed.
+
+    Live on 2026-10-12: the tiles read +18.2% and +11.6% while Step 1 and
+    Step 2, six inches below, read 15.4% and 10.4% for the identical misses.
+    Both defensible, and that is exactly the letter-versus-dashboard shape
+    CLAUDE.md records three times -- here inside one page.
+
+    THE DENOMINATOR IS THE PRINT, because that is the convention every
+    accuracy figure quoted for this tab uses: the 12.3% and 9.2% median
+    absolute errors in CLAUDE.md, the backtests behind FORECAST_MIN_ANALOGUES
+    and the gap window, and the scorecard table below. A tile that divides by
+    the call is not comparable with any of them.
+
+    IT IS ALSO NEUTRAL, never green or red. `hd_delta_html` paints a positive
+    difference green, so a week we called 7,283 head TOO LOW rendered in the
+    good colour. A miss has no good direction -- being under is not a success
+    -- and the page does not know whether more negotiated volume suits the
+    reader anyway. Same reasoning as the uncoloured deltas on US Beef Trade.
+    """
+    if actual is None or call is None or pd.isna(actual) or pd.isna(call):
+        return '<div class="tile-delta-neu">&mdash;</div>'
+    diff = actual - call
+    if not diff:
+        return '<div class="tile-delta-neu">exactly the call</div>'
+    word = "above" if diff > 0 else "below"
+    pct = (abs(diff) / actual * 100) if actual else None
+    pct_str = f" ({pct:.1f}%)" if pct is not None else ""
+    return (f'<div class="tile-delta-neu">{abs(diff):,.0f} hd {word} '
+            f'the call{pct_str}</div>')
+
+
 def and_list(items) -> str:
     """["a"] -> "a"; ["a","b"] -> "a and b"; ["a","b","c"] -> "a, b and c"."""
     items = list(items)
@@ -2553,24 +2592,24 @@ with tab_fcst:
                       "Friday"][int(_scored["cp_weekday"])] \
                 if "cp_weekday" in _scored else _dow
             with c1:
-                st.markdown(tile("5-Area &mdash; we called",
+                st.markdown(tile("5-Area &mdash; JSA Estimate",
                                  fmt_hd(_scored["f5"]),
                                  f'<div class="tile-delta-neu">before the print</div>',
                                  "tile-d14"), unsafe_allow_html=True)
             with c2:
                 st.markdown(tile("5-Area &mdash; USDA printed",
                                  fmt_hd(_scored["a5"]),
-                                 hd_delta_html(_scored["a5"], _scored["f5"]),
+                                 miss_delta_html(_scored["a5"], _scored["f5"]),
                                  "tile-conf"), unsafe_allow_html=True)
             with c3:
-                st.markdown(tile("National &mdash; we called",
+                st.markdown(tile("National &mdash; JSA Estimate",
                                  fmt_hd(_scored["fn"]),
                                  f'<div class="tile-delta-neu">before the print</div>',
                                  "tile-del"), unsafe_allow_html=True)
             with c4:
                 st.markdown(tile("National &mdash; USDA printed",
                                  fmt_hd(_scored["an"]),
-                                 hd_delta_html(_scored["an"], _scored["fn"]),
+                                 miss_delta_html(_scored["an"], _scored["fn"]),
                                  "tile-neu"), unsafe_allow_html=True)
         else:
             with c1:

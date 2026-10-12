@@ -396,3 +396,113 @@ def test_the_table_and_the_settled_tiles_quote_the_same_call(fc):
     # what the tiles show IS this row — one object, so one number
     assert top["f5"] == 43000 and top["a5"] == 45000
     assert top["wtd"] == 40000
+
+
+# -- the tile and the sentence under it must quote the SAME miss ------------
+#
+# Live on 2026-10-12, the first week the scoreboard ever scored a miss: the
+# tiles read "+18.2%" and "+11.6%" while Step 1 and Step 2 six inches below
+# read "15.4%" and "10.4%" for the identical figures. The tiles divided by the
+# CALL (hd_delta_html's job -- how much has this moved from its prior) and the
+# steps divided by the PRINT (how far was the forecast out). Both arithmetic,
+# both defensible, and together the letter-versus-dashboard failure CLAUDE.md
+# records three times, this time inside a single page.
+
+MISS_CASES = [
+    # (actual, call) -- the 2026-10-12 print, and the 2026-10-05 one
+    (47339.0, 40056.0),
+    (67701.0, 60638.0),
+    (60063.0, 61167.0),
+    (88019.0, 81723.0),
+]
+
+
+def _miss_delta():
+    return load_from_app(APP, "miss_delta_html", globals_={"pd": pd})
+
+
+@pytest.mark.parametrize("actual,call", MISS_CASES)
+def test_the_tile_and_the_step_quote_the_same_percentage(actual, call):
+    """
+    THE GUARD, and it is arithmetic rather than a string match. The step text
+    computes `abs(miss) / actual`; the tile must land on the same figure to
+    the printed decimal, or the page contradicts itself in two places a
+    reader sees at once.
+    """
+    import re
+    html = _miss_delta()(actual, call)
+    shown = re.search(r"\(([\d.]+)%\)", html)
+    assert shown, f"no percentage in {html!r}"
+    step = abs(actual - call) / actual * 100.0          # what Step 1/2 print
+    assert float(shown.group(1)) == pytest.approx(round(step, 1), abs=0.001)
+
+
+def test_the_miss_is_measured_against_the_print_not_the_call():
+    """
+    The denominator is the one every accuracy figure for this tab uses -- the
+    12.3% and 9.2% median absolute errors, the gap-window backtest, the
+    scorecard table. Dividing by the call gives a number comparable with
+    none of them: 7,283 on the 2026-10-12 week is 15.4% of the print and
+    18.2% of the call.
+    """
+    html = _miss_delta()(47339.0, 40056.0)
+    assert "15.4%" in html
+    assert "18.2%" not in html
+
+
+def test_a_miss_is_never_painted_green_or_red():
+    """
+    `hd_delta_html` colours a positive difference green, so a week called
+    7,283 head TOO LOW rendered in the good colour. A miss has no good
+    direction, and the page does not know whether heavier negotiated volume
+    suits the reader -- the same reason most deltas on US Beef Trade are
+    uncoloured.
+    """
+    md = _miss_delta()
+    for actual, call in MISS_CASES + [(47339.0, 47339.0), (None, 40056.0)]:
+        html = md(actual, call)
+        assert "tile-delta-pos" not in html and "tile-delta-neg" not in html, html
+
+
+def test_the_scoreboard_tiles_do_not_use_the_week_ago_helper():
+    """
+    A standing guard. `hd_delta_html` is right for the eight tiles that
+    compare a figure with an earlier state of the world and wrong for the two
+    that compare a print with our estimate; the two are one word apart at the
+    call site.
+    """
+    src = APP.read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    calls = [n for n in ast.walk(tree)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+             and n.func.id == "hd_delta_html"]
+    for c in calls:
+        args = ast.dump(c)
+        assert '"f5"' not in args and '"fn"' not in args, (
+            f"a scoreboard tile at line {c.lineno} is back on hd_delta_html")
+    # ...and the scoreboard really does use the new one, twice.
+    miss = [n for n in ast.walk(tree)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+            and n.func.id == "miss_delta_html"]
+    assert len(miss) == 2, f"expected two scoreboard deltas, found {len(miss)}"
+
+
+def test_hd_delta_html_still_divides_by_the_prior():
+    """
+    The other eight uses are week-ago and year-ago tiles, where the base IS a
+    real earlier figure and dividing by it is correct. Fixing the scoreboard
+    by changing the shared helper would have silently rebased all of them.
+    """
+    hd = load_from_app(APP, "hd_delta_html", globals_={"pd": pd})
+    html = hd(110.0, 100.0)
+    assert "10.0%" in html          # of the prior, not of the current (9.1%)
+    assert "9.1%" not in html
+
+
+def test_the_called_tiles_are_labelled_JSA_Estimate():
+    """Ross's wording, 2026-10-12. 'we called' is what the prose says; the
+    tile is a label and names whose figure it is."""
+    src = APP.read_text(encoding="utf-8")
+    assert '"5-Area &mdash; JSA Estimate"' in src
+    assert '"National &mdash; JSA Estimate"' in src
+    assert "&mdash; we called" not in src
