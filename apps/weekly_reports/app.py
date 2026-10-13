@@ -519,6 +519,52 @@ with st.expander("Figures pulled", expanded=False):
 #
 # Friday picks up the panel for its Key Headlines as a side effect, which it
 # should have had all along: same editorial job, same pick-then-rewrite rule.
+# HOW OLD THE LIST IS, BECAUSE IT NEVER REFRESHES ITSELF. The candidates live
+# in session_state from the moment the button is pressed until it is pressed
+# again -- a rerun does not re-fetch, which is right (it is a dozen HTTP calls)
+# and invisible, which is not. A list pulled at breakfast looks exactly like
+# one pulled a minute ago.
+#
+# Sterling's Profit Tracker landed at 2:15pm on 2026-10-13 and was missing from
+# Ross's panel all afternoon for precisely that reason: the fetch had happened
+# earlier, everything downstream was working, and the mail was sitting at
+# position 4 of 39 the moment anyone pressed the button again. Nothing was
+# broken and nothing said so.
+_HEADS_STALE_MIN = 30
+
+
+def _fetch_heads(when_for):
+    """Pull the candidates and stamp when, so the panel can date itself."""
+    st.session_state["wcr_heads"] = headlines.candidates(when_for)
+    st.session_state["wcr_heads_at"] = config.now_central()
+
+
+def _age_minutes(then, now=None):
+    """Whole minutes since `then`, or None if we never stamped it."""
+    if then is None:
+        return None
+    try:
+        return max(0, int(((now or config.now_central()) - then).total_seconds() // 60))
+    except TypeError:                     # aware vs naive, if the host has no tz
+        return None
+
+
+def _age_phrase(mins):
+    """'just now', '4m ago', '1h 23m ago'.
+
+    Takes the MINUTES, not the timestamp, so the sentence and the decision to
+    warn cannot disagree -- the first draft of this read the number back out
+    of its own formatted string.
+    """
+    if mins is None:
+        return None
+    if mins < 1:
+        return "just now"
+    if mins < 60:
+        return f"{mins}m ago"
+    return f"{mins // 60}h {mins % 60:02d}m ago"
+
+
 _head_key, _head_title = next(
     ((k, t) for k, t in commentary.sections_for(kind)
      if k in ("headlines", "key_headlines")), (None, None))
@@ -527,7 +573,7 @@ if _head_key:
     with st.expander("Headline candidates", expanded=False):
         if st.button("Fetch headlines", use_container_width=False):
             with st.spinner("Reading Beef Magazine, the USDA narratives and packer news…"):
-                st.session_state["wcr_heads"] = headlines.candidates(issue)
+                _fetch_heads(issue)
 
         # Mailbox sign-in, only when it is actually needed. Device-code flow:
         # no password is typed here or stored anywhere by this app.
@@ -559,7 +605,7 @@ if _head_key:
                         ok = mailbox.complete_sign_in(flow)
                     st.session_state.pop("wcr_graph_flow", None)
                     if ok:
-                        st.session_state["wcr_heads"] = headlines.candidates(issue)
+                        _fetch_heads(issue)
                     st.rerun()
 
         found = st.session_state.get("wcr_heads")
@@ -569,6 +615,20 @@ if _head_key:
                        "disruption — last 48 hours. Pick what matters and rewrite it in "
                        "your words — nothing here goes into the letter on its own.")
         else:
+            # The age goes ABOVE the errors and above the list, because it is
+            # the thing that decides whether anything below it is worth
+            # reading. A stale list is not a wrong list -- every row in it was
+            # true when it was pulled -- so this is a prompt, not an alarm.
+            _mins = _age_minutes(st.session_state.get("wcr_heads_at"))
+            _age = _age_phrase(_mins)
+            if _age and _mins >= _HEADS_STALE_MIN:
+                st.warning(
+                    f"These {len(found.get('items', []))} candidates were pulled "
+                    f"**{_age}** and have not moved since. Press **Fetch headlines** "
+                    "again for anything that has landed — Sterling's Profit Tracker "
+                    "and Meatingplace's afternoon update both arrive mid-afternoon.")
+            elif _age:
+                st.caption(f"{len(found.get('items', []))} candidates, pulled {_age}.")
             for err in found.get("errors", []):
                 st.caption(f"⚠ {err}")
             # A GENERATION NUMBER IN THE CHECKBOX KEY, so clearing the ticks

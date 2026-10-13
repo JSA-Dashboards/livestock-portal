@@ -39,6 +39,23 @@ SESSION_SWITCH_HOUR = 12
 LETTER_TZ = "America/Chicago"
 
 
+def now_central():
+    """
+    Timezone-aware now in Anthon, or the server's own clock if the host has no
+    tz database.
+
+    Streamlit Cloud runs UTC, so anything stamped with a bare datetime.now()
+    and shown to Ross is an hour or five wrong -- the same trap
+    session_for_now() exists for. Never raises: a caption is not worth a page.
+    """
+    from datetime import datetime
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo(LETTER_TZ))
+    except Exception:
+        return datetime.now()
+
+
 def session_for_now(now=None) -> str:
     """
     "AM" or "PM" by the clock in Anthon.

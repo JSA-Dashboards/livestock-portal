@@ -3770,6 +3770,62 @@ One Graph quirk, since it costs a round trip to rediscover: `$filter` on
 `$search: "from:<addr> <subject words>"` instead. `$skip` is not supported
 alongside `$search` either -- it returns zero rows rather than an error.
 
+### The candidate list never refreshes itself, and now says how old it is
+
+Added 2026-10-13, after Ross reported that a Sterling email sent at 2:15pm
+"didn't get picked up as a headline".
+
+**EVERY PART OF THE PIPELINE WAS WORKING.** Probed the same afternoon: Graph
+returned the mail (`Sterling UPDATE - Profit Trackers - Oct. 13, 2026`, 14:15
+CT, PDF attached), `mailbox.fetch_digests()` offered it, and
+`headlines.candidates()` ranked it **4th of 39** — top of the unpinned group,
+directly under the two pinned USDA narratives. Nothing to fix in the fetch,
+the sender filter, the age window or the sort.
+
+The panel simply could not say that what it was showing predated the email.
+`headlines.candidates()` is a dozen HTTP calls, so it runs on a button press
+and the result lives in `st.session_state["wcr_heads"]` until the button is
+pressed again — **a rerun does not re-fetch**. That is the right trade and it
+is invisible: a list pulled at breakfast renders identically to one pulled a
+minute ago, same rows, same checkboxes, no date anywhere.
+
+So the panel dates itself. `_fetch_heads()` stamps `wcr_heads_at` with
+`config.now_central()`, and above the rows the panel reads either
+`39 candidates, pulled 4m ago.` or, past `_HEADS_STALE_MIN` (30 minutes), a
+warning naming the two publications that arrive mid-afternoon. Placement is
+the point — the age decides whether anything below it is worth reading, so it
+cannot be a footnote under thirty-nine checkboxes.
+
+Four things in it worth keeping:
+
+- **`config.now_central()`, never `datetime.now()`.** Community Cloud runs
+  UTC; a naive stamp read against a naive now happens to work, but the moment
+  either side is tz-aware the subtraction is five hours out or raises. Same
+  trap `session_for_now()` exists for. A host with no tz database gets a
+  naive fallback, the subtraction raises `TypeError`, and the panel prints no
+  date rather than a wrong one.
+- **`_age_phrase()` takes MINUTES, not a timestamp.** The first draft decided
+  whether to warn by parsing the number back out of its own formatted string
+  (`int(_age.split("m")[0])`), so the sentence and the warning could disagree
+  about the same list — and would have, at exactly 60 minutes.
+- **An unstamped list says nothing.** A session carried over from before this
+  existed has no `wcr_heads_at`; printing `0m ago` over it would be worse than
+  the silence it replaces.
+- **The guard is on the WRITE, not the read.** `tests/test_headline_freshness.py`
+  fails if anything assigns `st.session_state["wcr_heads"]` outside
+  `_fetch_heads`, or if `headlines.candidates()` gains a second call site. A
+  third fetch added later without a stamp would date the list from some other
+  fetch — older or newer than it really is, and both are worse than no date.
+
+**The stale branch was verified by forcing the threshold to 0 and loading the
+page**, not by reading the source: the warning carries two `**bold**` spans
+and this file records a caption that rendered as LaTeX for weeks. Zero
+`.katex` spans in the live DOM, full sentence intact.
+
+One process note, since it cost a restart: `streamlit run` with
+`--server.fileWatcherType none` compiles the script **once at startup**, so
+editing `app.py` and pressing F5 reloads the old code. Restart the server.
+
 ### What the slide fixed, and the one number that keeps moving
 
 Four figures on the hand-typed 2026-10-05 deck were wrong, and all four were
