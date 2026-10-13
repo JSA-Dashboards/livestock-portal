@@ -12,6 +12,8 @@ import datetime as dt
 import sys
 from pathlib import Path
 
+import pathlib
+
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -218,3 +220,108 @@ def test_the_weight_key_does_not_leak_into_the_payload(monkeypatch):
     _stub(monkeypatch, [(1961, "Roger Maris breaks home run record")])
     for i in onthisday.candidates(D)["items"]:
         assert "_w" not in i
+
+
+# -- military history, added 2026-10-13 ---------------------------------------
+#
+# Ross: "can we just add anything war related to the list of potential
+# headlines". `\bwar\b` lived in _GRIM, so "1943 Italy declares war on
+# Germany" was vetoed before any tag was considered.
+#
+# The loosening is narrow on purpose. The war-as-EVENT stems moved out of
+# _GRIM into a positive _WAR tag; every casualty and atrocity stem stayed,
+# and _GRIM still runs first. These tests are mostly about that line holding.
+
+@pytest.mark.parametrize("text", [
+    "Italy declares war on Germany",
+    "The armistice between the German Empire and the Allies was signed",
+    "World War II: The German Instrument of Surrender signed at Berlin-Karlshorst",
+    "Continental Congress authorizes first naval force",
+    "Vietnam War: U.S. President Richard Nixon announces his order",
+    "The 872-day Siege of Leningrad is lifted",
+])
+def test_military_history_is_reason_enough(text):
+    """War stands alone, like agriculture, sport and the presidency. It does
+    not also have to be a US first."""
+    assert onthisday._keep(text, onthisday._tags(text)), text
+
+
+@pytest.mark.parametrize("text", [
+    "Attack on Pearl Harbor: The Imperial Japanese Navy carries out a surprise attack",
+    "The U.S. Army Air Force dropped the Little Boy atomic bomb on Hiroshima",
+    "The Soviet Red Army liberated 7,000 prisoners in Auschwitz concentration camp",
+    "Nazi troops massacre the inhabitants of the village",
+    "German troops execute nine citizens of the town",
+    "Allied bombing of Dresden kills 25,000 civilians",
+])
+def test_the_war_tag_cannot_admit_an_atrocity(text):
+    """
+    THE WHOLE SAFETY OF THE CHANGE. _GRIM runs before any tag is looked at,
+    so the positive war category can widen what is OFFERED without widening
+    what gets past the veto. Each of these is war-related and each is still
+    refused.
+    """
+    assert not onthisday._keep(text, onthisday._tags(text)), text
+
+
+@pytest.mark.parametrize("text", [
+    "The Froberg mutiny ended with the explosion of the gunpowder magazine",
+    "Troops of the Fourth Crusade entered Constantinople and began a sack of the city",
+    "The Imperial Japanese Army begins the systematic extermination of hostile elements",
+    "The SS-Totenkopfverbaende begin the evacuation of the Auschwitz concentration camp",
+    "Nazi war criminals sentenced at Nuremberg",
+])
+def test_the_ones_that_slipped_the_sweeps(text):
+    """
+    EVERY ONE OF THESE WAS FOUND BY SWEEPING, not by reasoning. 3,202 events
+    across a quarter of the calendar were re-filtered after the war tag went
+    in and everything it admitted that named mass death in words _GRIM did
+    not know was read by hand: 535 admitted, 16 worth a look, these the cost.
+
+    "Nazi war criminals" is the sharpest of them -- _GRIM had just gained
+    `war crime`, which does not prefix "criminal". That is the same
+    trailing-stem mistake as murder and `slaver`, in the same file, for
+    the third time, and the EXISTING pick-list guard caught it rather than
+    any amount of staring at the pattern.
+    """
+    assert not onthisday._keep(text, onthisday._tags(text)), text
+
+
+@pytest.mark.parametrize("text", [
+    "A research grant was awarded to the university",
+    "The warden spoke to reporters outside",
+    "Warner Brothers released its first feature",
+])
+def test_the_war_stems_do_not_catch_ordinary_words(text):
+    """`\b` boundaries, and they were missing on the first attempt -- see
+    the backspace test below for how."""
+    assert "war" not in onthisday._tags(text), text
+
+
+def test_no_pattern_contains_a_literal_backspace():
+    """
+    THE FIRST _WAR PATTERN MATCHED NOTHING AT ALL, and compiled, and printed
+    correctly. It was written through a shell heredoc, which turned every
+    `\b` into `\x08` -- a real backspace character. `re` accepts it
+    silently, so the regex simply never fired and the panel looked unchanged.
+
+    The same mistake had already been made once in this repo. It costs
+    nothing to assert against, and reading the pattern back is the only way
+    to see it.
+    """
+    import re as _re
+    src = pathlib.Path(onthisday.__file__).read_text(encoding="utf-8")
+    assert "\x08" not in src, "a literal backspace is in the source"
+    for name in ("_GRIM", "_WAR", "_AG", "_SPORT", "_US", "_FIRST", "_PRESIDENT"):
+        pat = getattr(onthisday, name)
+        assert isinstance(pat, _re.Pattern)
+        assert "\x08" not in pat.pattern, f"{name} carries a literal backspace"
+
+
+def test_war_outranks_a_bare_us_item_in_the_cut():
+    """Weighted with sport and the presidency: a war fact is its own reason
+    to print, so it should survive the limit over a plain US milestone."""
+    war = "Italy declares war on Germany"
+    plain = "The Royal Opera House opens at Covent Garden"
+    assert onthisday._tags(war).count("war") == 1
+    assert "war" not in onthisday._tags(plain)

@@ -51,8 +51,44 @@ _MONTHS = ("january", "february", "march", "april", "may", "june", "july",
 # broad: a false negative is a duller list, a false positive is grotesque.
 _GRIM = re.compile(
     r"(kill|death|died|dead|dies|\bdie\b|fatal|massacr|genocid|murder|assassinat|"
-    r"execut|suicide|bomb|shoot|shot|gunman|gunfire|stabb|\bwar\b|warfare|invad|"
-    r"invasion|battle|troops|militant|ambush|siege|earthquake|tsunami|hurricane|"
+    # THE WAR-AS-EVENT STEMS LEFT THIS PATTERN ON 2026-10-13 and became the
+    # positive _WAR category below, at Ross's request: "can we just add
+    # anything war related to the list of potential headlines". `\bwar\b`
+    # alone was what dropped "1943 Italy declares war on Germany".
+    #
+    # WHAT STAYED IS THE WHOLE POINT. A declaration, a treaty, an armistice
+    # or a landing is military history; a massacre is not, and neither is a
+    # casualty count. Every atrocity and mass-death stem is still here and
+    # still vetoes BEFORE any tag is considered, so the loosening admits
+    # "Italy declares war on Germany" without admitting what Italy did.
+    # `war crim`, NOT `war crime`. The first version wrote `war crime` and
+    # "Nazi war criminals sentenced at Nuremberg" walked straight past it --
+    # "crime" does not prefix "criminal", they part at the fourth letter.
+    # That is the SAME trailing-stem mistake as \bmurder\b and `slaver`
+    # recorded above, made a third time in the same file, and it was the
+    # existing pick-list guard that caught it rather than any reasoning.
+    r"execut|sentenc|suicide|bomb|shoot|shot|gunman|gunfire|stabb|war crim|"
+    r"fires? on|fired on|open(ed|s)? fire|militant|ambush|"
+    # EVERY ONE OF THESE WAS FOUND BY SWEEPING, not by thinking. After the
+    # war tag went in, 3,202 events across a quarter of the calendar were
+    # re-filtered and anything admitted that mentioned mass death in words
+    # _GRIM did not know was read by hand. 535 were admitted; these are what
+    # the remaining sixteen cost.
+    #
+    #   explosion     the Froberg mutiny "ended with the explosion of the
+    #                 gunpowder magazine"
+    #   sack of       the Fourth Crusade sacking Constantinople. `sack of`
+    #                 and not `sack`, because a sacked quarterback is sport.
+    #   exterminat    "the Imperial Japanese Army begins the systematic
+    #                 extermination of perceived hostile elements"
+    #   concentration camp
+    #                 the Auschwitz death marches. The OTHER Auschwitz item
+    #                 was already blocked, by `prison` -- which is exactly
+    #                 how a stem list lulls you: one phrasing is caught and
+    #                 the next is not.
+    r"explosion|explod|sack of|exterminat|annihilat|pogrom|purge|"
+    r"concentration camp|death march|"
+    r"earthquake|tsunami|hurricane|"
     r"cyclone|flood|famine|plague|epidemic|pandemic|crash|derail|sank|sink|wreck|"
     r"disaster|collapse|destroy|terror|hostage|kidnap|riot|coup|overthrew|"
     r"overthrow|slaver|lynch|abuse|scandal|convict|prison|arrest|wound|injur|"
@@ -77,6 +113,31 @@ _SPORT = re.compile(
     # kind of item the omission is meant to drop. "world cup" goes with it.
     r"stanley cup|wimbledon|the masters|indy 500|grand slam|hall of fame|"
     r"batting|touchdown|pitched|ballpark|athlete)\b", re.I)
+
+# MILITARY HISTORY AS ITS OWN REASON TO PRINT. Ross, 2026-10-13, after
+# "1943 Italy declares war on Germany" failed to appear: war facts should be
+# candidates in their own right, the way agriculture, sport and the
+# presidency are, rather than needing to also be a US first.
+#
+# IT IS A POSITIVE TAG, NOT A HOLE IN THE FILTER. _GRIM still runs first and
+# still vetoes everything about casualties, atrocities and mass death, so
+# this admits declarations, treaties, armistices, landings, surrenders and
+# the ordinary furniture of military history -- and cannot admit a massacre,
+# a bombing or a body count, because those are matched before any tag is
+# looked at.
+#
+# Where that line falls is worth stating plainly, because it is a judgement
+# and not a fact: "Italy declares war on Germany" is in, "Japan attacks Pearl
+# Harbor, killing 2,403" is out. The headline carries the death, so _GRIM
+# takes it. Move `attack` or `kill` out of _GRIM if that is the wrong call --
+# it is one stem either way, not a redesign.
+_WAR = re.compile(
+    r"\b(war|warfare|wartime|armistice|ceasefire|truce|treaty|surrender\w*|"
+    r"allies|allied|axis|invad\w*|invasion|battle\w*|troops|regiment|"
+    r"infantry|cavalry|artillery|garrison|siege|blockade|"
+    r"d-day|normandy|vietnam|korea\w*|wehrmacht|luftwaffe|navy|naval|"
+    r"army|marines|air force|veterans?|enlist\w*|conscript\w*|"
+    r"versailles|yalta|potsdam|nato|confederate|redcoats|militia)\b", re.I)
 
 _AG = re.compile(
     r"\b(farm\w*|ranch\w*|cattle|livestock|beef|corn|wheat|soybean\w*|harvest\w*|"
@@ -216,6 +277,8 @@ def _tags(text: str) -> list:
         tags.append("sport")
     if _PRESIDENT.search(text):
         tags.append("pres")
+    if _WAR.search(text):
+        tags.append("war")
     if _US.search(text):
         tags.append("US")
     if _FIRST.search(text):
@@ -228,11 +291,17 @@ def _keep(text: str, tags: list) -> bool:
         return False
     # POSITIVELY, OR NOT AT ALL. "American" on its own admitted Khashoggi and
     # Mogadishu; "first" on its own admitted Opus Dei and a Vancouver
-    # cathedral. Agriculture, sport and the presidency each stand alone --
-    # presidents by Ross's call on 2026-10-01, since a fact about one is worth
-    # printing whether or not it is also a "first". Anything else still has to
-    # be a US first.
+    # cathedral. Agriculture, sport, the presidency and military history each
+    # stand alone -- presidents by Ross's call on 2026-10-01 and war on
+    # 2026-10-13, since a fact about either is worth printing whether or not
+    # it is also a "first". Anything else still has to be a US first.
+    #
+    # Standing alone is safe for war for the same reason it is for the
+    # presidency: _GRIM has already run. The tag cannot admit anything the
+    # veto would have caught, so the worst a stray match does is offer one
+    # more piece of military history.
     return bool(tags) and ("sport" in tags or "ag" in tags or "pres" in tags
+                           or "war" in tags
                            or ("US" in tags and "first" in tags))
 
 
@@ -278,7 +347,8 @@ def candidates(when: date = None, limit: int = 8) -> dict:
         # Presidents rank with sport, above a bare US item: they are their own
         # reason to print, and agriculture still outranks everything.
         weight = (3 if "ag" in tags else 0) + (2 if "sport" in tags else 0) \
-            + (2 if "pres" in tags else 0) + (1 if "US" in tags else 0)
+            + (2 if "pres" in tags else 0) + (2 if "war" in tags else 0) \
+            + (1 if "US" in tags else 0)
         items.append({"year": year, "text": text, "tags": tags,
                       "source": source, "_w": weight})
 

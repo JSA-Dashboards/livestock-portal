@@ -3367,6 +3367,52 @@ computed moving averages for both products print above it; the written read is
 passed to **neither** sub-block, because handing the same bullets to both prints
 it twice, once under each product.
 
+### Military history is a candidate category — 2026-10-13
+
+Ross: *"can we just add anything war related to the list of potential
+headlines?"*, after "1943 Italy declares war on Germany" failed to appear on
+Oct 13. `war` was in `_GRIM`, so it was vetoed before any tag was
+looked at.
+
+**THE WAR-AS-EVENT STEMS MOVED OUT OF THE VETO AND BECAME A POSITIVE TAG.**
+`_WAR` now stands alone the way `ag`, `sport` and `pres` do, weighted 2 with
+sport and the presidency. What did NOT move is the point: every casualty and
+atrocity stem stayed in `_GRIM`, and `_GRIM` still runs first, so the tag can
+widen what is OFFERED without widening what gets past the veto. Verified on
+the real feed — Pearl Harbor blocked on `attack`, Hiroshima on `bomb`,
+Auschwitz on `prison`.
+
+Where the line falls is a judgement and the module says so: a declaration, an
+armistice, a surrender or a landing is in; a headline that names its own body
+count is out. Moving it is one stem either way, not a redesign.
+
+**THE SWEEP IS THE METHOD, AND IT IS NOT OPTIONAL HERE.** Reasoning about a
+stem list does not find its holes. After the tag went in, 3,202 events across
+a quarter of the calendar were re-filtered and everything the war tag admitted
+that named mass death in words `_GRIM` did not know was read by hand: 535
+admitted, 16 worth a look, five real. `explosion` (the Froberg magazine),
+`sack of` (the Fourth Crusade — and `sack of` not `sack`, because a sacked
+quarterback is sport), `exterminat`, `concentration camp` and `death march`
+all joined `_GRIM` as a result. Re-swept after: 530 admitted, zero flagged.
+
+**`war crime` DOES NOT PREFIX "war criminals", AND THAT IS THE THIRD TIME.**
+The stem was added to `_GRIM` in the same change and "Nazi war criminals
+sentenced at Nuremberg" walked straight past it — "crime" and "criminal" part
+at the fourth letter. It is `war crim` now, with `sentenc` beside it. Exactly
+the mistake `murder` made against "murdered" and `slaver` made against
+"enslaved", both already recorded in that file's own comments. **The existing
+pick-list guard caught it**, not any amount of reading the pattern — which is
+the argument for that test having listed specific banned years rather than
+asserting something general.
+
+**A LITERAL BACKSPACE ATE THE FIRST ATTEMPT.** `_WAR` was first written
+through a shell heredoc, which turned every `` into ``. `re` compiles
+that silently, `pattern` prints looking almost right, and the regex matches
+nothing at all — the panel looked completely unchanged. This had already
+happened once in this repo. Patch regex through a file written with the Write
+tool, never a heredoc, and `tests/test_onthisday.py` now asserts no compiled
+pattern in the module contains a backspace.
+
 ### The technical read picks its own month
 
 Added 2026-10-12 at Ross's request: *"can we make a drop down where I can
