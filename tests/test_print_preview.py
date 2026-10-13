@@ -31,6 +31,10 @@ APP = ROOT / "apps" / "weekly_reports" / "app.py"
 
 BUTTON_TAG = '<button id="jsa-print"'
 
+# The page source, for the guards that are about its STRUCTURE rather
+# than about the letter it renders.
+PAGE_SRC = APP.read_text(encoding="utf-8")
+
 
 def _compose():
     """
@@ -480,3 +484,37 @@ def test_multiple_downloads_are_staggered():
     """
     out = _compose()(LETTER)
     assert "setTimeout" in out and "600" in out
+
+
+def test_the_tabs_render_before_any_data_is_fetched():
+    """
+    THE SLIDE TAB WAS INVISIBLE UNTIL YOU FETCHED. `st.tabs` sat about a
+    thousand lines below the `st.stop()` that fires when no context has been
+    pulled for the chosen date, so before a fetch the page simply ended.
+
+    Ross asked where the weekly slide had gone on 2026-10-13. Nothing had
+    moved — he had not fetched that date — and on the deployed app `out/` is
+    gitignored, so every reboot wipes every saved context and returns
+    everyone to exactly that state. A feature you cannot see until you do an
+    unrelated thing first reads as one that has been deleted.
+    """
+    src = PAGE_SRC
+    stop_at = src.index("    st.stop()")
+    assert "st.tabs(TAB_LABELS)" in src[:stop_at], (
+        "no tabs are drawn before the page stops on a missing fetch")
+
+
+def test_both_tab_calls_use_one_list_of_labels():
+    """Spelled out twice they drift, and the empty pair has to look like the
+    loaded one or it reads as a different feature."""
+    src = PAGE_SRC
+    assert src.count("TAB_LABELS = [") == 1
+    assert src.count("st.tabs(TAB_LABELS)") == 2
+    assert 'st.tabs(["Letter"' not in src, "a literal label list came back"
+
+
+def test_the_empty_slide_tab_says_what_belongs_there():
+    """An empty tab with no caption is indistinguishable from a broken one."""
+    src = PAGE_SRC
+    empty = src[src.index("_t_letter, _t_slide"):src.index("    st.stop()")]
+    assert "Cattle Market Rundown" in empty and "Sterling" in empty

@@ -273,8 +273,30 @@ ctx, _cached_warnings = _load_ctx()
 # re-derived from the saved data. Never nothing.
 errors = st.session_state.get("wcr_errors") or _cached_warnings
 
+# ONE DEFINITION, TWO RENDER PATHS. The labels appear here and again at the
+# real tab call far below; spelled out twice they would drift, and the whole
+# point of the empty pair is that it looks like the loaded one.
+TAB_LABELS = ["Letter", "Cattle Market Rundown Slide"]
+
 if ctx is None:
     st.info("Press **Fetch latest data** to pull this issue's numbers.")
+    # THE TABS STILL DRAW, EMPTY, AND THEN THE PAGE STOPS.
+    #
+    # They used to be a thousand lines below this st.stop(), so before a
+    # fetch the page simply ended and the slide tab did not exist. Ross went
+    # looking for it on 2026-10-13 and asked where it had gone -- nothing had
+    # moved, he had just not fetched that date yet, and on the deployed app
+    # `out/` is gitignored so EVERY reboot wipes every saved context and puts
+    # everyone back in this state. A feature you cannot see until you perform
+    # an unrelated step reads as a feature that has been removed.
+    _t_letter, _t_slide = st.tabs(TAB_LABELS)
+    with _t_letter:
+        st.caption("The rendered letter, the print and image buttons and the "
+                   "PDF appear here once the numbers are pulled.")
+    with _t_slide:
+        st.caption("The **Cattle Market Rundown** slide (deck slide 3) and the "
+                   "**Sterling** margins slide (deck slide 7) appear here once "
+                   "the numbers are pulled, each with a PowerPoint download.")
     st.stop()
 
 if errors:
@@ -1168,7 +1190,7 @@ def _rundown_pptx(rows_tuple) -> bytes:
     return buf.getvalue()
 
 
-tab_letter, tab_slide = st.tabs(["Letter", "Cattle Market Rundown Slide"])
+tab_letter, tab_slide = st.tabs(TAB_LABELS)
 
 with tab_letter:
 

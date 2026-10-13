@@ -3666,6 +3666,20 @@ top level. Every multi-line string in the file lives inside that block, which
 is the only reason indenting the rest was safe; check that again before moving
 the split.
 
+**THE TABS DRAW BEFORE THE FETCH GUARD**, added 2026-10-13. `st.tabs` sat
+about a thousand lines below the `st.stop()` that fires when no context has
+been pulled for the chosen date, so before a fetch the page simply ended and
+the slide tab did not exist. Ross asked where the weekly slide had gone;
+nothing had moved, he had not fetched that date — and on the deployed app
+`out/` is gitignored, so **every reboot wipes every saved context** and puts
+everyone back in exactly that state. A feature you cannot see until you do
+an unrelated thing first reads as one that has been deleted.
+
+An empty pair of tabs now renders above the stop, each saying what appears
+there once the numbers are pulled. `TAB_LABELS` is defined once and used by
+both calls: spelled out twice they drift, and the empty pair has to look
+like the loaded one or it reads as a different feature.
+
 **A hidden tab still executes**, so writing the `.pptx` is memoised on the
 slide's own rows (`_rundown_pptx`). Without it the page writes a PowerPoint
 file on every keystroke in the commentary boxes.
