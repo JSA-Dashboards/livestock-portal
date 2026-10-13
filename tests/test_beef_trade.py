@@ -861,6 +861,13 @@ def test_the_cash_trade_panel_is_not_behind_the_lmr_outage_guard():
     entirely. Dropping it anywhere inside that branch instead would quietly
     undo the thing this test exists for, and nothing would raise -- the panel
     would simply be missing on an outage day, which is the one day it matters.
+
+    Lazy tabs (6cde134) then wrapped every tab body in `if <tab>.open:`, so
+    the panel is no longer the literal next line. That conditional is a
+    VISIBILITY guard -- it asks whether the reader is looking at this tab --
+    and says nothing about whether LMR answered. It is skipped here BY NAME
+    rather than by loosening the check, so an `if not load_ok:` appearing in
+    the same position still fails.
     """
     page = (ROOT / "apps" / "cash_trade" / "app.py").read_text(encoding="utf-8")
     lines = page.splitlines()
@@ -868,7 +875,10 @@ def test_the_cash_trade_panel_is_not_behind_the_lmr_outage_guard():
     # called exactly once, and from its own tab
     assert page.count("wasde_steer_panel()") == 2            # the def + one call
     i = next(n for n, ln in enumerate(lines) if ln.strip() == "with tab_wasde:")
-    nxt = next(ln.strip() for ln in lines[i + 1:] if ln.strip())
+    body = [ln.strip() for ln in lines[i + 1:] if ln.strip()]
+    if body[:1] == ["if tab_wasde.open:"]:
+        body = body[1:]                     # lazy tabs: visibility, not data
+    nxt = body[0]
     assert nxt == "wasde_steer_panel()", (
         "the WASDE tab no longer opens with the panel: " + nxt)
 
