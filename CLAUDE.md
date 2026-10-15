@@ -3352,8 +3352,8 @@ Written sections, in render order:
 - **AM** — Headlines
 - **Monday** — Headlines, Market Action, Technicals LC, Technicals FC,
   Fundamental Rundown, Comments
-- **Tue/Wed/Thu** — Headlines, Market Action, Technicals *(one block, both
-  products)*, Comments
+- **Tue/Wed/Thu** — Headlines, Market Action, Technicals LC, Technicals FC,
+  Comments
 - **Friday** — Key Headlines, Technicals LC, Technicals FC, Cash Trade Recap,
   Cattle on Feed Commentary, Comments
 
@@ -3362,10 +3362,60 @@ sign-off — **not** literally under the rundown, because the three formats end
 differently and Friday's rundown is mid-letter. It is deliberately absent from
 the morning brief.
 
-The recap's single `technicals` key is NOT `technicals_lc`/`technicals_fc`. The
-computed moving averages for both products print above it; the written read is
-passed to **neither** sub-block, because handing the same bullets to both prints
-it twice, once under each product.
+### The recap's one Technicals section became two — 2026-10-15
+
+Ross: *"why are my technicals just listed under technicals but not broken out
+by Feb Live Cattle and Nov Feeder Cattle like the technical format shows on
+the Monday and Friday afternoon email?"*
+
+The recap carried a single `technicals` key from the day it was created
+(`c6a24f1`, "a lighter evening letter"). **What made that visible was a
+different change**: on 2026-09-25 (`0435450`) the computed averages stopped
+printing at Ross's request, and `render.technicals_block` returns `""` for a
+product with no written bullets of its own — so with one combined read there
+was nothing left for the two per-product headings to sit over, and the section
+collapsed to a bare "Technicals" while Monday and Friday went on naming the
+contract. Nobody had looked at a Thursday letter beside a Monday one until he
+did.
+
+**THE DEFECT UNDERNEATH WAS WORSE THAN THE HEADING, and nothing would ever
+have reported it.** `build.hints` writes the close, the 9-day, the 20-day, the
+prior session range and the swing high/low into slots named `technicals_lc`
+and `technicals_fc`, and its `add()` **skips a slot the format does not
+have**. The recap had neither, so Tue/Wed/Thu drafts carried an EMPTY figure
+block — measured 2026-10-15, **0 hint lines against 6 per product** on Monday
+and Friday. Three evenings a week Ross wrote the technical read with no
+figures in front of him.
+
+That silently included the gap warning. `0435450` moved "DO NOT QUOTE, the
+series has a hole" into the draft precisely because the letter can no longer
+mark a restated average `[[?]]` — and on the recap that warning reached
+nobody. It is the `kind="am"` failure described in `hints()`'s own comment,
+repeated on a second format, and found the same way: by asking what a format
+actually receives rather than what it is supposed to.
+
+So the recap now has `technicals_lc` and `technicals_fc` like the other two,
+`render.build_html` has no recap branch left, and the page's `_TECH_PICKERS`
+lost its combined entry. The recap is still the lighter letter — no
+Fundamental Rundown, week-to-date cash rather than last week's weighted
+average.
+
+**RENAMING A HEADING EMPTIES EVERY DRAFT ALREADY WRITTEN UNDER IT.** Sections
+are matched on heading text and `parse()` ignores an unrecognised one, so
+`## Technicals` would have vanished from the page and the letter with no
+error — including from the letter Ross was part way through on the deployed
+app while this was being made. `commentary.LEGACY_SECTION` carries it into
+`technicals_lc`, and fires **only while neither new heading is in the file**,
+so the first save retires it for good. The text is not split between products:
+no rule can tell which bullet is about which, and visible-and-mislabelled
+beats silently gone. It touches no other format — a `## Technicals` in a
+`tuesday` or `friday` file is a recap draft opened as the wrong kind.
+
+**The format caption was wrong on the live page for the same reason.** It
+typed out "one technicals read covering both products" where the AM caption
+beside it derives its section list from `SECTIONS_BY_KIND`. It derives now.
+A caption that states what a format contains goes stale the first time a
+section moves, and nothing makes it fail.
 
 ### Military history is a candidate category — 2026-10-13
 
@@ -3471,9 +3521,12 @@ The choice persists into `data_<slug>_<date>.json`, written only when it
 actually changes — the page reruns on every keystroke in the commentary
 boxes, so writing unconditionally would be a disk write per character.
 
-The **Tue/Wed/Thu recap gets both pickers on its single Technicals section**,
-because `hints()` quotes both products there even though the written read is
-one block.
+**That paragraph used to say the recap got both pickers on its single
+Technicals section "because `hints()` quotes both products there".** Wrong
+twice: `hints()` reached that section with nothing at all, and the section
+itself is gone. Every evening format now has one technicals section per
+product and one picker each — see "The recap's one Technicals section became
+two" above.
 
 ### Only Friday quotes the week, and that was a decision
 

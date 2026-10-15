@@ -1060,21 +1060,15 @@ def build_html(ctx: dict, *, disclaimer: bool = True) -> str:
         if c.get("market_action"):
             body.append("<h2>Market Action</h2>" + _commentary(c["market_action"]))
 
-    if kind == "recap":
-        # ONE read covering both products, and no sub-headings for it to sit
-        # under. While the averages printed, this block put them beneath an "Oct
-        # Live Cattle" and an "Oct Feeders" heading and then dropped the single
-        # combined read after the second one -- where it read as though it were
-        # about feeders alone. With nothing computed left to head, the section
-        # is just the read.
-        written = _commentary(c.get("technicals", []))
-        if written:
-            body.append("<h2>Technicals</h2>" + written)
-    else:
-        tech_lc = technicals_block(ctx.get("tech_lc"), c.get("technicals_lc", []), "Live Cattle")
-        tech_fc = technicals_block(ctx.get("tech_fc"), c.get("technicals_fc", []), "Feeders")
-        if tech_lc or tech_fc:
-            body.append("<h2>Technicals</h2>" + tech_lc + tech_fc)
+    # EVERY EVENING FORMAT, the same shape. The recap was a special case
+    # printing one combined read under a bare "Technicals" until 2026-10-15 --
+    # see commentary.SECTIONS_BY_KIND for why that went, and note that
+    # technicals_block returns "" for a product with no written bullets, so a
+    # letter where only one side is written still prints only one heading.
+    tech_lc = technicals_block(ctx.get("tech_lc"), c.get("technicals_lc", []), "Live Cattle")
+    tech_fc = technicals_block(ctx.get("tech_fc"), c.get("technicals_fc", []), "Feeders")
+    if tech_lc or tech_fc:
+        body.append("<h2>Technicals</h2>" + tech_lc + tech_fc)
 
     if kind == "friday":
         # Friday drops the five-bullet weekly cash block and carries the

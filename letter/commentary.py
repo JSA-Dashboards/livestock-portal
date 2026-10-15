@@ -59,21 +59,39 @@ SECTIONS_BY_KIND = {
     "am": [
         ("headlines", "Headlines"),
     ],
-    # Mon/Wed/Thu. The session, briefly.
+    # Tue/Wed/Thu. The session, briefly.
     #
-    # ONE "technicals" KEY, NOT technicals_lc AND technicals_fc. Tuesday gives
-    # each product its own written read; this letter gives one. The computed
-    # moving averages for BOTH products still print above it -- those are
-    # arithmetic and cost nothing to include.
+    # ONE TECHNICALS SECTION PER PRODUCT, the same as the full letter and the
+    # Friday one -- changed 2026-10-15 at Ross's request. It carried a single
+    # "technicals" key until then, and two things followed from that which were
+    # not obvious until he asked why Thursday looked different:
     #
-    # It does NOT share the technicals_lc/fc keys, deliberately: a Tuesday draft
-    # and a recap draft are different files, and silently pouring a two-product
-    # read into a one-block section would print the Live Cattle read under a
-    # heading covering both.
+    #   The heading. render.technicals_block prints "<month> <product>" --
+    #   "Feb Live Cattle" -- and returns NOTHING when that product has no
+    #   written bullets of its own. One combined read therefore had no headings
+    #   to sit under and printed under a bare "Technicals", while Monday and
+    #   Friday named the contract. On a week when the front month rolls, which
+    #   contract the read is about is the first thing a reader needs.
+    #
+    #   THE FIGURES NEVER REACHED THE DRAFT, which is the one that mattered.
+    #   build.hints writes the close, the 9-day, the 20-day and the swing
+    #   high/low into slots named technicals_lc and technicals_fc, and its
+    #   add() skips a slot the format does not have -- so Tue/Wed/Thu drafts
+    #   carried an EMPTY figure block, measured 2026-10-15: 0 hint lines
+    #   against 6 per product on Monday. That silently included the "DO NOT
+    #   QUOTE, the series has a hole" warning, which 0435450 moved into the
+    #   draft precisely because a wrong average restated in Ross's own prose
+    #   carries no [[?]]. Exactly the kind="am" failure described in hints()
+    #   itself, repeated on a second format.
+    #
+    # The recap is still the lighter letter: no Fundamental Rundown, and the
+    # cash block is the week to date rather than last week's weighted average.
+    # Two technicals boxes is what it costs to name the contracts.
     "recap": [
         ("headlines", "Headlines"),
         ("market_action", "Market Action"),
-        ("technicals", "Technicals"),
+        ("technicals_lc", "Technicals: Live Cattle"),
+        ("technicals_fc", "Technicals: Feeder Cattle"),
         # LAST, and on every evening letter. Ross's catch-all: whatever the
         # named sections do not cover. Placed above the sign-off rather than
         # below the rundown literally, because the three formats end with
@@ -130,6 +148,28 @@ def sections_summary(kind: str = "tuesday") -> str:
     return f"{n} written {noun} ({', '.join(labels)})"
 
 _HEADING = re.compile(r"^##\s+(.*?)\s*$", re.MULTILINE)
+
+# A heading a format USED to carry, and where its text goes now.
+#
+# Sections are matched on heading text and an unrecognised heading is ignored,
+# so renaming one makes every draft already written under the old name vanish
+# from the page and from the letter with no error -- the quiet loss that
+# JSA.LETTER.DRAFTS exists to stop, arriving by a different route. The recap's
+# "## Technicals" became two headings on 2026-10-15 while Ross was part way
+# through that evening's letter.
+#
+# The carry-over fires ONLY when neither new heading is in the file, so it
+# retires itself: the first save writes both and this can never fire again on
+# that draft. The text lands under Live Cattle rather than being split, because
+# no rule can tell which bullet is about which product -- it is visible and
+# editable there, and visible-and-mislabelled beats silently gone.
+LEGACY_SECTION = {
+    "recap": {
+        "heading": "Technicals",
+        "into": "technicals_lc",
+        "replaced_by": ("Technicals: Live Cattle", "Technicals: Feeder Cattle"),
+    },
+}
 
 
 def path_for(out_dir: Path, issue_date, kind: str = "tuesday") -> Path:
@@ -215,10 +255,9 @@ def parse(text: str, kind: str = "tuesday") -> dict:
         end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
         by_title[m.group(1).strip().lower()] = text[m.end():end]
 
-    out = {}
-    for key, title in sections_for(kind):
+    def _bullets(block: str) -> list:
         bullets = []
-        for line in by_title.get(title.lower(), "").splitlines():
+        for line in block.splitlines():
             line = line.strip()
             # The template seeds each section with a bare "- ". An untouched one
             # must not reach the letter as an empty bullet.
@@ -231,7 +270,17 @@ def parse(text: str, kind: str = "tuesday") -> dict:
                 bullets.append(m.group(2).strip())
             elif not line.startswith("#"):
                 bullets.append(line)
-        out[key] = bullets
+        return bullets
+
+    out = {key: _bullets(by_title.get(title.lower(), ""))
+           for key, title in sections_for(kind)}
+
+    # A draft written before this format's headings were renamed. See
+    # LEGACY_SECTION -- it fires only while no new heading is present.
+    spec = LEGACY_SECTION.get(kind)
+    if spec and spec["heading"].lower() in by_title:
+        if not any(t.lower() in by_title for t in spec["replaced_by"]):
+            out[spec["into"]] = _bullets(by_title[spec["heading"].lower()])
     return out
 
 

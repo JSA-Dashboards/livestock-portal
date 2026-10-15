@@ -167,10 +167,24 @@ def test_the_page_applies_the_choice_before_it_reads_the_figures():
     assert apply_at < hints_at, "the page reads the figures before applying the month"
 
 
-def test_the_recap_format_offers_both_products():
-    """Tue/Wed/Thu has ONE written technicals section covering both, and
-    hints() still quotes both — so both pickers belong on it."""
+def test_every_technicals_section_has_exactly_one_picker():
+    """
+    One picker per product per section. The recap carried a combined
+    "technicals" key with BOTH pickers on it until 2026-10-15; now every
+    evening format has one section per product, so a key mapping to two
+    pickers means a section is back to covering both.
+    """
+    from letter import commentary
+
     src = PAGE.read_text(encoding="utf-8")
-    block = src[src.index("_TECH_PICKERS"):src.index("_TECH_PICKERS") + 600]
+    block = src[src.index("_TECH_PICKERS = {"):]
+    block = block[:block.index("}") + 1]      # no nested braces; values are tuples
     assert '"technicals_lc"' in block and '"technicals_fc"' in block
-    assert block.count("tech_lc") >= 2, "the recap key is missing a product"
+    assert block.count("tech_lc") == 1 and block.count("tech_fc") == 1
+    assert '"technicals":' not in block, "the combined recap key is back"
+
+    # every written technicals section any format has is covered
+    for kind in ("am", "tuesday", "recap", "friday"):
+        for key, _title in commentary.sections_for(kind):
+            if key.startswith("technicals"):
+                assert f'"{key}"' in block, f"{kind}: {key} has no month picker"

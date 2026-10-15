@@ -164,9 +164,15 @@ elif kind == "recap":
     # landed, so Mon/Wed/Thu fell through to "Standard format" -- the page
     # naming a letter you are not writing, while the boxes below it showed the
     # recap's sections. Wrong labels on an authoring page are worse than none.
-    st.caption("**Recap format** — the session in brief: one technicals read "
-               "covering both products, and no Fundamental Rundown. Boxed beef "
-               "publishes about 3pm Central; build after that.")
+    #
+    # THE SECTION COUNT IS DERIVED, for the reason spelled out in the AM
+    # branch below: this caption read "one technicals read covering both
+    # products" and was still saying so on the live page on 2026-10-15, after
+    # that section had become two. A typed claim about which sections a format
+    # has goes stale the first time one moves, and nothing makes it fail.
+    st.caption("**Recap format** — the session in brief: no Fundamental "
+               f"Rundown, {commentary.sections_summary('recap')} to write. "
+               "Boxed beef publishes about 3pm Central; build after that.")
 elif kind == "am":
     # FOUR FORMATS, FOUR CAPTIONS. The AM brief fell through to "Standard
     # format" -- the same miss the recap branch above was added to fix, one
@@ -791,12 +797,17 @@ if len(_versions) > 1:
 # before a reboot survives. Written back to the ctx file so `build.main
 # --no-fetch`, the run that makes the emailed PDF, renders the month that was
 # previewed rather than the nearby one.
+# Every evening format now has one technicals section per product, so each
+# picker governs exactly one. The recap carried a combined "technicals" key
+# with BOTH pickers on it until 2026-10-15; that entry is gone rather than
+# left harmless, because a key no format has is config that reads as live.
+#
+# The comment it carried was also wrong on its own terms -- it said hints()
+# quoted both products there, and hints() reached that section with nothing
+# at all. See commentary.SECTIONS_BY_KIND.
 _TECH_PICKERS = {
     "technicals_lc": (("tech_lc", "Live cattle"),),
     "technicals_fc": (("tech_fc", "Feeders"),),
-    # The Tue/Wed/Thu recap has ONE written technicals section covering both
-    # products, and hints() still quotes both -- so both pickers belong on it.
-    "technicals": (("tech_lc", "Live cattle"), ("tech_fc", "Feeders")),
 }
 
 for _tk in letter_build.TECH_KEYS:

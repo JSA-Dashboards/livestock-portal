@@ -415,15 +415,21 @@ def test_the_three_middle_days_are_alike():
     assert len(kinds) == 1
 
 
-def test_the_recap_is_the_light_letter():
+def test_the_recap_is_still_the_light_letter():
     """
-    Added 2026-09-24 for Mon/Wed/Thu. One written technicals block instead of
-    two, and no Fundamental Rundown -- those are what make Tuesday heavy.
+    Added 2026-09-24 for Tue/Wed/Thu as "one written technicals block instead
+    of two, and no Fundamental Rundown". The technicals half was reversed on
+    2026-10-15 -- see SECTIONS_BY_KIND -- so what makes this letter the light
+    one is now the Fundamental Rundown and the cash block, and that is the
+    part worth pinning.
     """
     keys = [k for k, _ in commentary.sections_for("recap")]
-    assert keys == ["headlines", "market_action", "technicals", "comments"]
+    assert keys == ["headlines", "market_action",
+                    "technicals_lc", "technicals_fc", "comments"]
     assert "fundamental" not in keys
-    assert "technicals_lc" not in keys and "technicals_fc" not in keys
+    assert "technicals" not in keys, (
+        "the combined key is back; hints() writes to technicals_lc/fc and "
+        "silently skips a slot the format lacks")
 
 
 def test_the_recap_did_not_disturb_the_other_two():
@@ -441,21 +447,150 @@ def test_the_recap_did_not_disturb_the_other_two():
                    "cash_recap", "cof_note", "comments"]
 
 
-def test_the_recap_prints_one_technicals_read_not_two():
+def test_the_recap_names_the_contract_the_read_is_about():
     """
-    While the averages printed, the single combined read landed after an "Oct
-    Feeders" heading and read as though it were about feeders alone. With
-    nothing computed left to head, the section is just the read -- once.
+    Ross, 2026-10-15: "why are my technicals just listed under technicals but
+    not broken out by Feb Live Cattle and Nov Feeder Cattle like the technical
+    format shows on the Monday and Friday afternoon email?"
+
+    The heading is month + product, so on a roll week it says WHICH contract.
     """
-    ctx = _pm_ctx({"technicals": ["Holding the 20-day."]}, kind="recap")
-    ctx["tech_lc"] = {"month": "Oct", "ma": {9: 220.0, 20: 219.0}, "complete": True}
-    ctx["tech_fc"] = {"month": "Oct", "ma": {9: 336.0, 20: 334.0}, "complete": True}
+    ctx = _pm_ctx({"technicals_lc": ["Holding the 20-day."],
+                   "technicals_fc": ["Failed at the swing high."]}, kind="recap")
+    ctx["tech_lc"] = {"month": "Feb", "ma": {9: 220.0, 20: 219.0}, "complete": True}
+    ctx["tech_fc"] = {"month": "Nov", "ma": {9: 336.0, 20: 334.0}, "complete": True}
     html = render.build_html(ctx)
-    assert html.count("Holding the 20-day.") == 1
     assert "<h2>Technicals</h2>" in html
-    # nothing computed, and no per-product sub-heading for the read to sit under
+    assert "<h3>Feb Live Cattle</h3>" in html
+    assert "<h3>Nov Feeders</h3>" in html
+    assert html.index("Feb Live Cattle") < html.index("Nov Feeders")
+    # each read once, under its own product
+    assert html.count("Holding the 20-day.") == 1
+    assert html.count("Failed at the swing high.") == 1
+    # and still nothing computed: technicals print only what Ross writes
     assert "220.00" not in html and "336.00" not in html
     assert "moving average" not in html
+
+
+def test_one_product_written_prints_one_heading_not_an_empty_one():
+    """
+    technicals_block returns "" for a product with no bullets, so a day Ross
+    writes only the live cattle read must not print a bare "Nov Feeders" with
+    nothing under it. This is what made the combined read headingless in the
+    first place -- same rule, now working for the recap.
+    """
+    ctx = _pm_ctx({"technicals_lc": ["Holding the 20-day."]}, kind="recap")
+    ctx["tech_lc"] = {"month": "Feb", "ma": {}, "complete": True}
+    ctx["tech_fc"] = {"month": "Nov", "ma": {}, "complete": True}
+    html = render.build_html(ctx)
+    assert "<h3>Feb Live Cattle</h3>" in html
+    assert "Feeders" not in html.split("<h2>Technicals</h2>")[1][:400]
+
+
+def test_the_recap_draft_finally_gets_its_technicals_figures():
+    """
+    THE DEFECT UNDER THE ONE ROSS REPORTED, and the one that could have cost a
+    number. build.hints writes the close and the moving averages into slots
+    named technicals_lc/technicals_fc, and its add() skips a slot the format
+    does not have -- so the recap's single "technicals" key received NOTHING.
+    Measured 2026-10-15: 0 hint lines where Monday had 6 per product.
+
+    It took the gap warning with it. The letter stopped printing the averages
+    on 2026-09-25, and 0435450 moved "DO NOT QUOTE, the series has a hole" into
+    the draft for exactly that reason -- a wrong average restated in Ross's own
+    prose carries no [[?]] at all. On Tue/Wed/Thu that warning reached nobody.
+    """
+    from letter import build as letter_build
+
+    ctx = {
+        "change_basis": "session",
+        "live_cattle": [{"month": "Dec", "change_day": 0.5, "settle": 225.0}],
+        "feeder_cattle": [{"month": "Nov", "change_day": 1.0, "settle": 332.0}],
+        "tech_lc": {"month": "Feb", "last_close": 230.1, "last_date": "2026-10-14",
+                    "ma": {9: 229.0, 20: 228.0}, "complete": True},
+        "tech_fc": {"month": "Nov", "last_close": 332.0, "last_date": "2026-10-14",
+                    "ma": {9: 331.0, 20: 330.0}, "complete": True},
+        "slaughter": {}, "cutout": {}, "cash": {},
+    }
+    hints = letter_build.hints(dict(ctx), "recap")
+    lc = " ".join(hints["technicals_lc"])
+    fc = " ".join(hints["technicals_fc"])
+    assert "229.0" in lc and "228.0" in lc and "230.1" in lc
+    assert "331.0" in fc and "330.0" in fc
+    assert "Feb Live Cattle" in lc and "Nov Feeders" in fc
+
+    # and the recap is not quietly thinner than the formats it sits between
+    for kind in ("tuesday", "friday"):
+        other = letter_build.hints(dict(ctx), kind)
+        assert len(hints["technicals_lc"]) == len(other["technicals_lc"])
+
+
+def test_a_gapped_series_warns_the_recap_too():
+    """The half of the above that would cost a published number."""
+    from letter import build as letter_build
+
+    ctx = {
+        "change_basis": "session", "live_cattle": [], "feeder_cattle": [],
+        "tech_lc": {"month": "Feb", "last_close": 230.1, "last_date": "2026-10-14",
+                    "ma": {9: 229.0, 20: 228.0}, "complete": False,
+                    "gaps": ["2026-09-14"]},
+        "tech_fc": None,
+        "slaughter": {}, "cutout": {}, "cash": {},
+    }
+    lc = " ".join(letter_build.hints(dict(ctx), "recap")["technicals_lc"])
+    # The average is still shown -- it is the figure he is writing against --
+    # but never bare. Suppressing it would leave him with nothing and no
+    # reason given; the warning is what the letter can no longer mark [[?]].
+    assert "DO NOT QUOTE" in lc and "2026-09-14" in lc
+    assert "229.0" in lc
+
+
+# -- nothing already written may disappear --------------------------------
+
+def test_a_draft_written_under_the_old_heading_is_not_lost():
+    """
+    Sections are matched on heading text and an unrecognised heading is
+    ignored, so renaming "## Technicals" would have emptied every recap draft
+    already written -- including the one Ross was part way through on
+    2026-10-15, on the deployed app, while this change was being made.
+    """
+    old = ("## Headlines\n\n- Cash quiet.\n\n"
+           "## Technicals\n\n- Dec live cattle holding the 20-day.\n\n"
+           "## Comments\n\n- Feedlots current.\n")
+    got = commentary.parse(old, "recap")
+    assert got["technicals_lc"] == ["Dec live cattle holding the 20-day."]
+    assert got["technicals_fc"] == []
+    assert got["headlines"] == ["Cash quiet."]
+    assert got["comments"] == ["Feedlots current."]
+
+
+def test_the_carry_over_retires_itself_on_the_first_save():
+    """
+    It fires only while NEITHER new heading is in the file. Once the draft has
+    been saved in the new shape a stale "## Technicals" left further down must
+    not overwrite what Ross has since written under Live Cattle.
+    """
+    both = ("## Technicals: Live Cattle\n\n- Feb LC above the 9-day.\n\n"
+            "## Technicals: Feeder Cattle\n\n- Nov feeders soft.\n\n"
+            "## Technicals\n\n- stale combined read\n")
+    got = commentary.parse(both, "recap")
+    assert got["technicals_lc"] == ["Feb LC above the 9-day."]
+    assert got["technicals_fc"] == ["Nov feeders soft."]
+
+    # one side written is still enough to retire it
+    one = ("## Technicals: Live Cattle\n\n- Feb LC above the 9-day.\n\n"
+           "## Technicals\n\n- stale combined read\n")
+    assert commentary.parse(one, "recap")["technicals_lc"] == ["Feb LC above the 9-day."]
+
+
+def test_the_carry_over_touches_no_other_format():
+    """tuesday and friday never had a combined heading; a file carrying one is
+    a recap draft opened as the wrong kind, and guessing at it is how a
+    two-product read ends up under one product's heading."""
+    old = "## Technicals\n\n- combined read\n"
+    for kind in ("tuesday", "friday", "am"):
+        got = commentary.parse(old, kind)
+        assert all(not v for v in got.values()), kind
 
 
 def test_no_letter_spends_a_page_on_the_signature():
