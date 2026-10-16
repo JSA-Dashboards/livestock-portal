@@ -11,8 +11,8 @@ reason this file leans on the ONE invariant that survives every version:
 
 ISU's $109-111/cwt is all-in and carries death loss inside it. Charge death
 loss on top of $110 and it is counted twice -- which is version 1, and which
-moved every figure on the page with nothing raising. The $101 default is that
-figure with the death loss taken back out, so the slider can put it back.
+moved every figure on the page with nothing raising. The $101.35 default is
+that figure less the death loss charge, so the page opens on $110 all-in.
 
 The history, since each wrong version looked right:
 
@@ -81,6 +81,10 @@ DEATH_PCT_MIN, DEATH_PCT_MAX = _const("DEATH_PCT_MIN"), _const("DEATH_PCT_MAX")
 # backgrounding, ALL-IN -- the range the module comment cites.
 ISU_ALL_IN = (109.0, 111.0)
 
+# What the page opens on, Ross's call 2026-10-16: the midpoint, which is the
+# figure ISU's backgrounding budgets are usually quoted at.
+ISU_ALL_IN_TARGET = 110.0
+
 
 def crush(start_wt, sell_wt, bid, cog, death, sale_price):
     """The page's build-up, in one place, so the identities can be asserted.
@@ -111,29 +115,46 @@ def crush(start_wt, sell_wt, bid, cog, death, sale_price):
 CASE = dict(start_wt=525.0, sell_wt=800.0, cog=DEFAULTS["cog"],
             death=DEFAULTS["death"], sale_price=330.0)
 
-# A calf at roughly today's money, which is what the $101 was subtracted at.
+# The calf the $101.35 was subtracted at -- today's cash seed.
 TODAYS_BID = 453.28
 
 
 # ── the pairing: the guard that could have caught version 1 ─────────────────
 
-def test_the_cost_of_gain_default_has_the_death_loss_taken_out():
+def test_the_page_opens_on_110_all_in():
     """THE DOUBLE-COUNT GUARD, and the only test here that version 1 fails.
 
-    The default must be ISU's all-in figure LESS a representative death loss,
-    so that charging death loss back on lands inside ISU's range rather than
-    above it. A default of $110 passes every other test in this file and is
-    the bug.
+    Ross's call, 2026-10-16: the page opens on ISU's $110/cwt ALL-IN. Since
+    the slider charges death loss separately, the cost of gain box has to hold
+    $110 LESS that charge -- $101.35 at a $453 calf. A box holding $110 passes
+    every other test in this file and is the double count.
+
+    Pinned at TODAYS_BID because the subtraction is calf-price dependent; see
+    the drift test below for why that is correct rather than a defect.
     """
     out = crush(bid=TODAYS_BID, **CASE)
-    lo, hi = ISU_ALL_IN
-    assert lo <= out["cost_c"] <= hi, (
-        f"all-in cost of gain {out['cost_c']:.2f} is outside ISU's {lo}-{hi}; "
-        f"DEFAULTS['cog'] and the death loss charge have come apart")
+    assert abs(out["cost_c"] - ISU_ALL_IN_TARGET) < 0.01, (
+        f"page opens on {out['cost_c']:.2f}/cwt all-in, not "
+        f"{ISU_ALL_IN_TARGET:.2f}; DEFAULTS['cog'] and the death loss charge "
+        f"have come apart")
 
-    # ...and stated the other way round, so a reader sees why 101 and not 110.
-    assert DEFAULTS["cog"] < lo, "the default must EXCLUDE death loss"
+    # ...and stated the other way round, so a reader sees why 101.35, not 110.
+    assert DEFAULTS["cog"] < ISU_ALL_IN[0], "the default must EXCLUDE death loss"
     assert abs(DEFAULTS["cog"] + out["death_c"] - out["cost_c"]) < 1e-9
+
+
+def test_the_all_in_default_drifts_up_with_the_calf_and_that_is_right():
+    """Dearer calves genuinely cost more to lose, so the opening all-in figure
+    rises with them. Pinning it at $110 forever would mean quietly shrinking
+    the feed-and-yardage figure every time calves rallied, which is false.
+
+    The band is ISU's own published range, so the drift is bounded by
+    something real rather than by a number picked here.
+    """
+    dear = crush(bid=500.0, **CASE)["cost_c"]
+    assert dear > ISU_ALL_IN_TARGET
+    assert dear <= ISU_ALL_IN[1], "a $500 calf should still sit inside ISU's range"
+    assert crush(bid=400.0, **CASE)["cost_c"] < ISU_ALL_IN_TARGET
 
 
 def test_charging_on_an_all_in_cost_of_gain_overshoots_isu():

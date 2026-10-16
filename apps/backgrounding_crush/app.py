@@ -14,8 +14,8 @@ head follows from it, but value of gain is the number a backgrounder decides
 on, because it is directly comparable to a forage or grower-ration cost.
 
 DEATH LOSS IS ITS OWN SLIDER AND THE COST OF GAIN BOX EXCLUDES IT. The two are
-a pair: the $101 default is Iowa State's all-in $110 with the death loss taken
-back out, so the slider can charge it without counting it twice. Charged on an
+a pair: the $101.35 default is Iowa State's all-in $110 with the death loss
+taken back out, so the slider can charge it without counting it twice. Charged on an
 all-in figure it would be, and nothing on the page could report that -- a
 plausible cost over a plausible calf is a plausible margin either way.
 
@@ -111,7 +111,7 @@ MONTH_NAME = dict(zip(range(1, 13),
 # which is exactly why the build-up shows it as its own line.
 #
 # THAT $109-111 IS ALL-IN AND INCLUDES DEATH LOSS, WHICH IS WHY THE DEFAULT
-# BELOW IS $101 AND NOT $110. Death loss has its own slider and charges
+# BELOW IS $101.35 AND NOT $110. Death loss has its own slider and charges
 # separately, so the box it is charged on top of must be ISU's figure with the
 # death loss taken back out. Three versions shipped on 2026-10-16 before that
 # pairing was right, and the history is worth one paragraph because each one
@@ -130,23 +130,30 @@ MONTH_NAME = dict(zip(range(1, 13),
 # Changing whether death loss is charged without moving DEFAULTS["cog"] in the
 # same edit is the double count, and no label or help text catches it.
 #
-# THE $101 IS ISU'S $110 WITH THE DEATH LOSS TAKEN OUT, AND THAT SUBTRACTION
-# IS THE WHOLE REASON THE SLIDER IS SAFE. Their $109-111 is all-in and carries
-# death loss; the slider charges death loss itself, so leaving the default at
-# $110 would charge it twice -- the defect that shipped on 2026-10-16 and the
-# one nothing on the page can report, because a plausible cost over a
-# plausible calf gives a plausible margin whichever way it was built.
+# THE $101.35 IS ISU'S $110 WITH THE DEATH LOSS TAKEN OUT, AND THAT
+# SUBTRACTION IS THE WHOLE REASON THE SLIDER IS SAFE. Their $109-111 is all-in
+# and carries death loss; the slider charges death loss itself, so leaving the
+# default at $110 would charge it twice -- the defect that shipped on
+# 2026-10-16 and the one nothing on the page can report, because a plausible
+# cost over a plausible calf gives a plausible margin whichever way it was
+# built.
 #
-# $110 less about $9 of death loss at today's calf money is $101. It is round
-# rather than exact on purpose: the exact subtraction is calf-price dependent
-# ($8.65/cwt at a $453 calf, $3.44 at $180), so a figure to the cent would be
-# precision this cannot have. At the 1% default it adds back to $109.65 all-in,
-# inside ISU's range.
+# The figure is chosen so the page OPENS ON $110.00/cwt ALL-IN -- Ross's call,
+# 2026-10-16, having seen the alternative. At the 1% default and a $453 calf
+# death loss is $8.65/cwt of gain, so $110.00 - $8.65 = $101.35.
+#
+# IT IS EXACT TODAY AND DRIFTS WITH THE CALF, WHICH IS CORRECT RATHER THAN A
+# DEFECT. Death loss is a percentage of the purchase price, so dearer calves
+# genuinely cost more to lose: at a $500 calf the same 1% is $9.55 and the
+# page opens at $110.90 all-in. Pinning the all-in total at $110 forever would
+# mean quietly shrinking the feed-and-yardage figure every time calves rallied,
+# which is the opposite of true. ISU's own $110 was computed at some calf
+# value too.
 DEFAULTS = {
     "start_wt": 525.0,
     "sell_wt": 800.0,
     "adg": 2.00,       # grower/forage, against ~3.25 in a feedyard
-    "cog": 101.0,      # $/cwt of gain, EXCLUDING death loss -- see above
+    "cog": 101.35,     # $/cwt of gain, EXCLUDING death loss -- see above
     "death": 1,        # %, charged by the slider on top of the line above
     "basis": -2.00,    # feeder cash typically under the board
 }
@@ -448,7 +455,7 @@ with tab_crush:
                  "slider below charges separately. Iowa State's 2026 budgets "
                  "put backgrounding at $109-111/cwt ALL-IN, about the same as "
                  "finishing because every per-day cost is spread over half as "
-                 "many pounds; the $101 default is that figure with its death "
+                 "many pounds; the $101.35 default is that figure with its death "
                  "loss taken out, so the slider can put it back without "
                  "counting it twice."))
         death = field("Death loss", lambda: st.slider(
@@ -571,7 +578,7 @@ with tab_crush:
     breakeven = total_cost / (sell_wt / 100.0) if sell_wt else 0.0
 
     # DEATH LOSS IS CHARGED BY THE SLIDER, ON TOP OF A COST OF GAIN THAT
-    # EXCLUDES IT. The pairing with DEFAULTS["cog"] = 101 is what makes that
+    # EXCLUDES IT. The pairing with DEFAULTS["cog"] = 101.35 is what makes that
     # safe -- see the comment above DEFAULTS. Charged on $110 it would be
     # counted twice, which is the version that shipped on 2026-10-16.
     #

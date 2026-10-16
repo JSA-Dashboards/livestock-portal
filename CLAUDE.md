@@ -826,21 +826,28 @@ loss slider (0-10%, whole points, default 1) that charges death loss on top of
 the cost of gain, so a high-risk set is a drag of the slider rather than
 arithmetic the user does in their head.
 
-**THE SLIDER AND `DEFAULTS["cog"] = 101` ARE A PAIR, AND THAT IS THE WHOLE
+**THE SLIDER AND `DEFAULTS["cog"] = 101.35` ARE A PAIR, AND THAT IS THE WHOLE
 CORRECTNESS OF IT.** Iowa State's $109-111/cwt is ALL-IN and carries death
-loss inside it. The $101 is their figure with the death loss taken back out,
-so the slider can put it back. Charge death loss on top of $110 and it is
-counted twice — and nothing on the page can report that, because a plausible
-cost over a plausible calf gives a plausible margin either way. **Changing
-whether death loss is charged without moving that default in the same edit is
-the bug.**
+loss inside it. The $101.35 is their figure with the death loss charge taken
+back out, so the slider can put it back. Charge death loss on top of $110 and
+it is counted twice — and nothing on the page can report that, because a
+plausible cost over a plausible calf gives a plausible margin either way.
+**Changing whether death loss is charged without moving that default in the
+same edit is the bug.**
 
-$101 is round rather than exact on purpose: the subtraction is calf-price
-dependent ($8.65/cwt at a $453 calf, $3.44 at $180), so a figure to the cent
-would be precision this cannot have. At the 1% default it adds back to
-$109.65 all-in, inside ISU's range — which is what `tests/
-test_backgrounding_death.py` asserts, and the only guard that catches the
-double count.
+**The page opens on $110.00/cwt ALL-IN** — Ross's call, 2026-10-16, having
+seen the alternative. At the 1% default and a $453 calf death loss is
+$8.65/cwt of gain, so the box holds $110.00 - $8.65 = $101.35.
+
+**That is exact today and DRIFTS WITH THE CALF, which is correct rather than a
+defect.** Death loss is a percentage of the purchase price, so dearer calves
+genuinely cost more to lose: at a $500 calf the same 1% is $9.55 and the page
+opens at $110.90 all-in. Pinning the all-in total at $110 forever would mean
+quietly shrinking the feed-and-yardage figure every time calves rallied, which
+is the opposite of true — ISU's own $110 was computed at some calf value too.
+`tests/test_backgrounding_death.py` pins the $110 opening at today's calf AND
+the drift, bounded by ISU's published range rather than by a number picked
+here. That pair is the only guard that catches the double count.
 
 **All four versions shipped and rendered perfectly. Worth keeping, because
 each wrong one looked right:**
@@ -859,7 +866,7 @@ What is on the page now, in the Your Cattle column directly under the slider:
 
     Death loss adds      $8.65
         1% x $2,379.72 calf = $23.80/head, over 2.75 cwt of gain ·
-        $101.00 + $8.65 = $109.65/cwt all-in
+        $101.35 + $8.65 = $110.00/cwt all-in
 
 **That row is rendered through an `st.empty()` slot booked under the slider**,
 because the figure needs the bid — a widget in the OTHER column that Streamlit
