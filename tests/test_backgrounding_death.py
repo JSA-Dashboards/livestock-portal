@@ -1,35 +1,38 @@
 """
-Death loss on the Backgrounding Crush -- a BREAKDOWN of cost of gain, not a
-charge on top of it.
+Death loss on the Backgrounding Crush -- the slider, and the subtraction that
+makes it safe.
 
-THE FIRST VERSION OF THIS FILE PINNED THE OPPOSITE and every test passed. It
-shipped on 2026-10-16 with death loss added to total cost, and the arithmetic
-was right in isolation -- the break-even solved correctly, the profit identity
-held, the guards fired against a broken copy. It was still wrong, because the
-$110 cost of gain default is Iowa State's ALL-IN figure and already carries
-death loss, so the page charged it twice and moved every number on it. Pulled
-the same day at Ross's call.
+FOUR VERSIONS SHIPPED ON 2026-10-16 AND THE SUITE WAS GREEN FOR EVERY ONE. A
+test suite holds whichever answer it was given; it cannot tell you a figure is
+counted twice when both places counting it are individually right. That is the
+reason this file leans on the ONE invariant that survives every version:
 
-That is the thing worth recording: a test suite cannot tell you that a number
-is being counted twice when both places that count it are individually
-correct. It can only hold whichever answer you gave it. So what is pinned here
-now is the NEGATIVE -- that `death` reaches no total -- because that is the
-property the next person to touch this page is most likely to undo, and it is
-the one nothing on screen would report.
+    DEFAULTS["cog"] and whether death loss is charged are A PAIR.
 
-  * DEATH LOSS REACHES NOTHING. Not total cost, not profit, not the
-    value-of-gain comparison. Asserted structurally off the AST, so it holds
-    whatever the lines are renamed to.
+ISU's $109-111/cwt is all-in and carries death loss inside it. Charge death
+loss on top of $110 and it is counted twice -- which is version 1, and which
+moved every figure on the page with nothing raising. The $101 default is that
+figure with the death loss taken back out, so the slider can put it back.
 
-  * THE PROFIT IDENTITY SURVIVES. profit == (vog - cog) x gain/100, which is
-    what lets the caption report a per-head figure that agrees with the Profit
-    tile. Adding death loss to total cost alone breaks it; that is how the
-    first version was found to need a matching change everywhere.
+The history, since each wrong version looked right:
 
-  * THE COST OF GAIN FIELD SAYS DEATH LOSS IS IN IT. That one is prose, so it
-    is checked as prose -- but lifted off the AST rather than grepped, because
-    the module's comments discuss the double count at length and a grep
-    matches the explanation.
+  1. A cost line added to a $110 all-in cost of gain. Double counted.
+  2. An input that only split the $110. Arithmetically harmless, and still
+     wrong -- a control that changes no figure misleads about what it does.
+  3. No input at all, a worked note at a fixed 1%. Correct, but it left the
+     user adjusting the cost of gain by hand for a high-risk set.
+  4. This one: a slider that charges, against a cost of gain that excludes.
+
+What is pinned here:
+
+  * The cost of gain default is the EX-DEATH-LOSS figure, and adding a
+    representative death loss back lands inside ISU's published all-in range.
+    This is the double-count guard and it is the only one that could have
+    caught version 1.
+  * The break-even solves for a bid that death loss scales with -- the (1 + d)
+    factor. Dropping it returns a bid a point high that reads as a break-even.
+  * profit == (vog - all-in cost) x gain/100, which is what lets the caption
+    report a per-head figure that agrees with the Profit tile.
 
     python -m pytest tests/test_backgrounding_death.py -q
 """
@@ -47,146 +50,197 @@ APP = os.path.join(_HERE, "..", "apps", "backgrounding_crush", "app.py")
 SRC = open(APP, encoding="utf-8").read()
 TREE = ast.parse(SRC)
 
-# `load_from_app` hands back the function itself when exactly one name is
-# asked for, so DEFAULTS comes off the tree this file already parsed.
-death_cost_per_head = load_from_app(APP, "death_cost_per_head")
-DEATH_LOSS_PCT = ast.literal_eval(
-    next(n.value for n in ast.walk(TREE)
-         if isinstance(n, ast.Assign) and len(n.targets) == 1
-         and isinstance(n.targets[0], ast.Name)
-         and n.targets[0].id == "DEATH_LOSS_PCT"))
-DEFAULTS = ast.literal_eval(
-    next(n.value for n in ast.walk(TREE)
-         if isinstance(n, ast.Assign) and len(n.targets) == 1
-         and isinstance(n.targets[0], ast.Name)
-         and n.targets[0].id == "DEFAULTS"))
+
+def _const(name):
+    """A module-level constant's value, off the AST.
+
+    Handles tuple assignment, because `DEATH_PCT_MIN, DEATH_PCT_MAX = 0, 10`
+    is one Assign whose target is a Tuple -- a Name-only reader raises
+    StopIteration on it, which reads as the constant having been deleted.
+    """
+    for n in ast.walk(TREE):
+        if not isinstance(n, ast.Assign) or len(n.targets) != 1:
+            continue
+        tgt = n.targets[0]
+        if isinstance(tgt, ast.Name) and tgt.id == name:
+            return ast.literal_eval(n.value)
+        if isinstance(tgt, ast.Tuple) and isinstance(n.value, ast.Tuple):
+            for t, v in zip(tgt.elts, n.value.elts):
+                if isinstance(t, ast.Name) and t.id == name:
+                    return ast.literal_eval(v)
+    raise AssertionError(f"no module-level constant {name!r}")
+
+
+_ns = load_from_app(APP, "death_cost_per_head", "calf_breakeven")
+death_cost_per_head = _ns["death_cost_per_head"]
+calf_breakeven = _ns["calf_breakeven"]
+DEFAULTS = _const("DEFAULTS")
+DEATH_PCT_MIN, DEATH_PCT_MAX = _const("DEATH_PCT_MIN"), _const("DEATH_PCT_MAX")
+
+# Iowa State's Livestock Enterprise Budgets for Iowa-2026 (FM 1815 / B1-21),
+# backgrounding, ALL-IN -- the range the module comment cites.
+ISU_ALL_IN = (109.0, 111.0)
 
 
 def crush(start_wt, sell_wt, bid, cog, death, sale_price):
     """The page's build-up, in one place, so the identities can be asserted.
 
     Mirrors apps/backgrounding_crush/app.py rather than importing it -- the
-    page is a script and importing it runs the dashboard. Note what is NOT
-    here: `death` appears only in the breakdown block at the bottom and in no
-    total above it. That shape is the thing under test, and the AST checks
-    further down are what hold the real page to it.
+    page is a script and importing it runs the dashboard. The two helpers that
+    carry the real arithmetic ARE imported, so what can drift is the page's.
     """
     gain = sell_wt - start_wt
     gain_cwt = gain / 100.0
     revenue = sell_wt / 100.0 * sale_price
     cog_cost = gain_cwt * cog
     calf_cost = start_wt / 100.0 * bid
-    total_cost = calf_cost + cog_cost
-    vog = (revenue - calf_cost) / gain_cwt
-
     death_cost = death_cost_per_head(calf_cost, death)
+    total_cost = calf_cost + cog_cost + death_cost
     death_c = death_cost / gain_cwt
+    cost_c = cog + death_c
     return {
         "revenue": revenue, "cog_cost": cog_cost, "calf_cost": calf_cost,
-        "total_cost": total_cost, "profit": revenue - total_cost, "vog": vog,
-        "gain_cwt": gain_cwt,
-        "death_cost": death_cost, "death_c": death_c,
-        "cog_other": cog - death_c,
-        "death_share": death_c / cog * 100.0 if cog else 0.0,
+        "death_cost": death_cost, "total_cost": total_cost,
+        "profit": revenue - total_cost, "gain_cwt": gain_cwt,
+        "vog": (revenue - calf_cost) / gain_cwt,
+        "death_c": death_c, "cost_c": cost_c,
+        "death_share": death_c / cost_c * 100.0 if cost_c else 0.0,
     }
 
 
-CASE = dict(start_wt=525.0, sell_wt=800.0, cog=110.0, death=DEATH_LOSS_PCT,
-            sale_price=330.0)
+CASE = dict(start_wt=525.0, sell_wt=800.0, cog=DEFAULTS["cog"],
+            death=DEFAULTS["death"], sale_price=330.0)
+
+# A calf at roughly today's money, which is what the $101 was subtracted at.
+TODAYS_BID = 453.28
 
 
-# ── the breakdown is right ──────────────────────────────────────────────────
+# ── the pairing: the guard that could have caught version 1 ─────────────────
+
+def test_the_cost_of_gain_default_has_the_death_loss_taken_out():
+    """THE DOUBLE-COUNT GUARD, and the only test here that version 1 fails.
+
+    The default must be ISU's all-in figure LESS a representative death loss,
+    so that charging death loss back on lands inside ISU's range rather than
+    above it. A default of $110 passes every other test in this file and is
+    the bug.
+    """
+    out = crush(bid=TODAYS_BID, **CASE)
+    lo, hi = ISU_ALL_IN
+    assert lo <= out["cost_c"] <= hi, (
+        f"all-in cost of gain {out['cost_c']:.2f} is outside ISU's {lo}-{hi}; "
+        f"DEFAULTS['cog'] and the death loss charge have come apart")
+
+    # ...and stated the other way round, so a reader sees why 101 and not 110.
+    assert DEFAULTS["cog"] < lo, "the default must EXCLUDE death loss"
+    assert abs(DEFAULTS["cog"] + out["death_c"] - out["cost_c"]) < 1e-9
+
+
+def test_charging_on_an_all_in_cost_of_gain_overshoots_isu():
+    """Version 1, stated as arithmetic so nobody has to take it on trust: the
+    same slider against a $110 box lands above ISU's all-in range."""
+    bad = crush(bid=TODAYS_BID, **{**CASE, "cog": 110.0})
+    assert bad["cost_c"] > ISU_ALL_IN[1]
+    assert bad["cost_c"] - crush(bid=TODAYS_BID, **CASE)["cost_c"] > 8.0
+
+
+# ── the charge is right ─────────────────────────────────────────────────────
 
 def test_death_loss_is_the_purchase_value_of_the_calves_that_die():
     """1% of a $2,165 calf is $21.65 -- no (1-d) grossing up, no sale value."""
-    assert death_cost_per_head(2165.0, 1.0) == 21.65
-    assert death_cost_per_head(2165.0, 0.0) == 0.0
+    assert death_cost_per_head(2165.0, 1) == 21.65
+    assert death_cost_per_head(2165.0, 0) == 0.0
 
 
 def test_the_explainers_worked_example_is_what_the_code_does():
     """The page claims 1% -> 5% on a $2,165 calf is $31.50/cwt over 275 lb.
-    That sentence has been on the page since it was built; it is quoted here
-    so the prose and the arithmetic cannot drift apart."""
-    swing = (death_cost_per_head(2165.0, 5.0)
-             - death_cost_per_head(2165.0, 1.0)) / 2.75
+    Quoted here so the prose and the arithmetic cannot drift apart."""
+    swing = (death_cost_per_head(2165.0, 5)
+             - death_cost_per_head(2165.0, 1)) / 2.75
     assert abs(swing - 31.50) < 0.02
 
 
-def test_the_split_adds_back_up_to_the_cost_of_gain():
-    """death loss + the remainder == the figure the user typed. If this ever
-    fails the column is telling someone their feed bill is a number it is
-    not."""
-    for death in (0.0, 1.0, 2.5, 7.0):
-        out = crush(bid=450.0, **{**CASE, "death": death})
-        assert abs(out["death_c"] + out["cog_other"] - CASE["cog"]) < 1e-9
-        assert abs(out["death_share"] / 100.0 * CASE["cog"]
-                   - out["death_c"]) < 1e-9
+def test_the_slider_moves_the_answer():
+    """The whole point of the change: raising death loss raises the all-in
+    cost and lowers profit, with no hand-editing of the cost of gain."""
+    last_profit, last_cost = None, None
+    for death in range(DEATH_PCT_MIN, DEATH_PCT_MAX + 1):
+        out = crush(bid=TODAYS_BID, **{**CASE, "death": death})
+        if last_profit is not None:
+            assert out["profit"] < last_profit
+            assert out["cost_c"] > last_cost
+        last_profit, last_cost = out["profit"], out["cost_c"]
+
+    off = crush(bid=TODAYS_BID, **{**CASE, "death": 0})
+    assert off["death_cost"] == 0.0
+    assert off["cost_c"] == CASE["cog"]
 
 
 def test_the_share_moves_with_the_calf_and_not_with_the_ration():
-    """The reason the box exists. Same 1%, same ration, dearer calf -> bigger
-    share of the cost of gain. Cheap calves at $180/cwt against today's $450."""
+    """Why it is a slider and not a line in the cost of gain: same 1%, same
+    ration, dearer calf -> a bigger charge."""
     cheap = crush(bid=180.0, **CASE)
-    dear = crush(bid=450.0, **CASE)
-    assert cheap["death_c"] < dear["death_c"]
-    assert round(cheap["death_c"], 2) == 3.44      # the docstring's "about $3.50"
-    assert round(dear["death_c"], 2) == 8.59       # "nearer $8.65" at $453
+    dear = crush(bid=TODAYS_BID, **CASE)
+    assert round(cheap["death_c"], 2) == 3.44   # the docstring's "$3.44"
+    assert round(dear["death_c"], 2) == 8.65    # and its "$8.65"
     assert dear["death_share"] > 2 * cheap["death_share"]
 
 
-def test_a_cost_of_gain_too_low_to_contain_the_death_loss_is_detectable():
-    """15% on a dear calf exceeds the whole $110. The page prints a warning
-    there rather than a negative remainder under 'feed, yardage, health'."""
-    out = crush(bid=450.0, **{**CASE, "death": 15.0})
-    assert out["death_c"] > CASE["cog"]
-    assert out["cog_other"] < 0
+# ── the break-even, which death loss scales with ────────────────────────────
+
+def test_break_even_bid_actually_breaks_even():
+    """THE ONE THAT CATCHES A DROPPED (1 + d). Feed the answer back in."""
+    gain_cwt = (CASE["sell_wt"] - CASE["start_wt"]) / 100.0
+    revenue = CASE["sell_wt"] / 100.0 * CASE["sale_price"]
+    be = calf_breakeven(revenue, gain_cwt * CASE["cog"],
+                        CASE["start_wt"], CASE["death"])
+    assert abs(crush(bid=be, **CASE)["profit"]) < 1e-9
+
+    # The naive version -- subtract cost of gain, forget that death loss rises
+    # with the bid -- loses exactly the death loss line at its own answer.
+    naive = (revenue - gain_cwt * CASE["cog"]) / (CASE["start_wt"] / 100.0)
+    assert naive > be
+    bad = crush(bid=naive, **CASE)
+    assert abs(bad["profit"] + bad["death_cost"]) < 1e-9
 
 
-def test_both_places_that_quote_the_split_branch_on_the_same_test():
-    """The column row and the caption must agree about whether the death loss
-    fits inside the cost of gain. The caption shipped without the branch and
-    printed 'death loss is inside that $110.00 -- $129.80/cwt of it ... 118%
-    of your cost of gain', contradicting itself in one sentence. Found at 15%
-    in a browser, not here: both halves were true statements about numbers
-    that were individually right.
-
-    Counting the comparisons is what pins it -- one in the column, one in the
-    caption -- rather than matching either one's wording."""
-    compares = [n for n in ast.walk(TREE)
-                if isinstance(n, ast.Compare)
-                and isinstance(n.left, ast.Name) and n.left.id == "death_c"
-                and any(isinstance(c, ast.Name) and c.id == "cog"
-                        for c in n.comparators)]
-    assert len(compares) >= 2, (
-        "every place that quotes the split needs the over-run branch; "
-        f"found {len(compares)}")
+def test_break_even_at_zero_death_loss_is_the_plain_formula():
+    revenue = 800.0 / 100.0 * 330.0
+    cog_cost = 2.75 * DEFAULTS["cog"]
+    assert abs(calf_breakeven(revenue, cog_cost, 525.0, 0)
+               - (revenue - cog_cost) / 5.25) < 1e-9
 
 
-# ── and it reaches nothing ──────────────────────────────────────────────────
+def test_break_even_falls_as_death_loss_rises():
+    """What a user watches when they drag the slider."""
+    revenue, cog_cost = 8.0 * 330.0, 2.75 * DEFAULTS["cog"]
+    bes = [calf_breakeven(revenue, cog_cost, 525.0, d)
+           for d in range(DEATH_PCT_MIN, DEATH_PCT_MAX + 1)]
+    assert bes == sorted(bes, reverse=True)
+    assert bes[0] - bes[-1] > 30.0     # 0% to 10% is worth real money
 
-def test_death_loss_changes_no_dollar_figure_on_the_page():
-    """THE ONE THAT MATTERS. Profit, total cost and value of gain are
-    identical at 0% and at 15%, because death loss is already inside the cost
-    of gain and must not be charged again."""
-    base = crush(bid=450.0, **{**CASE, "death": 0.0})
-    for death in (1.0, 5.0, 15.0):
-        out = crush(bid=450.0, **{**CASE, "death": death})
-        for k in ("profit", "total_cost", "vog", "cog_cost", "calf_cost"):
-            assert out[k] == base[k], k
 
+# ── and everything still reconciles ─────────────────────────────────────────
 
 def test_profit_reconciles_with_the_margin_on_gain():
-    """profit == (vog - cog) x gain/100, which is what lets the caption report
-    a per-head figure that agrees with the Profit tile six inches above it."""
-    for death in (0.0, 1.0, 7.0):
+    """profit == (vog - cost_c) x gain/100 -- what lets the caption report a
+    per-head figure that agrees with the Profit tile six inches above it."""
+    for death in range(DEATH_PCT_MIN, DEATH_PCT_MAX + 1):
         for bid in (300.0, 420.0, 515.0):
             out = crush(bid=bid, **{**CASE, "death": death})
-            implied = (out["vog"] - CASE["cog"]) * out["gain_cwt"]
+            implied = (out["vog"] - out["cost_c"]) * out["gain_cwt"]
             assert abs(implied - out["profit"]) < 1e-9
 
 
+def test_the_three_cost_tiles_sum_to_total_cost():
+    """Calf Cost + Cost of Gain + Death Loss is exactly Total Cost, which is
+    what makes a Death Loss tile correct here when it was not before."""
+    out = crush(bid=TODAYS_BID, **CASE)
+    assert abs(out["calf_cost"] + out["cog_cost"] + out["death_cost"]
+               - out["total_cost"]) < 1e-9
+
+
 def _assigned_names() -> dict:
-    """{target: {names its value reads}} for every top-level-ish assignment."""
     seen: dict[str, set] = {}
     for node in ast.walk(TREE):
         if isinstance(node, ast.Assign) and len(node.targets) == 1 \
@@ -196,57 +250,57 @@ def _assigned_names() -> dict:
     return seen
 
 
-def test_no_total_on_the_page_reads_the_death_loss():
-    """Structural, so it survives any renaming of the display lines. These are
-    every figure a reader takes as a cost or a result."""
+def test_the_page_charges_death_loss_everywhere_it_has_to():
+    """Structural, so it survives renaming the display lines. These are the
+    places the charge has to reach; the value-of-gain comparison is the one
+    that silently breaks the caption/tile agreement if it is missed."""
     seen = _assigned_names()
-    for target in ("total_cost", "profit", "breakeven", "calf_be", "vog",
-                   "cog_cost", "calf_cost"):
-        reads = seen[target]
-        assert not ({"death", "death_c", "death_cost", "cog_other"} & reads), \
-            f"{target} reads death loss: {reads}"
+    assert "death_cost" in seen["total_cost"]
+    assert {"cog", "death_c"} <= seen["cost_c"]
+    assert "death" in seen["calf_be"]
+    assert "death_cost" in seen["death_c"]
 
 
-def test_the_breakdown_is_derived_from_the_cost_of_gain_the_user_typed():
-    seen = _assigned_names()
-    assert "DEATH_LOSS_PCT" in seen["death_cost"]
-    assert {"cog", "death_c"} <= seen["cog_other"]
-    assert {"cog", "death_c"} <= seen["death_share"]
+def test_the_slider_exists_and_is_whole_points():
+    """Ross asked for 1%, 2%, 3% -- a slider, not a box."""
+    sliders = [n for n in ast.walk(TREE)
+               if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+               and n.func.attr == "slider" and n.args
+               and isinstance(n.args[0], ast.Constant)
+               and n.args[0].value == "death"]
+    assert len(sliders) == 1, "exactly one death loss slider"
+    step = sliders[0].args[4]
+    assert isinstance(step, ast.Constant) and step.value == 1
+    assert DEATH_PCT_MIN == 0 and DEATH_PCT_MAX >= 5
+    assert DEFAULTS["death"] == 1
 
 
-def test_there_is_no_death_loss_tile():
-    """A ninth tile reading 'Death Loss $23.80' beside 'Cost of Gain' and
-    'Total Cost' gets added on by a reader, whatever the label says -- it is
-    already inside the cost of gain. The breakdown belongs in the input
-    column, next to the two fields it comes from."""
-    for node in ast.walk(TREE):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
-                and node.func.id == "tile" and node.args \
-                and isinstance(node.args[0], ast.Constant):
-            assert "death" not in str(node.args[0].value).lower()
+def test_the_result_renders_next_to_the_slider():
+    """Ross asked for the figure beside the control. It cannot be written in
+    place -- it needs the bid, a widget in the other column -- so the page
+    books the position with st.empty() and fills it later. If that slot goes
+    away the figure silently relocates four rows down, under the cash calf
+    price, which is where it was before and is not what was asked for."""
+    assert "death_slot = st.empty()" in SRC
+    assert "death_slot.markdown(" in SRC
+    assert SRC.index("death_slot = st.empty()") < SRC.index("death_slot.markdown(")
 
 
-def test_there_is_no_death_loss_input_at_all():
-    """Ross asked for the note, not a box. An input that changes no figure on
-    the page reads as one that does -- which is why the second version was
-    pulled even though its arithmetic was harmless."""
-    assert "death" not in DEFAULTS
-    inputs = [n.args[0].value for n in ast.walk(TREE)
-              if isinstance(n, ast.Call)
-              and isinstance(n.func, ast.Attribute)
-              and n.func.attr in ("number_input", "slider", "selectbox")
-              and n.args and isinstance(n.args[0], ast.Constant)]
-    assert not [v for v in inputs if "death" in str(v).lower()], inputs
+def _text_of(node) -> str:
+    """The literal text of a string node, f-strings included.
 
+    The help strings interpolate constants, so they parse as JoinedStr and
+    `ast.literal_eval` refuses them outright -- which reads as the help having
+    gone missing rather than as the reader not handling an f-string.
+    """
+    if isinstance(node, ast.JoinedStr):
+        return "".join(v.value for v in node.values
+                       if isinstance(v, ast.Constant) and isinstance(v.value, str))
+    return ast.literal_eval(node)
 
-def test_the_note_is_worked_at_one_percent():
-    assert DEATH_LOSS_PCT == 1.0
-
-
-# ── the note says so ────────────────────────────────────────────────────────
 
 def _help_of(var: str) -> str:
-    """The `help=` string on the number_input bound to `var`, off the AST.
+    """The `help=` string on the widget bound to `var`, off the AST.
 
     Grepping the file finds the module comments explaining the double count,
     which is the mistake tests/test_corn_cost.py records making against a
@@ -256,7 +310,8 @@ def _help_of(var: str) -> str:
         if not isinstance(node, ast.Call):
             continue
         fn = node.func
-        if not (isinstance(fn, ast.Attribute) and fn.attr == "number_input"):
+        if not (isinstance(fn, ast.Attribute)
+                and fn.attr in ("number_input", "slider")):
             continue
         if not (node.args and isinstance(node.args[0], ast.Constant)
                 and node.args[0].value == var):
@@ -264,28 +319,19 @@ def _help_of(var: str) -> str:
         for kw in node.keywords:
             if kw.arg == "help":
                 return _text_of(kw.value)
-    raise AssertionError(f"no number_input({var!r}) with a help= string")
+    raise AssertionError(f"no widget {var!r} with a help= string")
 
 
-def _text_of(node) -> str:
-    """The literal text of a string node, f-strings included.
-
-    The cost of gain help interpolates DEATH_LOSS_PCT, so it parses as a
-    JoinedStr and `ast.literal_eval` refuses it outright -- which read as the
-    help string having gone missing rather than as the reader not handling an
-    f-string. The interpolated parts are dropped; every phrase asserted on
-    here is literal text around them."""
-    if isinstance(node, ast.JoinedStr):
-        return "".join(v.value for v in node.values
-                       if isinstance(v, ast.Constant) and isinstance(v.value, str))
-    return ast.literal_eval(node)
-
-
-def test_cost_of_gain_says_death_loss_is_inside_it():
-    """THE NOTE Ross asked for, on the field it describes. Someone entering a
-    feed-and-yardage-only figure here is light by the death loss, and nothing
-    else on the page would say so -- the note would still compute and still
-    look reasonable against the wrong number."""
+def test_cost_of_gain_says_it_excludes_death_loss():
+    """The sentence that stops someone typing an all-in figure into a box the
+    slider then charges death loss on top of. That mistake double counts and
+    nothing else on the page would report it."""
     h = _help_of("cog").lower()
-    assert "all-in" in h
-    assert "death loss" in h
+    assert "not death loss" in h
+    assert "all-in" in h          # names ISU's figure as the thing it is not
+
+
+def test_the_slider_says_it_charges():
+    h = _help_of("death").lower()
+    assert "what you paid" in h
+    assert "raising it" in h and "all-in" in h

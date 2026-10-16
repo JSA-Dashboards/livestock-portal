@@ -13,15 +13,24 @@ with your cost of gain and you make money; that is the entire trade. Profit per
 head follows from it, but value of gain is the number a backgrounder decides
 on, because it is directly comparable to a forage or grower-ration cost.
 
-DEATH LOSS IS INSIDE THE COST OF GAIN. There is no death loss field: the page
-describes what is in that number rather than asking for it or charging it
-again, so nothing about death loss reaches total cost, profit or the
-value-of-gain comparison, and profit per head stays exactly
-(value of gain - cost of gain) x gain. Why it is worth describing: death loss
-is a percentage of the PURCHASE price, so its share of a cost of gain moves
-with the calf market and not with the ration -- the same 1% that cost about
-$3.50/cwt of gain at $180 calves costs nearer $8.65 at today's, which is how
-a cost of gain carried over from a cheaper year ends up understated.
+DEATH LOSS IS ITS OWN SLIDER AND THE COST OF GAIN BOX EXCLUDES IT. The two are
+a pair: the $101 default is Iowa State's all-in $110 with the death loss taken
+back out, so the slider can charge it without counting it twice. Charged on an
+all-in figure it would be, and nothing on the page could report that -- a
+plausible cost over a plausible calf is a plausible margin either way.
+
+Only death loss came out of the cost of gain; interest, trucking, commission
+and any charge for risk stay in it. The reason is that death loss is the one
+line that scales with the CALF rather than with the ration -- a percentage of
+the purchase price, so the same 1% cost about $3.44/cwt of gain at $180 calves
+and $8.65 at $453. That is how a cost of gain carried over from a cheaper year
+ends up understated, and the slider is what saves doing the correction by hand.
+
+The charge reaches total cost, profit, the break-even bid and the all-in cost
+of gain the value-of-gain comparison uses, so profit per head stays exactly
+(value of gain - all-in cost of gain) x gain. The break-even is NOT a
+subtraction: death loss is charged on what you pay, so it rises with the bid
+and has to be solved for rather than taken off the top.
 
 WHY THE TWO LEGS COME FROM DIFFERENT PLACES.
 
@@ -101,40 +110,52 @@ MONTH_NAME = dict(zip(range(1, 13),
 # backgrounding looks cheap depends almost entirely on whether you charge it --
 # which is exactly why the build-up shows it as its own line.
 #
-# DEATH LOSS IS INSIDE THAT $110 AND THE PAGE ONLY DESCRIBES IT. Two wrong
-# versions shipped on 2026-10-16 before this one, both pulled at Ross's call:
-# a cost line on top, which double counted because ISU's $109-111 is ALL-IN
-# and carries death loss; then an input that split the $110 instead, which was
-# arithmetically harmless and still wrong, because a control that changes no
-# figure on the page is a control that misleads about what it does. What was
-# wanted was the NOTE -- see DEATH_LOSS_PCT below.
+# THAT $109-111 IS ALL-IN AND INCLUDES DEATH LOSS, WHICH IS WHY THE DEFAULT
+# BELOW IS $101 AND NOT $110. Death loss has its own slider and charges
+# separately, so the box it is charged on top of must be ISU's figure with the
+# death loss taken back out. Three versions shipped on 2026-10-16 before that
+# pairing was right, and the history is worth one paragraph because each one
+# rendered perfectly:
 #
-# Two lessons worth keeping. A tile or a line that names a cost and sits
-# beside other costs WILL be added on, whatever the help text says. And if
-# this ever needs to CHARGE death loss rather than describe it, the cost of
-# gain default has to come down to the feed/yardage/health/interest figure
-# (~$102) in the same change, not afterwards.
+#   1. A cost line on top of $110 -- double counted, moved every figure on the
+#      page, nothing raised.
+#   2. No charge at all, an input that merely split the $110 -- arithmetically
+#      harmless and still wrong, because a control that changes no figure on
+#      the page misleads about what it does.
+#   3. No input, a worked note at a fixed 1% -- correct, but it left the user
+#      adjusting the cost of gain by hand for a high-risk set, which is the
+#      arithmetic a calculator should be doing.
+#
+# The lesson that outlived all three: THE DEFAULT AND THE CHARGE ARE A PAIR.
+# Changing whether death loss is charged without moving DEFAULTS["cog"] in the
+# same edit is the double count, and no label or help text catches it.
+#
+# THE $101 IS ISU'S $110 WITH THE DEATH LOSS TAKEN OUT, AND THAT SUBTRACTION
+# IS THE WHOLE REASON THE SLIDER IS SAFE. Their $109-111 is all-in and carries
+# death loss; the slider charges death loss itself, so leaving the default at
+# $110 would charge it twice -- the defect that shipped on 2026-10-16 and the
+# one nothing on the page can report, because a plausible cost over a
+# plausible calf gives a plausible margin whichever way it was built.
+#
+# $110 less about $9 of death loss at today's calf money is $101. It is round
+# rather than exact on purpose: the exact subtraction is calf-price dependent
+# ($8.65/cwt at a $453 calf, $3.44 at $180), so a figure to the cent would be
+# precision this cannot have. At the 1% default it adds back to $109.65 all-in,
+# inside ISU's range.
 DEFAULTS = {
     "start_wt": 525.0,
     "sell_wt": 800.0,
     "adg": 2.00,       # grower/forage, against ~3.25 in a feedyard
-    "cog": 110.0,      # $/cwt of gain, ALL-IN incl. death loss -- ISU 2026, see above
+    "cog": 101.0,      # $/cwt of gain, EXCLUDING death loss -- see above
+    "death": 1,        # %, charged by the slider on top of the line above
     "basis": -2.00,    # feeder cash typically under the board
 }
 
-# THE RATE THE NOTE IS WORKED AT, AND IT IS NOT A FIELD. Death loss shipped as
-# an input twice on 2026-10-16 -- first charging on top of the cost of gain,
-# then splitting it -- and was removed both times. The second removal is the
-# one to understand, because the field did no arithmetic harm: a box a user
-# can change, sitting under a box it cannot change, reads as an input to the
-# answer. It was not one. Every figure on this page is identical at any death
-# rate, so the box could only mislead about what it was doing.
-#
-# What was actually wanted is the NOTE: cost of gain is all-in, death loss is
-# in there, and here is roughly how much. That needs one representative rate,
-# not a control. 1% is fair on cattle you know; the note says so and says to
-# raise the cost of gain for cattle you do not.
-DEATH_LOSS_PCT = 1.0
+# The slider's range. 10% is a ceiling rather than a plausible figure -- good
+# cattle run about 1%, high-risk sale-barn calves 3-5%, and a wreck is what the
+# top of the range is for. Whole points because that is the granularity anyone
+# actually budgets at.
+DEATH_PCT_MIN, DEATH_PCT_MAX = 0, 10
 
 st.markdown(f"""
 <style>
@@ -321,25 +342,50 @@ def death_cost_per_head(calf_cost: float, death_pct: float) -> float:
     """
     $/head of death loss, valued at WHAT YOU PAID for the calf.
 
-    NOTHING ON THIS PAGE ADDS THIS TO A COST. It is a slice of the cost of
-    gain the user typed, not a line beside it -- see the comment on `death_c`
-    at the build-up below for why that distinction is the whole feature.
+    THIS IS A REAL CHARGE on this page, added to the cost of gain rather than
+    carried inside it -- which is only safe because DEFAULTS["cog"] is ISU's
+    all-in figure with its death loss already subtracted out. Read the comment
+    above DEFAULTS before changing either one; they are a pair, and separating
+    them double counts with nothing raising.
 
     The loss is valued at the PURCHASE price, not the sale price, which is the
     convention the Fed Cattle Crush's build-up uses (`death_c` there is feeder
-    value x death %) and the one this page's explainer has always quoted: a
-    $2,165 calf, 1% to 5%, is $86.60 over 275 lb of gain = $31.50/cwt. It
-    understates slightly -- a calf that dies has eaten something first -- and
-    valuing it at the sale price would overstate, by charging the dead calf for
-    gain it never put on. Purchase value is the conservative middle and it
-    keeps the two crush pages splitting the figure the same way.
+    value x death %, spread over the gain) and the one this page's explainer
+    has always quoted: a $2,165 calf, 1% to 5%, is $86.60 over 275 lb of gain
+    = $31.50/cwt. It understates slightly -- a calf that dies has eaten
+    something first -- and valuing it at the sale price would overstate, by
+    charging the dead calf for gain it never put on. Purchase value is the
+    conservative middle and it keeps the two crush pages agreeing.
 
     It is taken off the BID rather than off the futures-implied value. The fed
     page uses futures there to break a circularity -- its death loss feeds cost
-    of gain, which feeds the break-even, which feeds the bid. No circularity
-    arises here precisely because this number feeds nothing.
+    of gain, which feeds the break-even, which feeds the bid. That circularity
+    does not arise here because `calf_breakeven` solves for the bid in closed
+    form instead.
     """
     return calf_cost * death_pct / 100.0
+
+
+def calf_breakeven(revenue: float, cog_cost: float, start_wt: float,
+                   death_pct: float) -> float:
+    """
+    The most you can pay for the calves, $/cwt, and still come out level.
+
+    DEATH LOSS SCALES WITH THE BID, so it cannot be subtracted the way cost of
+    gain is -- raising the bid raises the death loss charge with it. Setting
+    profit to zero and solving:
+
+        revenue = (in/100)B + cog_cost + (in/100)B x d
+                => B = (revenue - cog_cost) / ((in/100) x (1 + d))
+
+    Dropping the (1 + d) is the silent failure: it returns a bid about a point
+    too high, the page prints it as a break-even, and a pen bought at it loses
+    the whole death loss line. Pinned by feeding the answer back through the
+    crush and asserting the profit is zero.
+    """
+    if start_wt <= 0:
+        return 0.0
+    return (revenue - cog_cost) / ((start_wt / 100.0) * (1.0 + death_pct / 100.0))
 
 
 # ── Header ──────────────────────────────────────────────────────────────────
@@ -398,14 +444,29 @@ with tab_crush:
         cog = field("Cost of gain", lambda: st.number_input(
             "cog", 0.0, 300.0, DEFAULTS["cog"], 1.0, label_visibility="collapsed",
             help="$/cwt of gain, ALL-IN -- feed, yardage, health, interest on "
-                 "the calf, AND DEATH LOSS. Iowa State's 2026 budgets put "
-                 "backgrounding at $109-111/cwt, about the same as finishing "
-                 "because every per-day cost is spread over half as many "
-                 "pounds, and their figure already carries death loss. The "
-                 "note below works out roughly how much of it that is at "
-                 f"today's calf money, at a typical {DEATH_LOSS_PCT:,.0f}%. "
-                 "Buying high-risk sale-barn calves means raising this number, "
-                 "because death loss on them runs well above that."))
+                 "the calf and interest on it — but NOT DEATH LOSS, which the "
+                 "slider below charges separately. Iowa State's 2026 budgets "
+                 "put backgrounding at $109-111/cwt ALL-IN, about the same as "
+                 "finishing because every per-day cost is spread over half as "
+                 "many pounds; the $101 default is that figure with its death "
+                 "loss taken out, so the slider can put it back without "
+                 "counting it twice."))
+        death = field("Death loss", lambda: st.slider(
+            "death", DEATH_PCT_MIN, DEATH_PCT_MAX, DEFAULTS["death"], 1,
+            format="%d%%", label_visibility="collapsed",
+            help="% of the calves placed, charged at what you paid for them. "
+                 "This is what the cost of gain above leaves out, so raising it "
+                 "raises your all-in cost and lowers what you can bid — no need "
+                 "to adjust the cost of gain by hand. 1% is fair on cattle you "
+                 "know; high-risk sale-barn calves run 3-5%."))
+        # THE RESULT SITS DIRECTLY UNDER THE SLIDER, which is the point of the
+        # placeholder: the dollar figure cannot be computed yet because it
+        # scales with the calf, and the bid is a widget in the other column
+        # that Streamlit has not reached. `st.empty()` books the position now
+        # and `.markdown()` fills it after the bid is known. Without it the
+        # figure lands below the sell date and cash calf rows, four rows away
+        # from the control that drives it.
+        death_slot = st.empty()
         # NO PLANT SHRINK LINE HERE, deliberately -- asked and answered 2026-09-14.
         #
         # The Fed Cattle Crush has one, because a packer buying fat cattle live pays
@@ -467,7 +528,7 @@ with tab_crush:
     sale_price = gf_price + basis
     revenue = sell_wt / 100.0 * sale_price
     cog_cost = gain / 100.0 * cog
-    calf_be = (revenue - cog_cost) / (start_wt / 100.0) if start_wt else 0.0
+    calf_be = calf_breakeven(revenue, cog_cost, start_wt, death)
 
     with in_col:
         st.markdown(
@@ -501,77 +562,47 @@ with tab_crush:
                                    "Seeded from the cash market where available.")
 
     calf_cost = start_wt / 100.0 * bid
-    total_cost = calf_cost + cog_cost
+    death_cost = death_cost_per_head(calf_cost, death)
+    total_cost = calf_cost + cog_cost + death_cost
     profit = revenue - total_cost
     # The number a backgrounder actually decides on: what each cwt of gain is worth
     # once the calves are bought. Beat it with cost of gain and the trade works.
     vog = (revenue - calf_cost) / (gain / 100.0) if gain else 0.0
     breakeven = total_cost / (sell_wt / 100.0) if sell_wt else 0.0
 
-    # DEATH LOSS IS DESCRIBED, NOT CHARGED AND NOT ASKED FOR.
+    # DEATH LOSS IS CHARGED BY THE SLIDER, ON TOP OF A COST OF GAIN THAT
+    # EXCLUDES IT. The pairing with DEFAULTS["cog"] = 101 is what makes that
+    # safe -- see the comment above DEFAULTS. Charged on $110 it would be
+    # counted twice, which is the version that shipped on 2026-10-16.
     #
-    # Two wrong versions shipped on 2026-10-16. The first added death loss to
-    # total cost, which double counted it -- the $110 default is Iowa State's
-    # ALL-IN figure and carries death loss already -- and moved every answer
-    # the page gives with nothing raising. The second kept the input and made
-    # it split the cost of gain instead, which was arithmetically harmless and
-    # still wrong: a box the user can change, sitting under a box they cannot,
-    # reads as an input to the answer when every figure on the page is
-    # identical whatever it is set to.
+    # `cost_c` is the all-in cost of gain and is what the value-of-gain box,
+    # the Value of Gain tile and the caption all read. That is forced by the
+    # identity
     #
-    # So there is no input, and `death_c` reaches NOTHING -- not total_cost,
-    # not profit, not the value-of-gain comparison. The identity
+    #     profit == (vog - cost_c) x gain/100      exactly
     #
-    #     profit == (vog - cog) x gain/100      exactly
-    #
-    # holds, and the caption's per-head figure still agrees with the Profit
-    # tile. What is left is a note answering the question the cost of gain
-    # field cannot: how much of that $110 is death loss at today's calf money.
-    # Worth stating because it SCALES WITH THE CALF and not with the ration --
-    # the same 1% was about $3.50/cwt at $180 calves and is $8.65 now.
-    death_cost = death_cost_per_head(calf_cost, DEATH_LOSS_PCT)
+    # Put death loss into total_cost alone and it breaks: the caption goes on
+    # reporting "$X a head on 275 lb" off the margin on gain while the Profit
+    # tile six inches above reports a figure one death loss line different.
+    # Both honestly computed, neither raising -- the letter-versus-dashboard
+    # failure this repo has paid for three times.
     death_c = death_cost / (gain / 100.0) if gain else 0.0
-    cog_other = cog - death_c      # feed, yardage, health, interest -- the rest
-    death_share = (death_c / cog * 100.0) if cog else 0.0
+    cost_c = cog + death_c
+    death_share = (death_c / cost_c * 100.0) if cost_c else 0.0
 
-    # THE NOTE, in the column it describes. Appended to in_col after the fact
-    # because it needs `calf_cost`, which needs the bid, which is a widget in
-    # the other column -- Streamlit appends to a container in script order, so
-    # this lands under the derived rows above. Script order, not layout order,
-    # the rule the crush pages already run on.
-    #
-    # The label says "of your cost of gain", not "Death loss", because a bare
-    # cost name in a column of inputs is read as another cost. The arithmetic
-    # is spelled out rather than just its answer for the same reason: "$8.65"
-    # alone invites adding it to something, where "1% x $2,379.72 calf =
-    # $23.80 over 2.75 cwt" reads as a slice of a number already on the page.
-    with in_col:
-        if death_c >= cog:
-            # The entered cost of gain cannot contain this much death loss.
-            # Unreachable at 1%, kept because DEATH_LOSS_PCT is a constant
-            # someone may raise for a high-risk set: at 15% on a $2,400 calf
-            # death loss alone is $130/cwt against a $110 cost of gain, and a
-            # negative remainder under "feed, yardage, health" is nonsense.
-            st.markdown(
-                f'<div class="fld-row">'
-                f'<span class="fld-label">Death loss in your cost of gain</span>'
-                f'<span class="fld-derived" style="color:{AMBER}">${death_c:,.2f}'
-                f'<span class="fld-note">{DEATH_LOSS_PCT:,.0f}% &times; '
-                f'${calf_cost:,.2f} calf = ${death_cost:,.2f}/head over '
-                f'{gain / 100:,.2f} cwt of gain — more than the whole '
-                f'${cog:,.2f} above, so that figure is too low for these '
-                f'cattle</span></span></div>', unsafe_allow_html=True)
-        else:
-            st.markdown(
-                f'<div class="fld-row">'
-                f'<span class="fld-label">Death loss in your cost of gain</span>'
-                f'<span class="fld-derived">${death_c:,.2f}'
-                f'<span class="fld-note">a typical {DEATH_LOSS_PCT:,.0f}% '
-                f'&times; ${calf_cost:,.2f} calf = ${death_cost:,.2f}/head, '
-                f'over {gain / 100:,.2f} cwt of gain &nbsp;·&nbsp; '
-                f'{death_share:,.0f}% of the ${cog:,.2f} above, leaving '
-                f'${cog_other:,.2f} for feed, yardage, health and interest'
-                f'</span></span></div>', unsafe_allow_html=True)
+    # THE RESULT OF THE SLIDER, rendered into the slot booked directly beneath
+    # it. The arithmetic is spelled out rather than just its answer because
+    # "$8.65" alone does not say what it is a percentage OF -- the headline
+    # rule. It names the all-in total explicitly so nobody has to add the two
+    # cost-of-gain figures in their head.
+    death_slot.markdown(
+        f'<div class="fld-row">'
+        f'<span class="fld-label">Death loss adds</span>'
+        f'<span class="fld-derived">${death_c:,.2f}<span class="fld-note">'
+        f'{death:,.0f}% &times; ${calf_cost:,.2f} calf = ${death_cost:,.2f}/head, '
+        f'over {gain / 100:,.2f} cwt of gain &nbsp;·&nbsp; '
+        f'${cog:,.2f} + ${death_c:,.2f} = <b>${cost_c:,.2f}/cwt all-in</b>'
+        f'</span></span></div>', unsafe_allow_html=True)
 
     with out_col:
         pk = "pos" if profit >= 0 else "neg"
@@ -581,52 +612,63 @@ with tab_crush:
             f'<div class="profit-value">{"+" if profit >= 0 else "-"}'
             f'${abs(profit):,.2f}<span class="profit-unit">/head</span></div></div>',
             unsafe_allow_html=True)
-        vk = POS if vog >= cog else NEG
+        vk = POS if vog >= cost_c else NEG
         st.markdown(
             f'<div class="vog"><span class="vog-lab">Value of gain</span><br>'
             f'<span class="vog-val" style="color:{vk}">${vog:,.2f}</span>'
             f'<span style="color:{MUTED};font-size:0.8rem"> /cwt vs '
-            f'<b>${cog:,.2f}</b> cost &nbsp;→&nbsp; '
-            f'<b style="color:{vk}">${vog - cog:+,.2f}</b> margin on gain</span></div>',
+            f'<b>${cost_c:,.2f}</b> to put it on '
+            f'(${cog:,.2f} gain + ${death_c:,.2f} death loss) &nbsp;→&nbsp; '
+            f'<b style="color:{vk}">${vog - cost_c:+,.2f}</b> margin on gain</span></div>',
             unsafe_allow_html=True)
 
     st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
     st.markdown('<div class="sec-header">The Crush</div>', unsafe_allow_html=True)
 
-    # EIGHT TILES, AND THERE IS DELIBERATELY NO DEATH LOSS TILE. A ninth tile
-    # reading "Death Loss $23.80" in a row beside "Cost of Gain $302.50" and
-    # "Total Cost" invites exactly one thing: adding it on. It is already
-    # inside the cost of gain, so that reader would be double counting off a
-    # label that never said otherwise -- the headline rule, where a tile has to
-    # be unambiguous to someone who reads only that tile. The breakdown lives
-    # in the Your Cattle column beside the two fields it is derived from, where
-    # it cannot be read as another cost line.
+    # NINE TILES, SO THREE ROWS OF THREE. Death loss is a real cost line now,
+    # so it gets a tile -- and at four across a ninth strands one on a row of
+    # its own, the arithmetic the home grid already had to solve at thirteen.
+    # Nothing was dropped to make room: the rows regroup as the cost build-up,
+    # the totals, then the per-unit reads.
+    #
+    # A tile naming a cost beside other costs gets added on by a reader. Here
+    # that is CORRECT -- Calf Cost + Cost of Gain + Death Loss is exactly Total
+    # Cost. It was not correct in the version where death loss sat inside the
+    # cost of gain, which is why there was no tile then.
     k = "pos" if profit >= 0 else "neg"
-    m = st.columns(4)
+    m = st.columns(3)
     with m[0]:
         st.markdown(tile("Calf Cost", f"${calf_cost:,.2f}",
                          f"{start_wt:,.0f} lb @ ${bid:,.2f}"), unsafe_allow_html=True)
     with m[1]:
         st.markdown(tile("Cost of Gain", f"${cog_cost:,.2f}",
-                         f"{gain:,.0f} lb @ ${cog:,.2f}/cwt"), unsafe_allow_html=True)
+                         f"{gain:,.0f} lb @ ${cog:,.2f}/cwt, before death loss"),
+                    unsafe_allow_html=True)
     with m[2]:
+        st.markdown(tile("Death Loss", f"${death_cost:,.2f}",
+                         f"{death:,.0f}% of the calf cost · "
+                         f"${death_c:,.2f}/cwt of gain"), unsafe_allow_html=True)
+
+    n = st.columns(3)
+    with n[0]:
         st.markdown(tile("Total Cost", f"${total_cost:,.2f}",
                          f"breakeven ${breakeven:,.2f}/cwt"), unsafe_allow_html=True)
-    with m[3]:
-        st.markdown(tile("Profit / Loss", f"${profit:,.2f}",
-                         f"per head, {days} days", k), unsafe_allow_html=True)
-
-    n = st.columns(4)
-    with n[0]:
-        st.markdown(tile("Sale Price", f"${sale_price:,.2f}",
-                         f"{pick} ${gf_price:,.2f} {basis:+.2f}"), unsafe_allow_html=True)
     with n[1]:
         st.markdown(tile("Revenue", f"${revenue:,.2f}",
                          f"{sell_wt:,.0f} lb @ ${sale_price:,.2f}"), unsafe_allow_html=True)
     with n[2]:
-        st.markdown(tile("Value of Gain", f"${vog:,.2f}", "per cwt of gain",
-                         "pos" if vog >= cog else "neg"), unsafe_allow_html=True)
-    with n[3]:
+        st.markdown(tile("Profit / Loss", f"${profit:,.2f}",
+                         f"per head, {days} days", k), unsafe_allow_html=True)
+
+    p = st.columns(3)
+    with p[0]:
+        st.markdown(tile("Sale Price", f"${sale_price:,.2f}",
+                         f"{pick} ${gf_price:,.2f} {basis:+.2f}"), unsafe_allow_html=True)
+    with p[1]:
+        st.markdown(tile("Value of Gain", f"${vog:,.2f}",
+                         f"per cwt vs ${cost_c:,.2f} to put it on",
+                         "pos" if vog >= cost_c else "neg"), unsafe_allow_html=True)
+    with p[2]:
         per_day = profit / days if days else 0.0
         st.markdown(tile("Per Head Per Day", f"${per_day:,.2f}",
                          f"over {days} days", k), unsafe_allow_html=True)
@@ -635,45 +677,35 @@ with tab_crush:
     # inline LaTeX span, the dollar signs vanish and the `**` between them come
     # out as literal asterisks. This block has six.
     st.caption(
-        f"**Value of gain \\${vog:,.2f}/cwt against a \\${cog:,.2f} cost** is the "
-        f"backgrounding decision in one line — you are buying gain at \\${cog:,.2f} "
-        f"and selling it at \\${vog:,.2f}. "
-        + (f"That is **\\${vog - cog:,.2f}/cwt to the good**, "
-           f"\\${(vog - cog) * gain / 100:,.2f} a head on {gain:,.0f} lb."
-           if vog >= cog else
-           f"That is **\\${cog - vog:,.2f}/cwt underwater** — the gain costs more "
+        f"**Value of gain \\${vog:,.2f}/cwt against a \\${cost_c:,.2f} all-in cost** "
+        f"is the backgrounding decision in one line — you are buying gain at "
+        f"\\${cog:,.2f} plus \\${death_c:,.2f}/cwt of death loss, and selling it at "
+        f"\\${vog:,.2f}. "
+        + (f"That is **\\${vog - cost_c:,.2f}/cwt to the good**, "
+           f"\\${(vog - cost_c) * gain / 100:,.2f} a head on {gain:,.0f} lb."
+           if vog >= cost_c else
+           f"That is **\\${cost_c - vog:,.2f}/cwt underwater** — the gain costs more "
            f"than it is worth at this bid.")
-        # THE CAPTION NEEDS THE SAME BRANCH THE COLUMN ROW HAS. Without it, a
-        # death rate too high for the entered cost of gain prints "death loss
-        # is inside that $110.00 -- $129.80/cwt of it ... 118% of your cost of
-        # gain", which contradicts itself inside one sentence. Found in the
-        # browser at 15%, not by the tests, because both halves are true
-        # statements about numbers that are individually right.
-        + (f" Death loss is already inside that \\${cog:,.2f} — about "
-           f"\\${death_c:,.2f}/cwt of it at a typical {DEATH_LOSS_PCT:,.0f}%, "
-           f"{death_share:,.0f}% of your cost of gain."
-           if death_c < cog else
-           f" At {DEATH_LOSS_PCT:,.0f}% on a \\${calf_cost:,.2f} calf, death loss "
-           f"alone is \\${death_c:,.2f}/cwt of gain — more than the whole "
-           f"\\${cog:,.2f} above, so that cost of gain is too low for these cattle.")
+        + f" Death loss at {death:,.0f}% is {death_share:,.0f}% of that all-in "
+          f"cost, and it moves with the calf rather than with your ration."
     )
 
     with st.expander("How this is calculated"):
         st.markdown(f"""
     ```
     calf cost/hd  = in-weight/100 x bid
-    cost of gain  = (sell - in)/100 x cost of gain
+    cost of gain  = (sell - in)/100 x cost of gain      (before death loss)
+    death loss/hd = calf cost x death loss %
     sale price    = feeder futures ({pick}) + basis
     revenue/hd    = sell weight/100 x sale price
     value of gain = (revenue - calf cost) / (gain/100)
-    profit/hd     = revenue - calf cost - cost of gain
+    all-in cost   = cost of gain + death loss/hd / (gain/100)
+    profit/hd     = revenue - calf cost - cost of gain - death loss
 
-    and, describing what is already inside the cost of gain rather than
-    adding to it — none of these three reach the figures above:
+    and the break-even bid, which cannot just subtract death loss because
+    death loss rises with the bid:
 
-    death loss/hd      = calf cost x {DEATH_LOSS_PCT:,.0f}%
-    death loss/cwt     = death loss/hd / (gain/100)
-    share of your COG  = death loss/cwt / cost of gain
+    calf break even = (revenue - cost of gain) / ((in-weight/100) x (1 + d))
     ```
 
     **The buy and sell legs come from different places, necessarily.** There is no
@@ -692,37 +724,40 @@ with tab_crush:
     whether to buy lighter or heavier cattle. Profit per head follows from it but
     mixes in how many pounds you put on.
 
-    **Death loss, interest, trucking, commission and any charge for risk are all
-    inside your cost of gain. There is no separate death loss field, and that is
-    deliberate.** Iowa State's \\$109-111/cwt is an all-in figure with death loss
-    already carried in it, so a second line would charge it twice. Enter a cost of
-    gain that is all-in and the page is right; enter one that is feed and yardage
-    only and it is light.
+    **THE COST OF GAIN BOX EXCLUDES DEATH LOSS — the slider charges it.** That
+    pairing is the one thing to get right here. Iowa State's \\$109-111/cwt is an
+    ALL-IN figure with death loss already inside it, so the \\${DEFAULTS["cog"]:,.0f}
+    default is their number with it taken back out. Type an all-in figure in that
+    box and the slider charges death loss a second time, and nothing on the page
+    will tell you — a plausible cost over a plausible calf gives a plausible margin
+    either way.
 
-    **The note under your inputs only describes that number — it changes nothing on
-    this page.** Every figure above is identical whatever death loss turns out to
-    be; what the note tells you is how much of the \\${cog:,.2f} you typed is going
-    to it at today's calf money: \\${death_c:,.2f}/cwt, {death_share:,.0f}% of it,
-    leaving \\${cog_other:,.2f} for feed, yardage, health and interest. If that
-    remainder looks too thin to feed a calf on, the cost of gain is the number to
-    raise.
+    Interest, trucking, commission and any charge for risk all stay in that box.
+    Only death loss came out, because only death loss scales with the calf.
 
-    **Worth stating because it moves with the CALF, not with your ration.** Death
-    loss is a percentage of the purchase price, so at \\$450/cwt calves the same 1%
-    costs more than twice what it did at \\$180 — a cost of gain carried over from a
-    cheaper year is understated for that reason alone.
+    **Move the slider and everything follows** — all-in cost of gain, total cost,
+    profit, and the most you can bid. At {death:,.0f}% on these cattle death loss is
+    \\${death_cost:,.2f} a head, \\${death_c:,.2f}/cwt of gain, taking your cost of
+    gain from \\${cog:,.2f} to \\${cost_c:,.2f} all-in and your break-even bid to
+    \\${calf_be:,.2f}/cwt.
+
+    **The break-even is not a subtraction**, which is why it moves more than you
+    might expect. Death loss is charged on what you pay, so raising the bid raises
+    the death loss with it; the page solves `(revenue - cost of gain) / ((in-weight
+    /100) x (1 + d))` rather than taking the charge off the top.
 
     **It is valued at what you PAID for the calf**, not at what it would have sold
     for. A calf that dies has eaten something first, so this understates a little;
     valuing it at the sale price would overstate, by charging the dead calf for gain
     it never put on. Purchase value is the conservative middle, and the Fed Cattle
-    Crush splits its own death loss the same way.
+    Crush charges its own death loss the same way.
 
-    **The lever is large.** On a \\$2,165 calf, going from 1% to 5% death loss is
-    \\$31.50/cwt of gain. A full \\$1.00/bu move in corn is about \\$9. Death loss is
-    roughly three times the lever corn is, and on high-risk sale-barn calves health
-    and death loss together can run level with the feed bill — which is the case for
-    raising the cost of gain on those cattle, not for adding a second line.
+    **The lever is large, and it is a CALF lever.** On a \\$2,165 calf, going from 1%
+    to 5% is \\$31.50/cwt of gain; a full \\$1.00/bu move in corn is about \\$9. The
+    same 1% cost about \\$3.44/cwt of gain when calves were \\$180 and is
+    \\${death_c:,.2f} now — so a cost of gain carried over from a cheaper year is
+    understated for that reason alone, which is exactly what the slider exists to
+    stop you having to do in your head.
     """)
 
 
