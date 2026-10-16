@@ -101,6 +101,16 @@ DAILY_GRADE_TOTAL = "Total all grades"
 DAILY_BASES = {"LIVE FOB": "Live FOB", "DRESSED DELIVERED": "Dressed Delivered"}
 DAILY_CUT_LABEL = {"morning": "Final", "afternoon": "1:30 pm cut"}
 
+# THE CACHE SERVES SHAPE, NOT FRESHNESS -- the trap recorded against
+# leverage.SCHEMA, and fetch_daily_cash is @st.cache_data(persist="disk"), so
+# a frame pickled before a column existed is re-served from DISK and survives
+# a reboot. Bump this whenever fetch_daily_cash changes the COLUMNS it
+# returns; `stamps` only changes when USDA publishes, which is not the same
+# question. It is passed at the call site, never left on a default -- a
+# default is not part of the key at all.
+#   2: low/high added 2026-10-16
+DAILY_SCHEMA = 2
+
 # /Summary rows carry both the day total and the running week total, tagged in
 # current_period. "Confirmed" is that trading day; "Week to Date" is cumulative
 # from Monday and resets on the trading Monday, not the file Monday.
@@ -712,7 +722,8 @@ def _fetch_many(jobs: list, timeout: int = 90) -> dict:
 
 
 @st.cache_data(persist="disk", max_entries=64, show_spinner=False)
-def fetch_daily_cash(start: str, end: str, stamps: str) -> pd.DataFrame:
+def fetch_daily_cash(start: str, end: str, stamps: str,
+                     schema: int = DAILY_SCHEMA) -> pd.DataFrame:
     """
     Daily negotiated Steer/Heifer prices for the four regions USDA still
     publishes daily, both cuts, keyed on the TRADING day rather than the file
@@ -781,6 +792,13 @@ def fetch_daily_cash(start: str, end: str, stamps: str) -> pd.DataFrame:
                 "head": _dnum(x.get("head_count")),
                 "weight": _dnum(x.get("wtd_avg_weight")),
                 "price": price,
+                # The published low and high for the same rows the average is
+                # built from. USDA sends them on every priced row and this
+                # read threw them away until 2026-10-16, so the page could
+                # show that Nebraska averaged 224.37 and never that the top
+                # of the market was 227.00.
+                "low": _dnum(x.get("price_range_low")),
+                "high": _dnum(x.get("price_range_high")),
             })
 
     df = pd.DataFrame(out)
@@ -1398,7 +1416,16 @@ def daily_combined(df: pd.DataFrame) -> pd.DataFrame:
 
     key = ["trade_date", "region", "cut", "basis"]
     d["wp"] = d["head"] * d["price"]
-    g = d.groupby(key, as_index=False).agg(head=("head", "sum"), wp=("wp", "sum"))
+    # A RANGE IS min/max, NEVER A WEIGHTED MEAN. Head-weighting a low and a
+    # high produces a pair of numbers no lot ever traded at, and the top of
+    # the market is the whole reason to show it. Steer and Heifer span one
+    # range here because they span one average directly above it -- two
+    # conventions on one tile is how the page ends up disagreeing with
+    # itself. pandas min/max skip NaN, so a priced row USDA sent without a
+    # range simply does not narrow it.
+    g = d.groupby(key, as_index=False).agg(
+        head=("head", "sum"), wp=("wp", "sum"),
+        low=("low", "min"), high=("high", "max"))
     g = g[g["head"] > 0].copy()
     if g.empty:
         return pd.DataFrame()
@@ -2059,7 +2086,8 @@ with tab_daily:
                 _daily_slugs = [s for cuts in DAILY_REGIONS.values() for s in cuts.values()]
                 _stamps = stamps_for(_probe, _daily_slugs)
                 daily_df = fetch_daily_cash(_start_d.strftime("%m/%d/%Y"),
-                                            _end_d.strftime("%m/%d/%Y"), _stamps)
+                                            _end_d.strftime("%m/%d/%Y"), _stamps,
+                                            DAILY_SCHEMA)
                 daily_vol = fetch_daily_volume(_start_d.strftime("%m/%d/%Y"),
                                                _end_d.strftime("%m/%d/%Y"), _stamps)
                 daily_err = ""
@@ -2238,15 +2266,51 @@ with tab_daily:
                     blank_run=_price_blank_run_days(daily_df, region, last_trade),
                 )
 
+            # THE DAY'S HIGH AND LOW, under the average it was built from.
+            # Ross asked for it on 2026-10-16: Nebraska averaged 224.37 and
+            # traded to 227.00, and only the average was anywhere on the page.
+            #
+            # IT GOES ON ITS OWN LINE, not onto the delta's. .tile-delta-neu
+            # is nowrap and four tiles share the row, so appending to a
+            # caption already reading "4,539 hd - Live FOB, 1:30 pm cut"
+            # overflows the tile below desktop width. .tile-sub is the slot,
+            # the same answer the WASDE panel needed.
+            #
+            # LABELLED "range", because two prices either side of a dash,
+            # sitting under a third price, do not announce what they are.
+            #
+            # OMITTED WHEN low == high: every lot traded at one price, the
+            # average above already IS that price, and the line would print
+            # the same figure a third time.
+            #
+            # RESERVED ACROSS THE WHOLE ROW OR NONE OF IT. These are four
+            # boxes with backgrounds, side by side, and only some days carry a
+            # range -- adding the line per tile left Nebraska and Iowa 128px
+            # tall against 107 for Kansas and TX/OK/NM. That is invisible to
+            # get_page_text and to every test in this repo; it was measured in
+            # a browser. A day where nothing has a range keeps the short row
+            # rather than growing four blank lines.
+            _ranges = {}
+            for region in DAILY_REGIONS:
+                _r = _states[region][1]
+                if _r is None:
+                    continue
+                _lo, _hi = _r.get("low"), _r.get("high")
+                if pd.notna(_lo) and pd.notna(_hi) and _lo != _hi:
+                    _ranges[region] = (f'<div class="tile-sub">range '
+                                       f'{fmt_price(_lo)}&ndash;{fmt_price(_hi)}</div>')
+            _rng_spacer = '<div class="tile-sub">&nbsp;</div>' if _ranges else ""
+
             cols = st.columns(len(DAILY_REGIONS))
             for col, region in zip(cols, DAILY_REGIONS):
                 state, row = _states[region]
+                _rng = _ranges.get(region, _rng_spacer)
                 with col:
                     if row is None:
                         _val, _why = _PRICE_BLANK[state]
                         st.markdown(
                             tile(region, _val,
-                                 f'<div class="tile-delta-neu">{_why}</div>',
+                                 f'<div class="tile-delta-neu">{_why}</div>' + _rng,
                                  "tile-neu"),
                             unsafe_allow_html=True)
                     else:
@@ -2254,7 +2318,8 @@ with tab_daily:
                         st.markdown(
                             tile(region, fmt_price(row["price"]),
                                  f'<div class="tile-delta-neu">{fmt_hd(row["head"])} '
-                                 f'&middot; {basis_short}, {DAILY_CUT_LABEL[row["cut"]]}</div>',
+                                 f'&middot; {basis_short}, {DAILY_CUT_LABEL[row["cut"]]}</div>'
+                                 + _rng,
                                  "tile-fob" if row["basis"] == "Live FOB" else "tile-del"),
                             unsafe_allow_html=True)
 
@@ -2282,8 +2347,20 @@ with tab_daily:
                                      ("Dressed Delivered", "Dressed")):
                     for cut in ("afternoon", "morning"):
                         m = reg[(reg["basis"] == basis) & (reg["cut"] == cut)]
-                        entry[f"{short} {DAILY_CUT_LABEL[cut]}"] = (
-                            fmt_price(m.iloc[0]["price"]) if not m.empty else "—")
+                        # AVERAGE AND RANGE IN ONE CELL, rather than four more
+                        # columns. The table already carries six price columns
+                        # and doubling that is unreadable on a laptop; and the
+                        # two belong together anyway -- the average is only
+                        # interpretable against the spread it came from.
+                        if m.empty:
+                            entry[f"{short} {DAILY_CUT_LABEL[cut]}"] = "—"
+                            continue
+                        _r = m.iloc[0]
+                        _cell = fmt_price(_r["price"])
+                        if (pd.notna(_r.get("low")) and pd.notna(_r.get("high"))
+                                and _r["low"] != _r["high"]):
+                            _cell += f'  ({fmt_price(_r["low"])}–{fmt_price(_r["high"])})'
+                        entry[f"{short} {DAILY_CUT_LABEL[cut]}"] = _cell
                 # Head across BOTH bases, not Live FOB alone -- on a dressed-only
                 # day (see daily_price_state) a live-only count reads "—" for a
                 # region that actually traded thousands of head.

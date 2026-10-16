@@ -1500,6 +1500,53 @@ test passed. Script order again. `tests/test_cash_scorecard_green.py` now
 compares the assignment's line number against the use's, and the browser is
 what found it.
 
+### The daily tiles show the day's range — 2026-10-16
+
+Ross: *"my daily cash trade on the dashboard doesn't show the high and low
+ranges anywhere. can we add that somewhere so i can see the 227 in
+nebraska?"* Nebraska averaged **$225.07** that day and traded to **227.00**;
+only the average was on the page. USDA sends `price_range_low` and
+`price_range_high` on every priced row and `fetch_daily_cash` dropped them.
+
+The range now prints under the average on each region tile and inside the
+cell in the both-cuts table — `$225.07 ($222.00–$227.00)` — rather than as
+four more columns, which would make that table unreadable on a laptop.
+
+Four things in it worth keeping:
+
+- **A RANGE IS min/max, NEVER A WEIGHTED MEAN.** `daily_combined` already
+  head-weights the Steer+Heifer price; weighting a low and a high gives a
+  pair of numbers no lot traded at, and the top of the market is the whole
+  reason to show it. A small lot at the high is exactly the case that must
+  survive. Steer and Heifer span ONE range because they span one average
+  directly above it — two conventions on one tile is how a page disagrees
+  with itself.
+- **The average must lie inside its own range**, which is a free audit and
+  is asserted in `tests/test_daily_cash_range.py`.
+- **`DAILY_SCHEMA` exists because the cache serves shape, not freshness** —
+  the `leverage.SCHEMA` trap, and worse here because `fetch_daily_cash` is
+  `persist="disk"`: a frame pickled before the columns existed is re-served
+  from disk and survives a reboot. `stamps` only changes when USDA
+  publishes, which is a different question. Bump it whenever that function
+  changes its COLUMNS, and it is passed at the call site — a default is not
+  part of the key.
+- **`low == high` prints no range line.** Every lot traded at one price, the
+  average above already is that price, and the line would print the same
+  figure a third time.
+
+**THE ROW WENT RAGGED AND ONLY A BROWSER COULD SEE IT.** Four tiles with
+backgrounds share that row and only some days carry a range, so adding the
+line per tile left Nebraska and Iowa/Minnesota **128px** tall against **107**
+for Kansas and TX/OK/NM — bottoms at 534 against 513 at 1440px. `py_compile`,
+1,346 tests and `get_page_text` all pass a ragged row. The line is reserved
+across the whole row or none of it, and **the spacer has to reach the BLANK
+tiles too**, which render in a different branch — that is the half a reader
+of this code would miss, so a test counts both branches. A day with no range
+anywhere keeps the short row rather than growing four blank lines.
+
+Measured after the fix at 1440 and 1280: all four tiles 128px, nothing
+overflowing.
+
 ## The Packer Leverage tab
 
 Added 2026-10-05 as the **fourth tab** on Cash Cattle Trade. It answers how
