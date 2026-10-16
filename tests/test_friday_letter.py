@@ -75,20 +75,118 @@ def test_cftc_block_prints_the_date_from_the_data():
 
 # -- Regional cash ------------------------------------------------------------
 
-def test_am_uses_the_summary_reports_not_the_afternoon_ones():
+def test_the_week_to_date_reads_both_daily_files():
     """
-    Nebraska on Monday 2026-09-21: the Afternoon report carried zero priced
-    rows, the Summary carried nine. A week-to-date built on Afternoon silently
-    dropped a state that had traded.
+    IT READ ONLY THE MORNING ONE UNTIL 2026-10-16, and that put last week's
+    trade in this week's letter.
 
-    The evening letter keeps the Afternoon slugs on purpose -- 9/18 Afternoon
-    gives the letter's own 220-222.50, where the Summary runs to 224.00.
+    USDA publishes each region twice a day. The morning file is dated the day
+    it is PUBLISHED and carries the previous business day's completed trade;
+    the afternoon file is dated its own trading day and carries the 1:30 pm
+    cut. Reading mornings alone therefore did two things at once: it counted
+    the Monday-dated file (last Friday's trade) as this week, and it could
+    never see the day the letter is actually about, whose final file does not
+    exist until the next morning.
+
+    On Friday 2026-10-16 that printed "NE: 218.00-223.00 live" -- Nebraska's
+    trade of Friday 10/09 -- against a dashboard showing 225, with Nebraska
+    having actually traded 222.00-227.00 that day.
+
+    The earlier state of this test recorded the opposite rule and its own
+    evidence for it: Nebraska on Monday 2026-09-21 had zero priced afternoon
+    rows and nine morning ones. That observation is correct too. Neither file
+    is the unit -- the trading day is.
     """
-    am = {slug for slug, _ in sources.CASH_STATES}
-    pm = {slug for group in sources.CASH_REGIONS.values() for slug in group}
-    assert am == {2668, 2672, 2664, 2666}
-    assert pm == {2667, 2671, 2663, 2665}
-    assert not (am & pm)
+    assert [e[0] for e in sources.CASH_STATES] == ["NE", "IA/MN", "TX/OK/NM", "KS"]
+    finals = {e[1] for e in sources.CASH_STATES}
+    cuts = {e[2] for e in sources.CASH_STATES}
+    assert finals == {2668, 2672, 2664, 2666}
+    assert cuts == {2667, 2671, 2663, 2665}
+    assert not (finals & cuts), "a region cannot share a slug between its cuts"
+
+
+def test_the_morning_file_is_moved_back_a_business_day():
+    """The shift itself, including the weekend it has to step over."""
+    from datetime import date
+    assert sources._prev_business_day(date(2026, 10, 13)) == date(2026, 10, 12)
+    # Monday's file is FRIDAY's trade, not the weekend's and not Monday's
+    assert sources._prev_business_day(date(2026, 10, 12)) == date(2026, 10, 9)
+    assert sources._prev_business_day(date(2026, 10, 19)) == date(2026, 10, 16)
+
+
+def test_a_trading_day_takes_one_cut_and_prefers_the_final(monkeypatch):
+    """
+    The same day appears in both files -- the 1:30 pm cut and then the
+    completed total. Counting both double-counts the head and lets the partial
+    drag the range: IA/MN on Thu 2026-10-15 was 220.00-220.00 on 168 head at
+    the cut and 220.00-223.00 on 3,888 head once finished.
+
+    "Final cut preferred over the 1:30 pm cut" is the dashboard's own rule, so
+    the two surfaces pick the same print by construction.
+    """
+    from datetime import date
+
+    def row(cls, lo, hi, head, filed):
+        return {"purchase_type_code": "NEGOTIATED CASH", "class_desc": cls,
+                "grade_desc": sources.CASH_GRADE_TOTAL,
+                "selling_basis_desc": "LIVE FOB",
+                "price_range_low": lo, "price_range_high": hi,
+                "head_count": head, "report_date": filed}
+
+    def fake(slug, start, end):
+        if slug == 2668:                       # final, filed Fri = Thu's trade
+            return [row("STEER", 220.0, 223.0, 3888, "10/16/2026")]
+        return [row("STEER", 220.0, 220.0, 168, "10/15/2026")]   # Thu's own cut
+
+    monkeypatch.setattr(sources, "_cash_rows_between", fake)
+    got = sources.fetch_regional_cash_wtd(date(2026, 10, 16))["regions"]["NE"]
+    assert (got["live_low"], got["live_high"]) == (220.0, 223.0)
+    assert got["head"] == 3888, "the partial cut was counted alongside the final"
+    assert got["days"] == 1
+
+
+def test_last_fridays_trade_is_not_this_weeks(monkeypatch):
+    """The regression itself: the Monday-dated final file is out of the week."""
+    from datetime import date
+
+    def fake(slug, start, end):
+        if slug != 2668:
+            return []
+        return [{"purchase_type_code": "NEGOTIATED CASH", "class_desc": "STEER",
+                 "grade_desc": sources.CASH_GRADE_TOTAL,
+                 "selling_basis_desc": "LIVE FOB",
+                 "price_range_low": 218.0, "price_range_high": 223.0,
+                 "head_count": 5636, "report_date": "10/12/2026"}]
+
+    monkeypatch.setattr(sources, "_cash_rows_between", fake)
+    got = sources.fetch_regional_cash_wtd(date(2026, 10, 16))["regions"]["NE"]
+    assert got["live_low"] is None and got["undefined"], (
+        "the Monday file is Friday 10/09's trade and must not enter this week")
+
+
+def test_only_the_grade_rollup_is_counted(monkeypatch):
+    """
+    USDA prints each class per grade AND as a roll-up. Nebraska's 10/12 steers
+    were 5,458 + 178 graded against a 5,636 total; summing all three gave
+    11,094 head, and the old code did.
+    """
+    from datetime import date
+
+    def r(grade, lo, hi, head):
+        return {"purchase_type_code": "NEGOTIATED CASH", "class_desc": "STEER",
+                "grade_desc": grade, "selling_basis_desc": "LIVE FOB",
+                "price_range_low": lo, "price_range_high": hi,
+                "head_count": head, "report_date": "10/16/2026"}
+
+    def fake(slug, start, end):
+        if slug != 2667:
+            return []
+        return [r("Choice", 218.0, 223.0, 5458), r("Select", 223.0, 223.0, 178),
+                r(sources.CASH_GRADE_TOTAL, 218.0, 223.0, 5636)]
+
+    monkeypatch.setattr(sources, "_cash_rows_between", fake)
+    got = sources.fetch_regional_cash_wtd(date(2026, 10, 16))["regions"]["NE"]
+    assert got["head"] == 5636, "graded rows were summed against the roll-up"
 
 
 def test_cash_regions_and_class_filter():

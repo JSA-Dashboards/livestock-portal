@@ -4060,6 +4060,86 @@ looks exactly like today's. It deliberately does NOT cry stale at a weekend
 or before the PM release, because a banner that fires every Saturday is one
 nobody reads on the Monday it matters.
 
+### The cash block printed LAST WEEK'S trade — 2026-10-16
+
+Ross, writing the Friday letter: *"why does it show cash trade in nebraska at
+218-223 when our own cash dashboard shows nebraska traded cash at 225?"*
+
+**The dashboard was right.** 218-223 was Nebraska's trade of Friday
+**2026-10-09**, printed in the 10/16 letter as this week's.
+
+**It was findable because 225 sits OUTSIDE 218-223.** A weighted average
+inside a range is two views of one number and reconciles; one outside it means
+the two are not describing the same population at all, and that is what makes
+this worth checking rather than explaining away. The fourth instance of the
+letter-versus-dashboard failure this file records, and the first where the
+letter was simply reading the wrong report.
+
+**USDA PUBLISHES EACH REGION TWICE A DAY AND THE TWO FILES ARE DIFFERENT
+TRADING DAYS.** The afternoon file (~15:08 CT) is dated its trading day and
+carries the 1:30 pm cut. The morning file (~11:17 CT) is dated the day it is
+PUBLISHED and carries the PREVIOUS business day's completed trade. The Cash
+Cattle Trade dashboard has documented this in `DAILY_REGIONS` since it was
+written and shifts the morning file back a business day; `letter/sources.py`
+read the morning slugs alone and took `report_date` at face value.
+
+Two defects fell out of that, either enough on its own:
+
+- **The Monday-dated file is last Friday's trade**, so every week-to-date
+  opened with the previous week counted as this one.
+- **The current trading day exists ONLY in the afternoon file**, its own final
+  file being published the next morning — so the day the letter is about was
+  the one day it could never see.
+
+The evidence needs no appeal to the dashboard's comment:
+
+    NE afternoon, Fri 10/09   STEER 218.0-222.0    1,322 hd   Friday's 1:30 cut
+    NE morning,   Mon 10/12   STEER 218.0-223.0   11,094 hd   same day, completed
+    NE afternoon, Mon 10/12   nothing priced
+
+A Monday that really traded 11,094 head does not have an empty afternoon file.
+
+**Reading the morning file alone was itself a fix for a real symptom**, which
+is why it had a test defending it: Nebraska on Monday 2026-09-21 had zero
+priced afternoon rows and nine morning ones, so an afternoon-only week-to-date
+dropped a state that had traded. Both observations are sound. **Neither file
+is the unit — the trading day is**, and `fetch_regional_cash_wtd` now keys on
+it, reading both reports and moving each morning row back one business day.
+
+**ONE CUT PER TRADING DAY, FINAL PREFERRED** — the rule
+`daily_price_state` already states, so the two surfaces pick the same print by
+construction. Taking both double-counts the day and lets the partial drag the
+range: IA/MN on Thu 10/15 was 220.00-220.00 on 168 head at the cut and
+220.00-223.00 on 3,888 head once finished.
+
+**A third defect surfaced on the way: no grade filter.** USDA prints each
+class per grade AND as a roll-up, so the old sum added both — Nebraska's
+10/12 steers are 5,458 + 178 graded against a 5,636 total, counted as 11,094.
+Only `Total all grades` is read now, the filter the dashboard already applied.
+It never reached the page (`wtd_cash_rows` prints no head count) but it was
+wrong in the data.
+
+Also now **8 requests a week instead of 40** — the datamart takes
+`report_date=MM/DD/YYYY:MM/DD/YYYY`, so each slug is one call rather than one
+per day.
+
+What it was and what it is, same Friday:
+
+| | before | after |
+|---|---|---|
+| NE live | 218.00-223.00 *(10/09)* | **222.00-227.00** *(10/16)* |
+| NE head | 16,954 | 4,539 |
+| IA/MN live | 218.00-223.00 *(two weeks at once)* | 220.00-225.00 |
+
+**`_prev_business_day` does not skip HOLIDAYS**, the same limitation the
+dashboard's `BDay` shift carries: a morning file published the day after a
+holiday resolves to the holiday rather than the last session that traded. Off
+by one session a few times a year, and the tell is a holiday carrying a full
+day of trade.
+
+Scope: `fetch_regional_cash_wtd` feeds the morning brief, the Tue-Thu recap
+and the Friday letter, so all three carried it.
+
 ### Numbers that are right in a way that looks wrong
 
 Three places where the obvious simplification is the bug that was just fixed.
