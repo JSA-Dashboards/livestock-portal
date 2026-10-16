@@ -50,6 +50,11 @@ TREE = ast.parse(SRC)
 # `load_from_app` hands back the function itself when exactly one name is
 # asked for, so DEFAULTS comes off the tree this file already parsed.
 death_cost_per_head = load_from_app(APP, "death_cost_per_head")
+DEATH_LOSS_PCT = ast.literal_eval(
+    next(n.value for n in ast.walk(TREE)
+         if isinstance(n, ast.Assign) and len(n.targets) == 1
+         and isinstance(n.targets[0], ast.Name)
+         and n.targets[0].id == "DEATH_LOSS_PCT"))
 DEFAULTS = ast.literal_eval(
     next(n.value for n in ast.walk(TREE)
          if isinstance(n, ast.Assign) and len(n.targets) == 1
@@ -86,7 +91,8 @@ def crush(start_wt, sell_wt, bid, cog, death, sale_price):
     }
 
 
-CASE = dict(start_wt=525.0, sell_wt=800.0, cog=110.0, death=1.0, sale_price=330.0)
+CASE = dict(start_wt=525.0, sell_wt=800.0, cog=110.0, death=DEATH_LOSS_PCT,
+            sale_price=330.0)
 
 
 # ── the breakdown is right ──────────────────────────────────────────────────
@@ -203,7 +209,7 @@ def test_no_total_on_the_page_reads_the_death_loss():
 
 def test_the_breakdown_is_derived_from_the_cost_of_gain_the_user_typed():
     seen = _assigned_names()
-    assert "death" in seen["death_cost"] or "death" in seen["death_c"]
+    assert "DEATH_LOSS_PCT" in seen["death_cost"]
     assert {"cog", "death_c"} <= seen["cog_other"]
     assert {"cog", "death_c"} <= seen["death_share"]
 
@@ -220,8 +226,21 @@ def test_there_is_no_death_loss_tile():
             assert "death" not in str(node.args[0].value).lower()
 
 
-def test_the_field_ships_at_one_percent():
-    assert DEFAULTS["death"] == 1.00
+def test_there_is_no_death_loss_input_at_all():
+    """Ross asked for the note, not a box. An input that changes no figure on
+    the page reads as one that does -- which is why the second version was
+    pulled even though its arithmetic was harmless."""
+    assert "death" not in DEFAULTS
+    inputs = [n.args[0].value for n in ast.walk(TREE)
+              if isinstance(n, ast.Call)
+              and isinstance(n.func, ast.Attribute)
+              and n.func.attr in ("number_input", "slider", "selectbox")
+              and n.args and isinstance(n.args[0], ast.Constant)]
+    assert not [v for v in inputs if "death" in str(v).lower()], inputs
+
+
+def test_the_note_is_worked_at_one_percent():
+    assert DEATH_LOSS_PCT == 1.0
 
 
 # ── the note says so ────────────────────────────────────────────────────────
@@ -244,21 +263,29 @@ def _help_of(var: str) -> str:
             continue
         for kw in node.keywords:
             if kw.arg == "help":
-                return ast.literal_eval(kw.value)
+                return _text_of(kw.value)
     raise AssertionError(f"no number_input({var!r}) with a help= string")
 
 
+def _text_of(node) -> str:
+    """The literal text of a string node, f-strings included.
+
+    The cost of gain help interpolates DEATH_LOSS_PCT, so it parses as a
+    JoinedStr and `ast.literal_eval` refuses it outright -- which read as the
+    help string having gone missing rather than as the reader not handling an
+    f-string. The interpolated parts are dropped; every phrase asserted on
+    here is literal text around them."""
+    if isinstance(node, ast.JoinedStr):
+        return "".join(v.value for v in node.values
+                       if isinstance(v, ast.Constant) and isinstance(v.value, str))
+    return ast.literal_eval(node)
+
+
 def test_cost_of_gain_says_death_loss_is_inside_it():
-    """THE NOTE Ross asked for. Someone entering a feed-and-yardage-only
-    figure here is light by the death loss and nothing on the page would say
-    so, because the split would still compute and still look reasonable."""
+    """THE NOTE Ross asked for, on the field it describes. Someone entering a
+    feed-and-yardage-only figure here is light by the death loss, and nothing
+    else on the page would say so -- the note would still compute and still
+    look reasonable against the wrong number."""
     h = _help_of("cog").lower()
     assert "all-in" in h
     assert "death loss" in h
-    assert "does not add" in h
-
-
-def test_the_death_loss_field_says_it_adds_nothing():
-    h = _help_of("death").lower()
-    assert "does not add" in h
-    assert "what you paid" in h
