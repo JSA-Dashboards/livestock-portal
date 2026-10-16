@@ -819,6 +819,67 @@ Domain decisions in these that look like oversights and are not:
   finishing — it is not the cheaper gain it looks like, because every per-day
   cost spreads over half as many pounds.
 
+### Death loss is DESCRIBED on the backgrounding page, never charged
+
+Settled 2026-10-16 after shipping wrong twice in one day. **That $110 is Iowa
+State's ALL-IN figure and it carries death loss inside it**, along with
+interest, trucking, commission and any charge for risk. So the page has **no
+death loss input and no death loss cost line**, and `DEATH_LOSS_PCT = 1.0` is
+a module constant that exists only to work the note's arithmetic.
+
+What it prints instead, under the derived rows in the Your Cattle column:
+
+    Death loss in your cost of gain      $8.65
+        a typical 1% x $2,379.72 calf = $23.80/head, over 2.75 cwt of gain ·
+        8% of the $110.00 above, leaving $101.35 for feed, yardage, health
+        and interest
+
+**Both wrong versions are worth knowing, because the second one looked
+right.**
+
+- **A death loss COST LINE double-counts.** It was added on top of the $110,
+  moved every figure on the page, and nothing raised — a plausible cost over a
+  plausible calf gives a plausible margin whichever way it was built. If it is
+  ever made to charge rather than describe, the cost of gain default has to
+  come down to the feed/yardage/health/interest figure (~$102) **in the same
+  change**, not afterwards.
+- **A death loss INPUT that only splits the figure is arithmetically harmless
+  and still wrong.** Every number on the page was identical whatever it was
+  set to. A box the user can change, sitting under a box they cannot, reads as
+  an input to the answer; no help text fixes that. The ask was a NOTE, and a
+  representative rate in a note is not a control.
+
+**Why it earns a note at all, given it moves nothing:** death loss is a
+percentage of the PURCHASE price, so its share of a cost of gain tracks the
+calf market and not the ration. On the page's own 525 lb pen the same 1% is
+about $3.44/cwt of gain at $180 calves and $8.65 at $453 — which is how a cost
+of gain carried over from a cheaper year ends up understated with nothing
+looking wrong. It is valued at what you PAID, not at the sale price: a dead
+calf ate something first so this understates slightly, while charging it for
+gain it never put on would overstate. The Fed Cattle Crush's build-up splits
+its own death loss the same way — `death_c` there is feeder value × death %,
+spread over the gain — which is the only reason the two pages agree.
+
+**There is deliberately no Death Loss tile.** A ninth tile beside "Cost of
+Gain" and "Total Cost" gets added on by a reader whatever the label says, so
+the grid stays 4+4 and the note lives in the input column next to the figure
+it describes. Same reasoning as the headline rule further up this file.
+
+`tests/test_backgrounding_death.py` pins the NEGATIVE — that no total on the
+page reads death loss, and that no input exists — structurally off the AST,
+because that is what the next person is most likely to undo and nothing on
+screen would report it. **Its first version pinned the opposite and was fully
+green**: a suite holds whichever answer you give it and cannot tell you a
+figure is counted twice when both places counting it are individually right.
+
+Two things found only by loading the page, neither by the suite: the caption
+needed the same "death loss exceeds the cost of gain" branch the column row
+has, or it printed *"death loss is inside that $110.00 — $129.80/cwt of it …
+118% of your cost of gain"*, contradicting itself in one sentence; and
+`_help_of` in the test had to learn to read an f-string once the cost of gain
+help interpolated the constant, because `ast.literal_eval` refuses a
+`JoinedStr` outright and that reads as the help string having gone missing.
+
 ## Tabs, and the hidden-tab rule
 
 The index, fed crush, backgrounding and daily letter pages use `st.tabs`. A
