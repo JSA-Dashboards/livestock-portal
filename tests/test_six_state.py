@@ -27,13 +27,25 @@ base-week rule in this file.
 """
 import datetime as dt
 import json
+import os
 import sys
 from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "apps" / "cme_feeder_cattle"))
+# This file is shared verbatim with the cme-feeder-cattle-index repo, where the
+# module sits at the repo root rather than under apps/cme_feeder_cattle -- so
+# both layouts are tried rather than hardcoding the portal's. APP_DIR is then
+# whichever one answered, and the page-level tests below read THAT repo's
+# app.py, so each copy's own wiring is the thing being checked. Listed in
+# SHARED in cme-feeder-cattle-index/tests/test_no_drift.py.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+for _rel in (("..", "apps", "cme_feeder_cattle"), ("..",)):
+    _cand = os.path.join(_HERE, *_rel)
+    if os.path.isfile(os.path.join(_cand, "six_state.py")):
+        sys.path.insert(0, _cand)
+        break
+APP_DIR = Path(_cand).resolve()
 
 import six_state as ss  # noqa: E402
 
@@ -332,7 +344,7 @@ def test_this_tab_never_reaches_the_index_tables():
     """
     import ast
 
-    path = ROOT / "apps" / "cme_feeder_cattle" / "six_state.py"
+    path = APP_DIR / "six_state.py"
     tree = ast.parse(path.read_text(encoding="utf-8"))
     imported = set()
     for node in ast.walk(tree):
@@ -356,7 +368,7 @@ def test_the_page_passes_the_schema_at_the_call_site():
     Belt and braces over tests/test_cache_schema.py's repo-wide walk, because
     this is the guard that was inert in nineteen loaders at once.
     """
-    page = (ROOT / "apps" / "cme_feeder_cattle" / "app.py").read_text(
+    page = (APP_DIR / "app.py").read_text(
         encoding="utf-8")
     assert "fetch_six_state(MARS_KEY, six_state.SCHEMA)" in page
     assert "_schema" not in page.split("def fetch_six_state")[1][:600]
@@ -367,7 +379,7 @@ def test_the_tab_body_is_guarded_so_a_hidden_tab_costs_nothing():
     A hidden Streamlit tab still executes. Without `if tab_six.open:` the six
     MARS requests would run on every load of the Index tab.
     """
-    page = (ROOT / "apps" / "cme_feeder_cattle" / "app.py").read_text(
+    page = (APP_DIR / "app.py").read_text(
         encoding="utf-8")
     body = page.split("with tab_six:")[1]
     assert body.lstrip().startswith("if tab_six.open:")
@@ -380,7 +392,7 @@ def test_the_table_is_rendered_without_the_markdown_parser():
     as inline LaTeX and swallows everything between them -- shipped twice on
     this portal already. `st.html` does not run the markdown parser.
     """
-    page = (ROOT / "apps" / "cme_feeder_cattle" / "app.py").read_text(
+    page = (APP_DIR / "app.py").read_text(
         encoding="utf-8")
     body = page.split("with tab_six:")[1].split("_year = datetime.now().year")[0]
     assert "st.html(" in body
