@@ -134,6 +134,24 @@ grant on that schema (same identity already used for `NASS_CACHE` +
 `CME_FEEDER_CATTLE`). US Fresh 90s still calls `mpr.datamart.ams.usda.gov`
 live — that domain isn't blocked, only `marsapi.ams.usda.gov` is.
 
+**THE LAST SENTENCE IS TOO BROAD AND HAS BEEN READ AS A BLANKET RULE.
+`marsapi.ams.usda.gov` IS reachable from Community Cloud.** Checked on the
+live app, 2026-10-19: the Cattle Weights page's Saturday Slaughter view was
+showing *"AMS 3208 published Oct 16, 2026 · Saturday, Oct 17: 21,000 head"*
+and its carcass-weight tiles were showing report 3658 for the week ending
+Oct 03. Both are `apps/beef_weight/` calling `MARS_BASE =
+https://marsapi.ams.usda.gov/...` from the deployed process, and
+`letter/sources.py` reads the same host from the same container. The six
+state summaries behind the index page's 6 State tab are a fourth live
+marsapi consumer there.
+
+So whatever stopped the Beef Trimmings import on 10-04 — one report, one
+query shape, or a block since lifted — it is not an IP ban on the host, and
+the droplet cron above is not evidence of one. **Test the request before
+concluding a page must move to the droplet**: a cron is a real cost (a host,
+a `.env`, an installer, a job Claude cannot run) and this note has already
+been cited as the reason not to try.
+
 **That cron's code is NOT in this repo and it is not unversioned.** It lives in
 `JSA-Dashboards/beef-trimmings-dashboard` at `deploy/fetch_import_cow90.py`,
 with `deploy/run_fetch.sh` beside it, deployed to
@@ -1024,6 +1042,113 @@ numbers are defensible.** Neither will raise. The 10-07 case adds a second
 edge: **the same figure on two surfaces can need two different DATES**, and a
 rule that is correct on one surface can be wrong on the other for reasons that
 have nothing to do with arithmetic.
+
+## The 6 State Weekly Feeder Cattle Prices tab
+
+Added 2026-10-19 at Ross's request — a fourth tab on the CME Feeder Cattle
+Index page, beside Sale Barn Basis, reproducing a table he had been building
+by hand. Medium and Large 1 steers by weight bracket for six states, from
+USDA's own weekly auction summaries, which he named:
+
+    2056 Arkansas · 2167 Iowa · 1895 Kansas · 1821 Missouri
+    1860 Nebraska · 1831 Oklahoma      (mymarketnews.ams.usda.gov/viewReport/<slug>)
+
+Arithmetic and fetching are in `apps/cme_feeder_cattle/six_state.py`; the
+layout is in `app.py`. **No new secret and no new host** — `MARS_API_KEY` is
+already in this deployment for Beef Trimmings and Cattle Weights, and see the
+marsapi correction at the top of this file.
+
+### IT IS A DIFFERENT POPULATION FROM THE REST OF THE PAGE
+
+The other three tabs read `mars_sales` / `calf_sales`, ingested from a 93-barn
+roster across twelve states — and **that roster has no Arkansas barn in it at
+all**, which is the quickest way to see these are not two cuts of one series.
+The state summaries roll up every reporting auction in the state. Two figures
+for "Kansas 700-899 lb steers" can therefore both be right and disagree, which
+is the letter-versus-dashboard failure this file records four times. The
+caption says so above the table, `six_state.py` has no database handle, and a
+test asserts by AST that it never acquires one.
+
+### The arithmetic was reverse-engineered from Ross's sheet and then PROVED
+
+Nothing specified these rules; the screenshot for the week of 8/30-9/5/2026
+did. Reproducing his printed figures off the live MARS rows settled every one:
+**price range on 17 of 17 cells, WTD average price to the CENT on 15 of 17,
+WTD weight on 14 of 16 readable cells, MoM change to the cent on 12 of 16.**
+
+Each rule has an alternative that renders perfectly and quietly prints a
+different number:
+
+- **muscle_grade exactly `"1"`, not `"1-2"`.** Admitting 1-2 moves Missouri
+  6-700 from $373.11 to $357.40. "Includes Special Conditions" in the title is
+  a STATEMENT, not a filter — Value Added, Fleshy, Unweaned and the rest are
+  all kept.
+- **Both averages are weighted by HEAD.** This is the one place on the page
+  that is not pound-weighted (`cash_calves.py` opens by saying the rest is).
+  Pound-weighting moves Oklahoma 7-899 from $324.31 to $323.79.
+- **`price_unit` must be `Per Cwt`.** AMS quotes small lots PER ANIMAL in the
+  same `avg_price` column — the mixed-units trap `calf_sales.py` documents.
+  Four head at $2,010 Per Unit would drag a bracket up by $34/cwt.
+- **MoM subtracts the two ROUNDED averages**, the FCI convention: a reader
+  holding two weeks of this table must be able to subtract the printed numbers
+  and get the printed change. Oklahoma 5-600 prints -39.07; raw it is -39.0766
+  and rounds the other way.
+- **The MoM base is the week containing the day one CALENDAR MONTH before this
+  week's first day** — for the week of 8/30 that is 7/30, so the week of
+  7/26-8/1. Four weeks back (8/2) reproduces NONE of his changes; this
+  reproduces twelve, and it independently reproduces the **N/A** he prints on
+  Nebraska 6-700, a cell that has a price this week and nothing a month back.
+  Five weeks back happens to agree in this one month and would not in
+  February, so the base week is named under the table rather than counted.
+
+**THE FIVE CELLS THAT DO NOT MATCH ARE AMS RESTATEMENTS, NOT A MISSING RULE,
+and that was worth establishing rather than assuming.** All five are Arkansas
+(3) or a 7-899 weight (2). A brute-force search over every subset of the
+Arkansas rows for that week found a **unique** subset reproducing each of his
+two figures, and both drop single-head lots that are in the feed today —
+adopting that as a rule breaks Oklahoma 5-600, so it is a restatement rather
+than a rule. Two of the three Arkansas MoM BASES still match his to the cent,
+which is the strongest single piece of evidence for the base-week rule.
+
+### Four things that look wrong and are not
+
+- **A state that has NOT PUBLISHED is not a state with no sales**, and the
+  table renders both as N/A. These six offices publish four to eight days
+  after the week ends and Nebraska is routinely last (Iowa published nothing
+  at all for the week of 7/19/2026), so the picker opens on the newest week
+  **all six** have filed and a note names any state that has not. The newest
+  week on the wire is usually five states wide, and a table with a blank
+  column is not what this tab is for.
+- **MoM is NOT coloured.** A feeder price rising is good news to the man
+  selling and bad news to the man buying, and this page does not know which
+  one is reading it — the reasoning that leaves most deltas on US Beef Trade
+  uncoloured. It IS signed in both directions, because a bare `4.88` leaves a
+  reader telling a rally from a break by the absence of a mark.
+- **The request is filtered SERVER SIDE as well as in `_qualifying`.** Not
+  belt-and-braces: unfiltered this is 31,000 rows and 69 MB across the six
+  slugs, almost all of it `report_narrative` repeated on every row, against
+  4,300 rows and 9 MB filtered. The client-side filter is what a test can read
+  and is the one that keeps the page honest; verified the two select exactly
+  the same rows across all six states. The six requests run in a
+  ThreadPoolExecutor — 25 seconds serially, about 5 in parallel — and the tab
+  body is behind `if tab_six.open:`, so a hidden tab costs nothing.
+- **The table is rendered with `st.html`, not `st.markdown`.** Eighteen prices
+  in one block, and Streamlit renders a PAIR of dollar signs as inline LaTeX
+  and swallows everything between them. That has shipped on this portal twice
+  already. `st.html` does not run the markdown parser at all; verified zero
+  `.katex` spans and all eighteen `$` intact in the live DOM.
+
+The week label carries its **year** (`8/30 - 9/5/2026`) where Ross's sheet does
+not. A screenshot of this table outlives the week it describes, and a week
+spanning New Year is otherwise ambiguous.
+
+`six_state.SCHEMA` exists because the cache serves shape, not freshness — the
+`leverage.SCHEMA` trap. Bump it whenever `fetch()` or `table()` changes the
+shape of what it returns. `tests/test_six_state.py` pins all eighteen cells
+against the fixture, each filter, both weightings, the rounding and the base
+week; `tests/fixtures/six_state_ams.json` is the real AMS payload for the two
+weeks involved, filtered no further than class and weight so the grade 1-2 and
+Replacement Cattle rows the page must EXCLUDE are present.
 
 ## The COF Recap tab
 

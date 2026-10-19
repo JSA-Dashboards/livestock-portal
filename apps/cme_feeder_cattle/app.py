@@ -33,6 +33,7 @@ import barn_report
 import mars_census_view
 import cash_calves
 import barn_basis
+import six_state
 from index_dates import headline_index_date
 from bucketing import shifted_bucket_date
 from snapshots import opening_calls
@@ -153,6 +154,37 @@ def value_on_or_before(df, target_date):
     """Latest fci_value at or before target_date."""
     sub = df[df["date"] <= target_date]
     return sub.iloc[-1]["fci_value"] if not sub.empty else None
+
+
+# The 6 State tab's only secret, and it is NOT a new one -- Beef Trimmings and
+# Cattle Weights already hold MARS_API_KEY in this deployment's secrets, and
+# `letter/sources.py` reads the same host from the same process. Read the way
+# every other page in this repo reads it: st.secrets on Community Cloud,
+# os.environ locally, and st.secrets raises rather than returning {} when
+# there is no secrets.toml.
+try:
+    MARS_KEY = st.secrets.get("MARS_API_KEY", "")
+except Exception:
+    MARS_KEY = ""
+MARS_KEY = (MARS_KEY or os.environ.get("MARS_API_KEY", "")).strip()
+
+
+@st.cache_data(ttl=3600, show_spinner="Loading the six state summaries…")
+def fetch_six_state(key: str, schema: int):
+    """
+    Six AMS weekly state summaries, for the 6 State Weekly Feeder Cattle
+    Prices tab.
+
+    `schema` is `six_state.SCHEMA` and exists only to be part of the cache
+    key -- `st.cache_data` keys on this function's own code and arguments and
+    is blind to the module it calls, so a reshaped return value would be
+    served from a cache built before the reshape with nothing raising. It has
+    NO leading underscore (Streamlit drops those from the key) and it is
+    passed at the call site (a default is never hashed). Both halves are
+    required; CLAUDE.md records the day this guard was found inert in
+    nineteen loaders for want of one or the other.
+    """
+    return six_state.fetch(key)
 
 
 def add_watermark(fig, size=0.32, opacity=0.06):
@@ -1244,21 +1276,32 @@ _render_barn_report()
 _render_census()
 
 
-# Three tabs. The index is the published number; the cash lookup is what the
+# Four tabs. The index is the published number; the cash lookup is what the
 # cattle behind it actually brought, by weight and state; the basis lookup asks
 # what one barn's cattle bring against the index at a weight the index does not
 # itself cover. Same data source -- the AMS barn reports -- read for different
 # questions, and the cash lookup is shared with the Backgrounding Crush rather
 # than copied (see cash_calves.py).
 #
-# Both lookups own every one of their own queries, in their own modules. This
-# file issues none, which is not tidiness: the cash series CANNOT reach the
-# index. calf_sales spans 400-900 lb where the index is 700-899,
+# The first three own every one of their own queries, in their own modules.
+# This file issues none, which is not tidiness: the cash series CANNOT reach
+# the index. calf_sales spans 400-900 lb where the index is 700-899,
 # recompute_fci_daily() reads mars_sales only, and
 # tests/test_index_isolation.py in the cme-feeder-cattle-index repo enforces
 # all of that structurally rather than by convention.
-tab_index, tab_cash, tab_basis = st.tabs(
-    ["Index", "Cash Feeder Prices", "Sale Barn Basis"], on_change="rerun")
+#
+# The fourth is a DIFFERENT POPULATION and not another cut of the same one.
+# It reads USDA's six state-level weekly auction summaries, which roll up every
+# reporting auction in each state -- including Arkansas, which has no barn on
+# this page's 93-barn roster at all. See six_state.py: its figures are not
+# comparable with the other three tabs' and are never averaged against them.
+#
+# A hidden Streamlit tab still executes, so every one of these is guarded by
+# `if tab.open:` -- without that the six MARS requests behind the fourth would
+# run on every load of the first.
+tab_index, tab_cash, tab_basis, tab_six = st.tabs(
+    ["Index", "Cash Feeder Prices", "Sale Barn Basis",
+     "6 State Weekly Feeder Cattle Prices"], on_change="rerun")
 
 with tab_index:
     # ── KPI Tiles ─────────────────────────────────────────────────────────────────
@@ -2729,6 +2772,143 @@ with tab_basis:
             colors={"bg": BG, "border": BORDER, "muted": MUTED,
                     "text": TEXT, "pos": POS, "neg": NEG},
             watermark=add_watermark, key_prefix="idxbasis")
+
+
+with tab_six:
+    if tab_six.open:
+        st.markdown('<div class="sec-header">6 State Weekly Feeder Cattle Prices</div>',
+                    unsafe_allow_html=True)
+        st.caption(
+            "USDA's own weekly auction summary for each of six states — every "
+            "reporting auction in the state, rolled up by AMS. **A wider "
+            "population than the rest of this page**, which reads a 93-barn "
+            "roster across twelve states and has no Arkansas barn on it at "
+            "all. Both can be right about the same weight of cattle and "
+            "disagree; read this tab beside the others, not against them."
+        )
+
+        _six = fetch_six_state(MARS_KEY, six_state.SCHEMA)
+        _six_weeks = six_state.weeks(_six)
+        _six_errors = _six.get("errors") or {}
+
+        if not _six_weeks:
+            _why = ("; ".join(f"{c}: {m}" for c, m in sorted(_six_errors.items()))
+                    or "AMS returned no rows")
+            st.error(f"No weekly summaries came back — {_why}")
+        else:
+            _six_by_begin = {w["begin"]: w for w in _six_weeks}
+            _six_default = six_state.latest_complete_week(_six_weeks)
+            _six_begin = st.selectbox(
+                "Week", [w["begin"] for w in _six_weeks],
+                index=[w["begin"] for w in _six_weeks].index(_six_default["begin"]),
+                format_func=lambda b: six_state.week_label(_six_by_begin[b]),
+                key="six-week")
+            _six_week = _six_by_begin[_six_begin]
+
+            # The MoM base is a CALENDAR month back, then the week that covers
+            # that day -- see six_state.month_before(). It is named under the
+            # table rather than left to be counted backwards: a delta the
+            # reader has to orient is the failure CLAUDE.md's headline rule is
+            # about, and "MoM" alone does not say which week.
+            _six_base = six_state.week_containing(
+                _six_weeks, six_state.month_before(_six_week["begin"]))
+            _six_rows = six_state.table(_six, _six_week, _six_base)
+
+            def _six_cells(r):
+                _now = r["now"]
+                _tip = (f' title="{_now["head"]:,} head in {_now["lots"]:,} '
+                        f'reported lot(s)"' if _now else "")
+                return (f'<td class="six-name">{r["state"]}</td>'
+                        f'<td>{r["bracket"]}</td>'
+                        f'<td>{six_state.price_range(_now)}</td>'
+                        f'<td{_tip}>{six_state.wtd_average(_now)}</td>'
+                        f'<td>{six_state.mom_change(r["mom"])}</td>')
+
+            # Two blocks of nine side by side, the shape of the sheet this
+            # replaces: Arkansas/Iowa/Kansas on the left, Missouri/Nebraska/
+            # Oklahoma on the right.
+            _six_head = ("<th>State</th><th>Wt Range</th><th>Price Range</th>"
+                         "<th>WTD Averages</th><th>MoM Change</th>")
+            _six_body = "".join(
+                f"<tr>{_six_cells(l)}<td class='six-gap'></td>{_six_cells(r)}</tr>"
+                for l, r in zip(_six_rows[:9], _six_rows[9:]))
+
+            # st.html, not st.markdown: this table carries eighteen prices and
+            # Streamlit's markdown renders a PAIR of dollar signs as inline
+            # LaTeX, which swallows everything between them. That has shipped
+            # on this portal twice (the cutout captions, the retention
+            # explainer). st.html does not run the markdown parser at all.
+            st.html(f"""
+            <style>
+              .six-wrap {{ background:{CARD_BG}; border:1px solid {BORDER};
+                           border-radius:10px; padding:16px 18px;
+                           overflow-x:auto; }}
+              .six-wrap .six-title {{ color:{TEXT}; font-weight:700;
+                                      font-size:0.95rem; line-height:1.5; }}
+              .six-wrap table {{ border-collapse:collapse; margin-top:10px;
+                                 font-size:0.82rem; color:{TEXT};
+                                 font-weight:700; white-space:nowrap; }}
+              .six-wrap th {{ text-align:left; padding:3px 14px 5px 0;
+                              border-bottom:1px solid {TEXT}; }}
+              .six-wrap td {{ text-align:left; padding:2px 14px 2px 0; }}
+              .six-wrap .six-gap {{ padding:0 18px; }}
+              .six-wrap .six-name {{ padding-right:10px; }}
+            </style>
+            <div class="six-wrap">
+              <div class="six-title">{six_state.TITLE}</div>
+              <div class="six-title">Prices for the week of
+                   {six_state.week_label(_six_week)}</div>
+              <table>
+                <thead><tr>{_six_head}<th class="six-gap"></th>{_six_head}</tr></thead>
+                <tbody>{_six_body}</tbody>
+              </table>
+            </div>
+            """)
+
+            # Everything the table cannot say on its own, said once underneath
+            # it. MoM is deliberately uncoloured: a feeder price rising is good
+            # news to the man selling and bad news to the man buying, and this
+            # page does not know which one is reading it.
+            _six_notes = []
+            if _six_base is not None:
+                _six_notes.append(
+                    "**MoM Change** is against the week of "
+                    f"{six_state.week_label(_six_base)} — the week containing "
+                    "the day one calendar month before this one. A cell reads "
+                    "N/A where either week had no qualifying lots.")
+            else:
+                _six_notes.append(
+                    "**MoM Change** is N/A throughout: the week one month "
+                    "before this one is outside the six months fetched.")
+
+            # A state that has not published is NOT a state with no sales, and
+            # the table renders both as N/A. Which one it is gets said here.
+            _six_last = {r["state"]: r["published"] for r in _six_rows}
+            _six_quiet = sorted({r["state"] for r in _six_rows
+                                 if not r["reported"]})
+            if _six_quiet:
+                _six_notes.append(
+                    "**Not published yet for this week:** "
+                    + ", ".join(
+                        (f"{s} (last report out {_six_last[s]:%b %d})"
+                         if _six_last[s] else s)
+                        for s in _six_quiet)
+                    + ". These offices publish four to eight days after the "
+                      "week ends and Nebraska is routinely last, which is why "
+                      "the picker opens on the newest week all six have out — "
+                      "an empty column is not a quiet market.")
+
+            _six_notes.append(
+                "Medium and Large **1** steers only (not 1-2), every lot "
+                "descriptor included, prices quoted per hundredweight; "
+                "per-head lots are dropped rather than converted. Both "
+                "averages are weighted by head. Source: AMS "
+                + ", ".join(
+                    f"[{c}]({six_state.REPORT_VIEW.format(slug)})"
+                    for _n, c, slug in six_state.STATES) + ".")
+
+            for _n in _six_notes:
+                st.caption(_n)
 
 
 _year = datetime.now().year
