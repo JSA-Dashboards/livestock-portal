@@ -169,6 +169,62 @@ except Exception:
 MARS_KEY = (MARS_KEY or os.environ.get("MARS_API_KEY", "")).strip()
 
 
+
+
+# ── The 6 State tab's written cause ──────────────────────────────────────────
+# The tab computes WHAT moved and never why. The why is typed by a human and
+# saved against the WEEK it is about, in the store the daily letter already
+# uses, under its own kind -- `weekbase` and `settlelog` share that table the
+# same way. Reusing it buys the append-only history and, more to the point,
+# survival across a reboot: `out/` is gitignored and a reboot is a fresh
+# clone, which is how a nearly finished Friday letter was lost once already.
+#
+# Imported defensively because a dead store must cost this page its note box
+# and nothing else -- the index tiles have no business failing over a feature
+# that is three tabs away.
+SIX_NOTE_KIND = "sixstate"
+try:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from letter import draft_store as _six_draft_store
+except Exception:
+    _six_draft_store = None
+
+
+def _six_esc(s) -> str:
+    """
+    Escape for st.html. Named `_six_esc` and not `_h` because this
+    module rebinds `_h` to an int in a plot loop long before the tab
+    runs ("for _w2, _h in _pts"), which turned every call here into
+    TypeError: 'int' object is not callable -- a page-level name
+    collision that py_compile and the whole suite pass.
+
+    Escape for st.html. The note is typed by a person and is text, not markup:
+    an unescaped "<" would swallow the rest of the panel, and the table beside
+    it is already rendered as raw HTML.
+    """
+    import html as _html_mod
+    return _html_mod.escape(str(s or ""))
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _six_notes_ready(_probe: str) -> bool:
+    """
+    Whether a note can be stored. Cached so the DDL probe runs once an hour
+    rather than on every rerun of a page that reruns on every keystroke.
+    """
+    if _six_draft_store is None or not _six_draft_store.enabled():
+        return False
+    try:
+        _six_draft_store.ensure_table()
+        return True
+    except Exception:
+        return False
+
+
+def six_notes_on() -> bool:
+    return _six_notes_ready(SIX_NOTE_KIND)
+
+
 @st.cache_data(ttl=3600, show_spinner="Loading the six state summaries…")
 def fetch_six_state(key: str, schema: int):
     """
@@ -2824,14 +2880,27 @@ with tab_six:
                         f'<td{_tip}>{six_state.wtd_average(_now)}</td>'
                         f'<td>{six_state.mom_change(r["mom"])}</td>')
 
+            def _six_band(i):
+                """
+                "six-band" on every other STATE, not every other row.
+
+                Each state owns one row per bracket, so the group size is
+                len(BRACKETS) rather than a literal 3 -- add a weight bracket
+                and the banding follows the states instead of cutting across
+                them.
+                """
+                per_state = len(six_state.BRACKETS)
+                return "six-band" if (i // per_state) % 2 == 0 else ""
+
             # Two blocks of nine side by side, the shape of the sheet this
             # replaces: Arkansas/Iowa/Kansas on the left, Missouri/Nebraska/
             # Oklahoma on the right.
             _six_head = ("<th>State</th><th>Wt Range</th><th>Price Range</th>"
                          "<th>WTD Averages</th><th>MoM Change</th>")
             _six_body = "".join(
-                f"<tr>{_six_cells(l)}<td class='six-gap'></td>{_six_cells(r)}</tr>"
-                for l, r in zip(_six_rows[:9], _six_rows[9:]))
+                f"<tr class='{_six_band(i)}'>{_six_cells(l)}"
+                f"<td class='six-gap'></td>{_six_cells(r)}</tr>"
+                for i, (l, r) in enumerate(zip(_six_rows[:9], _six_rows[9:])))
 
             # st.html, not st.markdown: this table carries eighteen prices and
             # Streamlit's markdown renders a PAIR of dollar signs as inline
@@ -2852,6 +2921,15 @@ with tab_six:
                               border-bottom:1px solid {TEXT}; }}
               .six-wrap td {{ text-align:left; padding:2px 14px 2px 0; }}
               .six-wrap .six-gap {{ padding:0 18px; }}
+              /* Shade alternate STATES, the way Ross's own sheet separates
+                 them. Both blocks change state on the same rows, so one
+                 class per row bands the left and right halves together.
+                 The gap column is left clear so the two halves still read
+                 as two tables rather than one wide banded one. A tint
+                 rather than a palette colour: it sits on whatever CARD_BG
+                 is and needs no second constant to keep in step. */
+              .six-wrap tr.six-band td {{ background:rgba(0,0,0,0.04); }}
+              .six-wrap tr.six-band td.six-gap {{ background:transparent; }}
               .six-wrap .six-name {{ padding-right:10px; }}
             </style>
             <div class="six-wrap">
@@ -2864,6 +2942,118 @@ with tab_six:
               </table>
             </div>
             """)
+
+
+            # ── Market summary ───────────────────────────────────────────
+            # WHAT moved is computed; WHY is typed by a human and saved
+            # beside the week. That split is the one the daily letter
+            # already runs on: a figure is right or it is marked, and prose
+            # about cause gets a person. CLAUDE.md records a cause deleted
+            # from the beef-trade chart for being plausible and wrong.
+            #
+            # Rendered with st.html for the same reason the table is. These
+            # sentences quote four dollar amounts in one line, and
+            # Streamlit's markdown turns a PAIR of dollar signs into inline
+            # LaTeX and swallows what is between them. The tab's own test
+            # fails any st.caption here that contains a "$".
+            _six_prev = next((w for w in _six_weeks
+                              if w["begin"] < _six_week["begin"]), None)
+            _six_sum = six_state.summary(_six, _six_week, _six_prev, _six_base)
+
+            _six_says = [s for s in (
+                six_state.split_sentence(_six_sum, "mom"),
+                six_state.split_sentence(_six_sum, "wow"),
+                six_state.slide_sentence(_six_sum),
+                six_state.leader_sentence(_six_sum, "mom"),
+            ) if s]
+            _six_warn = [s for s in (six_state.roster_caution(_six_sum, "mom"),
+                                     six_state.base_caution(_six_sum)) if s]
+
+            # The written cause, saved per week under its own kind in the
+            # store the letter already uses -- append-only, newest wins, and
+            # it survives the reboot that wipes out/. A note kept on disk
+            # would not; CLAUDE.md records the Friday letter that was lost
+            # that way.
+            _six_note_key = _six_week["begin"]
+            _six_note, _six_note_at = "", None
+            _six_store_err = ""
+            if six_notes_on():
+                try:
+                    _six_note, _six_note_at = _six_draft_store.fetch(
+                        _six_note_key, SIX_NOTE_KIND)
+                    _six_note = _six_note or ""
+                except Exception as _e:
+                    _six_store_err = f"{type(_e).__name__}: {_e}"
+
+            st.html(f"""
+            <style>
+              .six-sum {{ background:{CARD_BG}; border:1px solid {BORDER};
+                          border-radius:10px; padding:14px 18px;
+                          margin-top:14px; color:{TEXT}; font-size:0.86rem;
+                          line-height:1.65; }}
+              .six-sum .six-sum-h {{ font-weight:700; font-size:0.95rem;
+                                     margin-bottom:6px; }}
+              .six-sum ul {{ margin:0 0 0 18px; padding:0; }}
+              .six-sum .six-warn {{ color:{TEXT}; font-weight:700; }}
+              .six-sum .six-why {{ margin-top:12px; padding-top:10px;
+                                   border-top:1px solid {BORDER};
+                                   white-space:pre-wrap; }}
+              .six-sum .six-why-h {{ font-weight:700; margin-bottom:4px; }}
+              .six-sum .six-why-none {{ color:{MUTED}; font-style:italic; }}
+            </style>
+            <div class="six-sum">
+              <div class="six-sum-h">What moved, week of
+                   {six_state.week_label(_six_week)}</div>
+              <ul>{"".join(f"<li>{_six_esc(s)}</li>" for s in _six_says)}
+                  {"".join(f'<li class="six-warn">{_six_esc(s)}</li>'
+                           for s in _six_warn)}</ul>
+              <div class="six-why">
+                <div class="six-why-h">Why &mdash; written, not computed</div>
+                {f'<div>{_six_esc(_six_note)}</div>' if _six_note.strip()
+                 else '<div class="six-why-none">Nothing written for this '
+                      'week yet. Nothing on this page infers a cause.</div>'}
+              </div>
+            </div>
+            """)
+
+            with st.expander("Write the why for this week", expanded=False):
+                if not six_notes_on():
+                    st.caption(
+                        "Snowflake is not configured for this session, so a "
+                        "note could not be saved durably and the box is "
+                        "hidden rather than losing what you type.")
+                else:
+                    st.caption(
+                        "Saved against the week of "
+                        f"{six_state.week_label(_six_week)}, not against "
+                        "today, so changing the week picker changes the note. "
+                        "Every save is kept; nothing overwrites an earlier "
+                        "one.")
+                    _six_typed = st.text_area(
+                        "What drove it", value=_six_note, height=150,
+                        key=f"six-why-{_six_note_key}",
+                        label_visibility="collapsed",
+                        placeholder="Corn, the board, the fall run, wheat "
+                                    "pasture, a big consignment — whatever "
+                                    "actually explains the week.")
+                    _c1, _c2 = st.columns([1, 4])
+                    with _c1:
+                        _six_save = st.button("Save note", key="six-why-save")
+                    with _c2:
+                        if _six_store_err:
+                            st.caption(f"⚠️ Could not read the saved note — "
+                                       f"{_six_store_err}")
+                        elif _six_typed != _six_note:
+                            st.caption("Unsaved changes.")
+                        elif _six_note_at:
+                            st.caption(f"Saved {_six_note_at:%b %d, %H:%M} UTC.")
+                    if _six_save:
+                        _err = _six_draft_store.store(
+                            _six_note_key, SIX_NOTE_KIND, _six_typed, "page")
+                        if _err:
+                            st.error(f"Not saved — {_err}")
+                        else:
+                            st.rerun()
 
             # Everything the table cannot say on its own, said once underneath
             # it. MoM is deliberately uncoloured: a feeder price rising is good
