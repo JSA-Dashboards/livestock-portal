@@ -26,7 +26,12 @@ def load_from_app(path: Path, *names: str, consts: tuple = (),
     namespace dict. Raises if anything named is missing, so a rename is a
     loud failure rather than a silently skipped test.
     """
-    src = Path(path).read_text(encoding="utf-8")
+    # utf-8-SIG, not utf-8: apps/cattle_on_feed/app.py and apps/beef_trimmings/app.py
+    # both start with a UTF-8 BOM, and ast.parse rejects it as "invalid
+    # non-printable character U+FEFF" -- which reads as a syntax error in the
+    # page rather than a codec choice here. utf-8-sig is identical on the files
+    # that have no BOM.
+    src = Path(path).read_text(encoding="utf-8-sig")
     tree = ast.parse(src)
 
     chunks: list[str] = []

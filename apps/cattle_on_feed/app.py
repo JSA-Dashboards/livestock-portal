@@ -281,6 +281,55 @@ def latest_kpi(df: pd.DataFrame, state: str) -> dict:
     return dict(current=current, mom=mom, mom_pct=mom_pct, yoy=yoy, yoy_pct=yoy_pct, date=date)
 
 
+def with_year_ago_pct(sub: pd.DataFrame, history: pd.DataFrame = None) -> pd.DataFrame:
+    """`sub` plus a `pct_year_ago` column — USDA's percent of previous year, so
+    100 is unchanged and 97.0 is three percent below.
+
+    `history` is the longer run of the same series to reach back INTO, and the
+    Data tab passes it for a rendering reason rather than an arithmetic one.
+    The tables show the nine years `LOAD_YEARS` covers, so the oldest of them
+    has no year-ago row inside its own frame — and `st.column_config.NumberColumn`
+    has no blank: a missing number prints a greyed **"None"**, which reads as a
+    fault rather than as "USDA published nothing to compare against". Measured
+    on Streamlit 1.63, and it is not a dtype matter: float64 NaN, nullable
+    Float64 pd.NA and an object None all render the same. Reaching into the
+    full record the page already holds for the seasonality charts means those
+    rows carry a real figure, and what "None" is left genuinely has none.
+
+    THE ARITHMETIC IS `cof_recap.pct`, DELIBERATELY. The COF Recap tab on this
+    same page already prints this figure for the latest month off USDA's
+    released report text; a second copy of `round(curr / prev * 100, 1)` here is
+    how the two tabs come to quote one number two ways and disagree in the last
+    decimal. Note the convention differs from the Summary tiles on purpose —
+    those show a percent CHANGE, this reproduces the column USDA's own report
+    prints beside On Feed, Placed and Marketed, which is what the raw-series
+    tables are for. That is also why the column header spells out "% of year
+    ago" rather than carrying a sign.
+
+    The year-ago row is matched on (year - 1, month), never a 12-row shift.
+    They agree on every row of every state today — checked across all three
+    series over the loaded window, zero divergence — so this is not fixing a
+    live defect. It is the form that stays right if a month ever goes missing,
+    which these state series do without warning: Minnesota's placements run to
+    November 2024 and then stop for good. A shift bridges a hole silently and
+    prices a month against whatever row happens to sit twelve places back.
+
+    A row with no year-ago match gets None, which renders blank. The earliest
+    loaded year has no prior year to reach, by construction.
+    """
+    out = sub.copy()
+    src = sub if history is None else history
+    prior = {(int(r.year) + 1, int(r.month)): float(r.Value) for r in src.itertuples()}
+    vals = [
+        cof_recap.pct(float(v), prior.get((int(y), int(m))))
+        for y, m, v in zip(out["year"], out["month"], out["Value"])
+    ]
+    # float64, not object: a state whose every row is unmatched would otherwise
+    # give an all-None column, and NumberColumn's "%.1f%%" cannot format that.
+    out["pct_year_ago"] = pd.Series(vals, index=out.index, dtype="float64")
+    return out
+
+
 def heifer_pct_frame(heifer: pd.DataFrame, steer: pd.DataFrame, inv: pd.DataFrame, state: str) -> pd.DataFrame:
     """Heifer/steer share of total on-feed inventory for the shared quarterly months."""
     h = series_for(heifer, state)[["date", "Value"]].rename(columns={"Value": "heifers"})
@@ -1271,11 +1320,25 @@ with tab_data:
     if tab_data.open:
         st.markdown(f'<div class="sec-hdr">Raw series — {STATE_NAMES.get(state, state)}</div>', unsafe_allow_html=True)
 
+        # The percent of year-ago is computed once per series and carried into
+        # BOTH the table and the Excel sheet, so a downloaded workbook cannot
+        # disagree with the page it came off.
+        #
+        # Each reaches back into the full-history frame rather than its own
+        # nine-year window, so the oldest displayed year has a figure instead
+        # of a "None" -- see with_year_ago_pct. Other disappearance has no
+        # full-history twin and does not need one: it is Excel-only, and a
+        # missing value writes an EMPTY cell there rather than the word.
+        inv_y   = with_year_ago_pct(inv_s,   series_for(inv_full, state))
+        place_y = with_year_ago_pct(place_s, series_for(place_full, state))
+        sales_y = with_year_ago_pct(sales_s, series_for(sales_full, state))
+        other_y = with_year_ago_pct(other_s)
+
         dl_col1, dl_col2 = st.columns([1, 5])
         with dl_col1:
             excel_bytes = _to_excel({
-                "On-feed inventory": inv_s, "Placements": place_s, "Marketings": sales_s,
-                "Other disappearance": other_s, "Heifer-steer split": hpct,
+                "On-feed inventory": inv_y, "Placements": place_y, "Marketings": sales_y,
+                "Other disappearance": other_y, "Heifer-steer split": hpct,
             })
             st.download_button("Download Excel", excel_bytes, file_name=f"cattle_on_feed_{state}.xlsx",
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -1283,18 +1346,37 @@ with tab_data:
         _date_col = st.column_config.DateColumn("date", format="MMM YYYY")
         _head_col = st.column_config.NumberColumn(format="%,.0f")
         _pct_col  = st.column_config.NumberColumn(format="%.1f%%")
+        # Named so the number reads on its own: 97.0% under "% of year ago" is
+        # three percent BELOW last year, where the same figure under a header
+        # saying "YoY" would read as a near-doubling. This is USDA's own column
+        # and it is not signed.
+        _ya_col = st.column_config.NumberColumn(
+            "% of year ago", format="%.1f%%",
+            help="USDA's percent of previous year: 100 is unchanged from the "
+                 "same month a year earlier, 97.0 is 3% below, 104.0 is 4% above. "
+                 "A row reading None is one where USDA published no figure for "
+                 "that month a year earlier.",
+        )
+        _cols = ["date", "Value", "pct_year_ago"]
+        _cfg = {"date": _date_col, "Value": _head_col, "pct_year_ago": _ya_col}
+
+        st.caption(
+            "**% of year ago** is USDA's own convention, the column their report prints "
+            "beside On Feed, Placed and Marketed — **100 means unchanged** from the same "
+            "month a year earlier, 97.0 means 3% below."
+        )
 
         st.markdown("**On-feed inventory (monthly)**")
-        st.dataframe(inv_s[["date", "Value"]].sort_values("date", ascending=False), hide_index=True, width="stretch",
-                     column_config={"date": _date_col, "Value": _head_col})
+        st.dataframe(inv_y[_cols].sort_values("date", ascending=False), hide_index=True, width="stretch",
+                     column_config=_cfg)
 
         st.markdown("**Placements (monthly)**")
-        st.dataframe(place_s[["date", "Value"]].sort_values("date", ascending=False), hide_index=True, width="stretch",
-                     column_config={"date": _date_col, "Value": _head_col})
+        st.dataframe(place_y[_cols].sort_values("date", ascending=False), hide_index=True, width="stretch",
+                     column_config=_cfg)
 
         st.markdown("**Marketings (monthly)**")
-        st.dataframe(sales_s[["date", "Value"]].sort_values("date", ascending=False), hide_index=True, width="stretch",
-                     column_config={"date": _date_col, "Value": _head_col})
+        st.dataframe(sales_y[_cols].sort_values("date", ascending=False), hide_index=True, width="stretch",
+                     column_config=_cfg)
 
         st.markdown("**Heifer / steer split (quarterly)**")
         st.dataframe(hpct.sort_values("date", ascending=False), hide_index=True, width="stretch",

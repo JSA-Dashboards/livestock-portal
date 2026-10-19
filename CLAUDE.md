@@ -1280,6 +1280,84 @@ Two things in it look wrong and are not:
 The tab sits behind the page's `st.stop()` guard, so a QuickStats outage takes
 it down even though it needs no API key. Known, not yet changed.
 
+## The Data tab's "% of year ago"
+
+Added 2026-10-19 at Ross's request — a third column on the on-feed inventory,
+placements and marketings tables, so each month can be read against the same
+month a year earlier without doing it in your head.
+
+**IT IS USDA'S CONVENTION — 100 IS UNCHANGED — AND THE SAME PAGE ALSO SHOWS A
+PERCENT CHANGE.** The Summary tiles print `+0.4%` / `−4.3%` year-on-year; this
+column prints `100.7%`. Both are right and they are different numbers for the
+same comparison, so the header carries the whole distinction: **`% of year ago`,
+never signed, never "YoY"**. 97.0 under a signed header reads as a
+near-doubling. `tests/test_cof_year_ago.py` pins the label and fails a `%+`
+format.
+
+**The arithmetic is `cof_recap.pct`, called rather than copied.** The COF Recap
+tab on this same page already prints these three percentages, off USDA's
+released report text instead of QuickStats — so this is the fifth place on the
+portal where two surfaces quote one figure, and the only reason they cannot
+disagree is that they run one function. Verified on the live page against the
+September 2026 release: on-feed **100.7**, placed **90.8**, marketed **96.7**,
+identical on both tabs. A test asserts the delegation by AST and fails a local
+`round(...)`.
+
+**The year-ago row is matched on `(year - 1, month)`, never `shift(12)`.** They
+agree on every row of every state today — checked across all three series over
+the loaded window, zero divergence — so this is not fixing a live defect. It is
+the form that survives a hole, and a hole fails *selectively*: with one month
+missing from 2025, a shift is wrong for four 2026 rows and right again from
+June, which is why nobody would spot it. These state series do stop without
+warning — **Minnesota's run to November 2024 and end**.
+
+### `st.column_config.NumberColumn` HAS NO BLANK — a missing number prints "None"
+
+Worth recording beyond this page, because every dataframe on the portal is one
+null away from it. Measured on Streamlit 1.63 rather than reasoned about:
+**float64 `NaN`, nullable `Float64` `pd.NA` and an object column of `None` all
+render the same greyed "None"**, and there is no null-placeholder option on the
+column config. Only `TextColumn` gives a true blank, at the cost of lexicographic
+sorting on a numeric column — `"100.7%"` sorts below `"98.4%"` — so it was
+rejected.
+
+It shipped that way for one browser load and read as a fault: twelve rows of
+"None" under the oldest year of every table, because the tables show the nine
+years `LOAD_YEARS` covers and the first of them has nothing inside its own
+frame to reach back to.
+
+The fix costs no fetch. The page already holds `inv_full` / `place_full` /
+`sales_full` — the full record since 1996, loaded for the seasonality tab — so
+`with_year_ago_pct(sub, history)` takes the longer series to reach INTO while
+the displayed rows stay exactly `sub`. Swept afterwards across all fourteen
+states and all three series: **zero "None" anywhere**. What would be left is
+genuinely a month USDA never published, and the column's help says so.
+
+A test pins the pairing (`inv_s` with `inv_full`, and so on) because
+cross-wiring them computes a plausible percentage off another quantity
+entirely — placements over on-feed inventory is about 15% — with nothing
+raising. "Other disappearance" has no full-history twin and needs none: it is
+Excel-only, and a missing value writes an EMPTY cell there rather than the
+word.
+
+The Excel download carries the same column, built from the same frames, so a
+workbook cannot disagree with the page it came off. A test asserts it.
+
+**`py_compile`, 1,413 tests and `get_page_text` all passed the "None".** It was
+found by looking at the page, which is the same lesson this file records for
+the ragged daily-cash tile row and the `<style>` block that ate itself.
+
+### `tests/streamlit_source.py` could not read this page at all
+
+The shared "lift a function out of a Streamlit page without importing it"
+helper read `encoding="utf-8"`, and `apps/cattle_on_feed/app.py` and
+`apps/beef_trimmings/app.py` both start with a UTF-8 BOM — so `ast.parse`
+rejected them as "invalid non-printable character U+FEFF", which reads as a
+syntax error in the page rather than a codec choice in the reader. It is
+`utf-8-sig` now, which is identical on the files that have no BOM. The BOM
+itself is recorded further up this file; what was new is that the helper every
+future page test will reach for was excluded from two pages by it.
+
 ## The Cold Storage view
 
 Added 2026-09-25. The Cattle on Feed page carries a **second USDA report**
