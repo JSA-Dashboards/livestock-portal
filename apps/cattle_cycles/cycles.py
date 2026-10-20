@@ -31,8 +31,13 @@ NASS carries both
     CATTLE, GE 500 LBS - PRICE RECEIVED, MEASURED IN $ / CWT            1909->
     CATTLE, STEERS & HEIFERS, GE 500 LBS - PRICE RECEIVED, ...          1953->
 
-and the second CONTAINS the first as a substring. Selecting with `in` rather
-than `==` silently merges them: they overlap on 884 months and differ on all
+and they share the tail `GE 500 LBS - PRICE RECEIVED, MEASURED IN $ / CWT`,
+which is a substring of BOTH. (The second does NOT contain the first whole --
+"CATTLE, GE 500 LBS" against "HEIFERS, GE 500 LBS" -- so the trap is the shared
+tail. Worth being exact about: the looser claim invites a reader to test
+`broad in narrow`, get False, and conclude the trap is not real.) Any match
+that is not anchored at both ends -- `in`, `endswith`, a SQL LIKE -- silently
+merges them: they overlap on 884 months and differ on all
 884, so the result is a plausible-looking series that is two different price
 definitions spliced at random. That is not hypothetical -- it is how the
 first cut of this analysis was built, and it moved the headline median from
@@ -88,6 +93,10 @@ SCHEMA = 1
 
 DATA = Path(__file__).parent / "data" / "cattle_cycles.json"
 
+# The droplet job writes here; the file above is the seed it starts from.
+# deploy/refresh_cattle_cycles.py owns every write.
+TABLE = "JSA.CME_FEEDER_CATTLE.CATTLE_CYCLE_PRICES"
+
 # Exact short_desc -> the key used throughout. Never match these by substring.
 SERIES = {
     "cattle_ge500": "All cattle, 500 lb and over",
@@ -96,6 +105,10 @@ SERIES = {
 }
 DEFAULT_SERIES = "cattle_ge500"
 
+# The SERIES value CPI-U is stored under, in both the seed and the table. It is
+# not one of SERIES above: it is the deflator, not a price the page can chart.
+CPI_KEY = "cpi_u"
+
 MIN_PHASE_MONTHS = 12          # shortest run the dating will call a phase
 MIN_PHASE_CHOICES = (9, 12, 15, 18)
 END_BUFFER_MONTHS = 6          # a turn this close to the end is not datable
@@ -103,12 +116,96 @@ SMOOTH_MONTHS = 13             # centred, so it cannot lead or lag the turn
 REFINE_WINDOW_MONTHS = 6       # snap a smoothed turn back onto the real extreme
 
 
-def load() -> dict | None:
+def _from_file() -> dict | None:
     """The committed seed: nominal monthly prices plus CPI-U, never deflated."""
     try:
-        return json.loads(DATA.read_text(encoding="utf-8"))
+        d = json.loads(DATA.read_text(encoding="utf-8"))
     except Exception:
         return None
+    d["source"] = "file"
+    return d
+
+
+def _from_snowflake(conn) -> dict | None:
+    """Newest row per (series, period). Returns None on any trouble -- never raises.
+
+    NO IMPORT IS ADDED FOR THIS. The connection is handed in from app.py and
+    this module only calls .cursor() on it, exactly as southeast.py does, so
+    `cycles.py` still imports nothing but stdlib, numpy and pandas and the page
+    cannot acquire an HTTP or database path THROUGH it. The guard in
+    tests/test_cattle_cycles.py that pins that import set therefore needed no
+    loosening, which is the point -- a read path that forced it open would have
+    been the wrong shape.
+
+    The committed seed is a seed, not a live series: it only moves when someone
+    regenerates it. deploy/refresh_cattle_cycles.py keeps this table current
+    from the droplet instead, which is where the 464MB NASS bulk dump can
+    reasonably be streamed.
+    """
+    try:
+        cur = conn.cursor().execute(
+            f"SELECT SERIES, PERIOD, VALUE FROM {TABLE} "
+            f"QUALIFY ROW_NUMBER() OVER (PARTITION BY SERIES, PERIOD "
+            f"ORDER BY RECORDED_AT DESC) = 1")
+        rows = cur.fetchall()
+    except Exception:
+        return None
+    if not rows:
+        return None
+    by: dict[str, dict[str, float]] = {}
+    for series, period, value in rows:
+        if value is None:
+            continue
+        by.setdefault(str(series), {})[str(period)] = float(value)
+    cpi = by.pop(CPI_KEY, {})
+    if not cpi or not any(by.get(k) for k in SERIES):
+        return None
+    return {"series": {k: {"rows": by.get(k, {})} for k in SERIES},
+            "cpi_u": {"rows": cpi}, "source": "snowflake"}
+
+
+def _at_least_as_long(live: dict, seed: dict) -> bool:
+    """Does the table carry every series the file does, and no series shorter?
+
+    ALL OR NOTHING, AND THAT IS DELIBERATE. The obvious alternative is to take
+    whichever source is longer per series -- which would mean deflating a
+    Snowflake price series by a file CPI, or charting one series from the table
+    beside another from the file. Every cycle date on this page is a product of
+    the price series AND the deflator together, so a mixed read is a splice,
+    and a splice here is the exact failure the module note opens with: it
+    renders perfectly and moves the headline.
+
+    A table SHORTER than the file is not a stale table, it is a broken one --
+    the job writes the whole series every run and only skips periods whose
+    value has not moved, so it can never legitimately shrink. Falling back
+    whole costs the advancement and keeps the past intact, which is the right
+    way round.
+    """
+    for key in SERIES:
+        want = len((seed.get("series", {}).get(key) or {}).get("rows") or {})
+        if len((live.get("series", {}).get(key) or {}).get("rows") or {}) < want:
+            return False
+    want_cpi = len((seed.get("cpi_u") or {}).get("rows") or {})
+    return len((live.get("cpi_u") or {}).get("rows") or {}) >= want_cpi
+
+
+def load(conn=None) -> dict | None:
+    """Nominal monthly prices plus CPI-U. Snowflake first, the committed file after.
+
+    THE FALLBACK IS NOT DECORATION. If the droplet job has never run, or the
+    table is empty, or Snowflake is unreachable, the page still draws the
+    record as of the last rebuild. It stops advancing; it does not vanish --
+    and because it does not vanish, a silent failure of that job is INVISIBLE
+    on the chart. Check MAX(RECORDED_AT) in the table, not the page.
+
+    `source` rides on the returned dict so the page can name where the numbers
+    came from rather than leaving a reader to assume they are live.
+    """
+    seed = _from_file()
+    live = _from_snowflake(conn) if conn is not None else None
+    if live and (seed is None or _at_least_as_long(live, seed)):
+        return live
+    return seed
 
 
 def _series(rows: dict) -> pd.Series:
@@ -333,6 +430,7 @@ def summary(seed: dict, key: str = DEFAULT_SERIES, real: bool = True,
     ctx = context(s, tp, prov)
     return {
         "series": s, "units": units, "key": key, "real": real,
+        "source": seed.get("source", "file"),
         "min_phase": min_phase,
         "turns": tp, "provisional": prov,
         "phases": phases(s, tp),

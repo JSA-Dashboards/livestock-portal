@@ -6,12 +6,17 @@ runs, and `Home.py` registers this under `TOOLS` rather than `DASHBOARDS`, the
 same treatment the letter tool and the Market Board get: no home-grid tile, no
 nav entry, no route at all for a client. Signing in reveals all three together.
 
-IT NEEDS NO SECRET AND NO DATABASE. Everything is computed from the committed
-seed in `data/cattle_cycles.json` — USDA NASS monthly price received plus BLS
-CPI-U, both keyless, both stored as published. So there is no Snowflake block
-to forward here and no outage anywhere that can blank this page. The cost is
-that the series advances only when the seed is regenerated, which is why the
-as-of month is printed at the top rather than left to be inferred.
+IT NEEDS NO SECRET, AND SNOWFLAKE IS A PREFERENCE RATHER THAN A DEPENDENCY.
+Both feeds behind this page are keyless — USDA NASS monthly price received and
+BLS CPI-U, stored as published — and the committed seed in
+`data/cattle_cycles.json` is enough to draw every figure on the page. What the
+seed cannot do is advance: it only moves when somebody regenerates it. So
+`deploy/refresh_cattle_cycles.py` keeps JSA.CME_FEEDER_CATTLE.CATTLE_CYCLE_PRICES
+current from the droplet and `cycles.load()` prefers that table, falling back
+to the file whenever it is empty, short or unreachable. No outage can blank
+this page; one can only stop it advancing. Because it degrades that quietly,
+the caption names which of the two it is reading, and the as-of month is
+printed at the top rather than left to be inferred.
 
 THE ARITHMETIC IS NOT IN THIS FILE. `cycles.py` dates the turning points and
 owns every judgement about what counts as a phase; this file renders. That
@@ -25,6 +30,7 @@ than levelled because the 1930s traded at a fifth of today's real price and on
 a shared axis the SHAPE, which is the whole question, disappears.
 """
 
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -43,6 +49,28 @@ import numpy as np   # noqa: E402
 import plotly.graph_objects as go  # noqa: E402
 
 import cycles  # noqa: E402
+
+
+def _load_db():
+    """apps/us_cow_herd/snowflake_db.py, under a PRIVATE module name.
+
+    `snowflake_db` exists FIVE times in this repo and several pages import it
+    by bare name, so whichever page loads first decides which copy every other
+    page gets. A page running against another page's connection logic raises
+    nothing and gives no clue which copy it got. "_cyc_page_db" can never join
+    that collision — the same trick letter/draft_store.py uses, and reusing the
+    file rather than copying its key-pair logic means there is no sixth copy of
+    that to drift either.
+    """
+    path = REPO / "apps" / "us_cow_herd" / "snowflake_db.py"
+    spec = importlib.util.spec_from_file_location("_cyc_page_db", path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["_cyc_page_db"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_DB = _load_db()
 
 # -- palette -----------------------------------------------------------------
 # No shared palette module exists; every page declares its own. This is the DM_
@@ -64,6 +92,14 @@ PAST_LINE = "rgba(95,114,103,0.33)"
 # At module level with the other style constants, never beside the first chart
 # that uses it — apps/beef_cutout/app.py records a NameError that fired only for
 # the reader who opened a different view.
+# The overlay chart's plot box: 430 tall less its 10px margins and roughly
+# 45px of x-axis furniture. Used only to turn index units into screen pixels
+# for label decluttering, so an approximation is fine -- being a few pixels
+# out means slightly more or less separation, never an overlap.
+CHART_PX = 430
+PLOT_PX = CHART_PX - 10 - 10 - 45
+LABEL_PX = 19          # a label measures 14px tall; this is that plus room
+
 AXIS = dict(
     gridcolor=DM_BORDER, linecolor=DM_BORDER, showgrid=True,
     tickfont=dict(color=DM_MUTED, size=11),
@@ -114,6 +150,72 @@ def yrs(months: int) -> str:
     return f"{months / 12:.1f} years"
 
 
+def label_offsets(runs: list, y_span: float, x_span: float) -> dict:
+    """Vertical pixel offsets that stop end-of-line labels sitting on each other.
+
+    Thirteen runs end wherever they end, and four of them finish within a few
+    months and a few index points of one another — on the first build
+    1923-1929 sat on top of 1945-1951, and 1967-1973 sat on top of the current
+    run, which is the one label on the chart nobody can afford to lose.
+
+    Plotly does not declutter annotations, so this does: labels are placed
+    from the top down, and one that would land on an already-placed label
+    sharing its stretch of the x-axis is pushed below it. The anchor stays
+    on the true endpoint and a leader is drawn to it, so a nudged label
+    still says exactly which line it belongs to.
+
+    Tolerances are fractions of the plotted span rather than fixed numbers, so
+    they keep meaning if the series grows or the user changes the minimum
+    phase and the runs move.
+
+    THE CHECK IS AGAINST WHERE LABELS LAND, NOT WHERE THEY STARTED. The first
+    version counted how many earlier endpoints were nearby and offset by a
+    fixed step per neighbour, which does not separate anything: two labels
+    offset by different amounts can still coincide, and a label nudged up can
+    land on one that never moved. It left two pairs overlapping and made one
+    of them worse. Greedy placement against the running list of FINAL
+    positions is the fix.
+    """
+    if not runs or y_span <= 0:
+        return {}
+    # Screen pixels per index unit, from the plot box this figure actually
+    # asks for: 430 tall less its margins and the x-axis furniture, over the
+    # range plotly will show (it pads a little beyond the data).
+    px_per_unit = PLOT_PX / (y_span * 1.1)
+    x_tol = x_span * 0.09
+    ordered = sorted(runs, key=lambda r: r["y"][-1], reverse=True)
+    out, placed = {}, []          # placed: (x_end, final screen y in px)
+    for run in ordered:
+        x, y = run["x"][-1], run["y"][-1]
+        home = -y * px_per_unit   # screen y grows downward, index grows up
+        cand, moved = home, True
+        while moved:
+            moved = False
+            for px_end, py_final in placed:
+                if abs(px_end - x) <= x_tol and abs(py_final - cand) < LABEL_PX:
+                    cand, moved = py_final + LABEL_PX, True
+        # ay is POSITIVE-DOWN here, measured rather than read off the docs,
+        # whose "arrow pointing from bottom to top" wording supports either
+        # reading. Flipping it piles every label into the one above instead.
+        out[id(run)] = round(cand - home)
+        placed.append((x, cand))
+    return out
+
+
+def span_label(run: dict) -> str:
+    """The years a run covers, for labelling its line on the overlay.
+
+    BOTH YEARS IN FULL. "1998-01" is four characters shorter and asks the
+    reader to decide whether it ended in 2001 or 1901, which is exactly the
+    kind of label this page is not allowed to print. A run that opens and
+    closes inside one year gets that year alone rather than "1933-1933".
+    """
+    a, b = run["start"], run["end"]
+    if run.get("running"):
+        return f"{a:%Y}–now"
+    return f"{a:%Y}" if a.year == b.year else f"{a:%Y}–{b:%Y}"
+
+
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
 def load_summary(schema: int = cycles.SCHEMA, key: str = cycles.DEFAULT_SERIES,
                  real: bool = True, min_phase: int = cycles.MIN_PHASE_MONTHS):
@@ -124,7 +226,25 @@ def load_summary(schema: int = cycles.SCHEMA, key: str = cycles.DEFAULT_SERIES,
     with — and a leading underscore would ask Streamlit to drop it outright.
     Both halves, or the guard is inert.
     """
-    seed = cycles.load()
+    # ONLY CONNECT WHEN SNOWFLAKE IS THE BACKEND. get_conn() hands back SQLite
+    # when USE_SNOWFLAKE is unset, which would mean opening (and creating)
+    # another page's local database file to run a query that cannot succeed
+    # against it. cycles.load(None) reads the committed seed, which is the
+    # right answer on a developer machine.
+    conn = None
+    if _DB.use_snowflake():
+        try:
+            conn = _DB.get_conn()
+        except Exception:
+            conn = None          # the seed still renders the whole page
+    try:
+        seed = cycles.load(conn)
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
     if not seed:
         return None
     return cycles.summary(seed, key=key, real=real, min_phase=min_phase)
@@ -164,7 +284,9 @@ D = load_summary(cycles.SCHEMA, series_key, basis == "Real", min_phase)
 
 if not D or D["context"] is None:
     st.error("Cattle Cycles could not read its data file, so nothing below can be shown.")
-    st.caption(f"Expected {cycles.DATA.name} under apps/cattle_cycles/data/.")
+    st.caption(
+        f"Neither {cycles.TABLE} nor the committed {cycles.DATA.name} under "
+        f"apps/cattle_cycles/data/ could be read.")
     st.stop()
 
 ctx = D["context"]
@@ -173,10 +295,18 @@ tt = D["trough_to_trough"]
 # either view branch, so a per-branch definition would NameError there -- the
 # script-order trap CLAUDE.md records for the WASDE panel.
 basis_word = "Real" if D["real"] else "Nominal"
+
+# WHICH SOURCE, NAMED ON THE PAGE. The committed seed renders every figure
+# here perfectly well — it just stops advancing — so a refresh job that has
+# died looks exactly like one that has nothing to do. There is no visual tell
+# at all, which is why the caption carries one. Derived from the load, never
+# typed, and defined ONCE above its use like basis_word above it.
+source_word = ("the live table" if D.get("source") == "snowflake"
+               else "the committed seed, which does not advance on its own")
 st.caption(
     f"USDA NASS price received, {series_label.lower()} · {D['units']} · "
     f"{D['first']:%b %Y} to {D['last']:%b %Y} · phases dated at a "
-    f"{min_phase}-month minimum"
+    f"{min_phase}-month minimum · read from {source_word}"
 )
 
 # -- the provisional turn ----------------------------------------------------
@@ -223,30 +353,57 @@ if view == "This cycle in context":
     # -- the overlay ---------------------------------------------------------
     st.subheader(f"This {kind} run against every completed one")
     fig = go.Figure()
+    _ys = [v for r in D["overlay"] for v in r["y"]]
+    _xs = [v for r in D["overlay"] for v in r["x"]]
+    offsets = label_offsets(D["overlay"], max(_ys) - min(_ys), max(_xs) - min(_xs))
     for run in D["overlay"]:
         if run["running"]:
             continue
         fig.add_trace(go.Scatter(
-            x=run["x"], y=run["y"], mode="lines", name=run["label"],
+            x=run["x"], y=run["y"], mode="lines", name=span_label(run),
             line=dict(color=PAST_LINE, width=1.4), showlegend=False,
-            # 13 traces sharing an x under "x unified" is a wall of numbers
-            # nobody reads. The past runs are shape; the running one is the
-            # figure, and it is the only trace that answers on hover.
-            hoverinfo="skip",
+            hovertemplate=f"<b>{span_label(run)}</b><br>month %{{x}} of that run"
+                          f"<br>%{{y:.0f}} vs 100 at its trough<extra></extra>",
         ))
+        # EACH LINE CARRIES ITS OWN YEARS, at the end of the line rather than in
+        # a legend. Thirteen identical grey swatches in a legend name the runs
+        # without identifying any of them -- the colour cannot be matched back
+        # to a line. The label sits where the line stops, which is also the
+        # fact worth reading: how long that run lasted.
+        _ay = offsets[id(run)]
+        fig.add_annotation(
+            x=run["x"][-1], y=run["y"][-1], text=span_label(run),
+            xanchor="left", yanchor="middle", ax=8, ay=_ay,
+            showarrow=bool(_ay), arrowhead=0, arrowsize=1, arrowwidth=1,
+            arrowcolor=PAST_LINE, xshift=0 if _ay else 4,
+            font=dict(size=9, color=DM_MUTED),
+        )
     live = next((r for r in D["overlay"] if r["running"]), None)
     if live:
         fig.add_trace(go.Scatter(
-            x=live["x"], y=live["y"], mode="lines", name="This run",
+            x=live["x"], y=live["y"], mode="lines", name=span_label(live),
             line=dict(color=JSA_GREEN, width=3.2),
-            hovertemplate="month %{x} of this run<br>%{y:.0f} vs 100 at the trough"
-                          "<extra></extra>",
+            hovertemplate=f"<b>{span_label(live)}</b><br>month %{{x}} of this run"
+                          f"<br>%{{y:.0f}} vs 100 at the trough<extra></extra>",
         ))
+        _ay = offsets[id(live)]
+        fig.add_annotation(
+            x=live["x"][-1], y=live["y"][-1], text=f"<b>{span_label(live)}</b>",
+            xanchor="left", yanchor="middle", ax=8, ay=_ay,
+            showarrow=bool(_ay), arrowhead=0, arrowsize=1, arrowwidth=1,
+            arrowcolor=JSA_GREEN, xshift=0 if _ay else 4,
+            font=dict(size=10, color=JSA_GREEN),
+        )
     fig.add_hline(y=100, line=dict(color=DM_BORDER, width=1), layer="below")
     fig.update_layout(
-        height=430, margin=dict(l=10, r=10, t=10, b=10),
+        # CLOSEST, NOT "x unified", AND THIS CHART IS THE EXCEPTION. Everywhere
+        # else on the portal a shared x is the comparison. Here fourteen runs
+        # share an x origin that means a different decade for each, so a unified
+        # box stacks fourteen numbers and names none of them readably. Closest
+        # lets one line answer at a time, which is the question being asked.
+        height=CHART_PX, margin=dict(l=10, r=70, t=10, b=10),
         paper_bgcolor=DM_SURFACE, plot_bgcolor=DM_SURFACE,
-        hovermode="x unified", showlegend=False,
+        hovermode="closest", showlegend=False,
         xaxis={**AXIS, "title": "months from the start of the run"},
         yaxis={**AXIS, "title": "indexed to 100 at the trough"},
     )
