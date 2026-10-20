@@ -411,9 +411,14 @@ if view == "This cycle in context":
     st.caption(money_md(
         f"Every completed {kind} run since {D['first']:%Y} in grey, each indexed to "
         f"100 at its own trough; this one in green. Indexed rather than priced "
-        f"because {D['first']:%Y} traded near ${D['series'].iloc[0]:,.0f} and today "
-        f"near ${ctx['level']:,.0f} in the same dollars — on a shared price axis "
-        f"the shape would be invisible."
+        # THE LOW, NOT THE FIRST VALUE. The claim is that the series spans too
+        # wide a range to share a price axis, so it needs the widest gap in it.
+        # De-hardcoding an earlier "$80" to series.iloc[0] quietly swapped the
+        # 1933 low for January 1913, and the sentence then argued for indexing
+        # off a $196-to-$232 spread, which argues for the opposite.
+        f"because {D['series'].idxmin():%Y} traded near "
+        f"${D['series'].min():,.0f} and today near ${ctx['level']:,.0f} in the "
+        f"same dollars — on a shared price axis the shape would be invisible."
     ))
 
     # -- what happened from here --------------------------------------------
