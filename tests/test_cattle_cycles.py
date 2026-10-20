@@ -10,11 +10,20 @@ rather than by a test. A new page ships them green unless it brings its own.
 
 THE FIRST TEST IS THE ONE THAT MATTERS MOST. NASS carries both
 `CATTLE, GE 500 LBS - PRICE RECEIVED...` and `CATTLE, STEERS & HEIFERS, GE 500
-LBS - PRICE RECEIVED...`, and the second contains the first as a substring.
-Selecting with `in` rather than `==` merges two different price definitions
-into one plausible-looking series -- which is how the first cut of this
-analysis was built. It moved the headline median from 7.4 years to 10.1 and
-rendered perfectly throughout.
+LBS - PRICE RECEIVED...`. They share the TAIL
+`GE 500 LBS - PRICE RECEIVED, MEASURED IN $ / CWT`, which is in both, and
+matching on that tail with `in` merges two different price definitions into
+one plausible-looking series -- which is how the first cut of this analysis
+was built. It moved the headline median from 7.4 years to 10.1 and rendered
+perfectly throughout.
+
+AN EARLIER VERSION OF THIS NOTE SAID THE SECOND STRING CONTAINS THE FIRST
+WHOLE. It does not: they diverge at character 8, `CATTLE, GE` against
+`CATTLE, STEERS`, so `broad in narrow` is False. The trap is entirely real
+and the loose phrasing undersold it in the worst way -- a reader who tests
+the claim as written gets False and concludes the guard is unnecessary.
+`test_the_substring_trap_is_live_not_theoretical` asserts against the shared
+tail, which is the thing that actually collides.
 """
 import ast
 import json
@@ -59,14 +68,22 @@ def test_series_are_named_by_exact_short_desc(seed):
 
 
 def test_the_substring_trap_is_live_not_theoretical(seed):
-    """`GE 500 LBS - PRICE RECEIVED...` is a strict substring of the steers-and-
-    heifers series, so a substring match would silently merge two series."""
+    """The two series share a TAIL, which is what a loose match collides on.
+
+    Neither string contains the other whole -- asserted below, because that is
+    the misreading this test exists to prevent. What collides is the tail, and
+    matching on it with `in` is what spliced two price definitions together.
+    """
     broad = seed["series"]["cattle_ge500"]["short_desc"]
     narrow = "CATTLE, STEERS & HEIFERS, GE 500 LBS - PRICE RECEIVED, MEASURED IN $ / CWT"
     needle = "GE 500 LBS - PRICE RECEIVED, MEASURED IN $ / CWT"
+    assert broad not in narrow and narrow not in broad, (
+        "neither contains the other whole -- they part at 'CATTLE, GE' vs "
+        "'CATTLE, STEERS'. If that changes, rewrite the docstring above too"
+    )
     assert needle in broad and needle in narrow and broad != narrow, (
-        "if these ever stop colliding the trap is gone, but so is the reason "
-        "this test exists -- check before deleting it"
+        "if these ever stop sharing the tail the trap is gone, but so is the "
+        "reason this test exists -- check before deleting it"
     )
 
 
@@ -207,6 +224,61 @@ def test_raw_html_never_goes_through_the_markdown_parser(page_src):
     assert "unsafe_allow_html" not in page_src, (
         "emit raw HTML with st.html; the tile rows quote two prices in one block"
     )
+
+
+def test_overlay_labels_cannot_land_on_each_other(summary):
+    """The end-of-line year labels must not overlap, at any setting.
+
+    Four runs finish within a few months and a few index points of one
+    another, so without decluttering 1923-1929 sits on 1945-1951 and
+    1967-1973 sits on the current run -- the one label nobody can afford to
+    lose. This recomputes where every label lands and asserts the separation,
+    rather than trusting the offsets to be right by inspection: two earlier
+    attempts looked correct in the source and still overlapped on screen, one
+    of them because plotly's `ay` runs the opposite way to the guess.
+    """
+    sys.path.insert(0, str(ROOT / "tests"))
+    from streamlit_source import load_from_app
+
+    # Two names, so load_from_app returns the whole namespace -- with one it
+    # returns the function alone and the constants are unreachable.
+    ns = load_from_app(APP_DIR / "app.py", "label_offsets", "span_label",
+                       consts=("CHART_PX", "PLOT_PX", "LABEL_PX"))
+    label_offsets, PLOT_PX, LABEL_PX = (ns["label_offsets"], ns["PLOT_PX"],
+                                        ns["LABEL_PX"])
+    runs = summary["overlay"]
+    ys = [v for r in runs for v in r["y"]]
+    xs = [v for r in runs for v in r["x"]]
+    y_span, x_span = max(ys) - min(ys), max(xs) - min(xs)
+    offsets = label_offsets(runs, y_span, x_span)
+    assert len(offsets) == len(runs)
+
+    px_per_unit = PLOT_PX / (y_span * 1.1)
+    x_tol = x_span * 0.09
+    placed = [(r["x"][-1], -r["y"][-1] * px_per_unit + offsets[id(r)], r["label"])
+              for r in runs]
+    for i, (xa, ya, la) in enumerate(placed):
+        for xb, yb, lb in placed[i + 1:]:
+            if abs(xa - xb) <= x_tol:
+                assert abs(ya - yb) >= LABEL_PX - 1, (
+                    f"{la} and {lb} land {abs(ya - yb):.0f}px apart, "
+                    f"closer than the {LABEL_PX}px a label needs")
+
+
+def test_label_decluttering_leaves_isolated_runs_alone(summary):
+    """A run with nothing near it keeps its label on its own endpoint. An
+    offset applied to everything would scatter twelve labels to fix two."""
+    sys.path.insert(0, str(ROOT / "tests"))
+    from streamlit_source import load_from_app
+
+    label_offsets = load_from_app(
+        APP_DIR / "app.py", "label_offsets", "span_label",
+        consts=("CHART_PX", "PLOT_PX", "LABEL_PX"))["label_offsets"]
+    runs = summary["overlay"]
+    ys = [v for r in runs for v in r["y"]]
+    xs = [v for r in runs for v in r["x"]]
+    offsets = label_offsets(runs, max(ys) - min(ys), max(xs) - min(xs))
+    assert sum(1 for v in offsets.values() if v == 0) > len(runs) // 2
 
 
 def test_the_basis_word_is_never_typed_into_a_rendered_string(page_src):
