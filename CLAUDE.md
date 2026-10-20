@@ -1036,6 +1036,51 @@ numbers and runs the REAL `index_dates` rule rather than a fake.
   `cme_ftp_daily` exactly (+0.65), which is an independent confirmation the
   round-then-subtract convention is right.
 
+- **2026-10-20, a SUNDAY's filler.** The Tuesday letter printed **343.46**
+  — Friday's number — where CME had published **342.16** for Monday 10/19
+  that morning. Ross: *"the feeder cattle index isn't updating to either
+  today's FCI - which the CME just released - or using our JSA Daily FCI
+  Estimate. It's stale with yesterday's CME fci."*
+
+  Two things combined, and neither is visible from the figure:
+
+  **`fci_daily` carries Friday forward over the weekend.** 10/17 and 10/18
+  both hold 343.45715454692953, to the digit, with no same-day price on
+  either. They are filler, not sessions.
+
+  **The headline degrades onto a real session.**
+  `index_dates.headline_index_date()` returns the business day after CME's
+  last file ONLY while we hold an estimate for it; when CME has caught up
+  with everything in `fci_daily` it falls back to `max(available)`, which is
+  deliberate and documented there. The MARS ingest had not produced 10/20
+  yet, so the headline sat on 10/19 — exactly the date CME had just
+  published — and `published`'s rule of "the last date BEFORE the headline"
+  skipped it for Sunday.
+
+      headline   342.16  10-19    (CME had printed this that morning)
+      published  343.46  10-18    a Sunday, Friday's number, change 0.00
+
+  **`published` is keyed on the dates CME has PRINTED now**, not on the
+  headline. A date CME printed is a finished session by construction, so
+  that keeps the property the old rule existed for — it can never be the
+  unfinished forward day — without chaining two questions that are not the
+  same question. The no-CME-table fallback stays, and skips weekends.
+
+  **The change was a cent out too, and CME's own column says so.** The prior
+  was the previous calendar row rather than the previous printed date, so
+  the move read **-1.30** against Sunday's filler where CME's
+  `REPORTED_CHANGE` for 10/19 is **-1.29** — our rounded 343.46 filler
+  against CME's published 343.45 for Friday. **`REPORTED_CHANGE` is a free
+  audit of this arithmetic** and `tests/test_feeder_index.py` now uses it;
+  this file had already noticed it as "an independent confirmation" and the
+  check was never wired up. The headline's own change had the same prior and
+  is fixed with it.
+
+  Worth knowing for the next one: the trigger is **CME catching up with our
+  ingest**, which is the ordinary state on any morning the MARS job has not
+  run yet. It is not rare and it was not new — it simply needed a Monday
+  holiday-shaped weekend and someone reading the two side by side.
+
 The general lesson, since it has now cost three mornings: **when the letter and
 a dashboard quote the same figure, a disagreement is a bug even when both
 numbers are defensible.** Neither will raise. The 10-07 case adds a second

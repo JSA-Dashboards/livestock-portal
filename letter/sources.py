@@ -1828,7 +1828,16 @@ def fetch_feeder_index() -> dict:
     value = merged[headline]
 
     # Prior available date, for the day-on-day move.
-    earlier = sorted(d for d in available if d < headline)
+    #
+    # WEEKENDS ARE FILLER, NOT SESSIONS. fci_daily carries Friday forward over
+    # Saturday and Sunday -- 2026-10-17 and 10-18 both hold Friday's
+    # 343.45715 to the digit, with no same-day price on either. Differencing
+    # against one of those on a Monday or Tuesday gives a move against Friday
+    # that is a cent out from CME's own, because merged holds CME's rounded
+    # 343.45 for Friday and our unrounded 343.457 for the filler: on
+    # 2026-10-20 that printed -1.30 where CME's REPORTED_CHANGE said -1.29.
+    # One cent, on the figure the letter and the dashboard must agree about.
+    earlier = sorted(d for d in available if d < headline and d.weekday() < 5)
     prev_val = merged.get(earlier[-1]) if earlier else None
 
     # ROUND BOTH VALUES TO DISPLAY PRECISION BEFORE DIFFERENCING, not after,
@@ -1883,14 +1892,64 @@ def fetch_feeder_index() -> dict:
     # estimate for that same day when we do not. Those agree closely by
     # construction: for 2026-10-06 ours was 337.869294 against CME's 337.87.
     # Either way it can never be the unfinished forward day.
-    settled = sorted(d for d in merged if d < headline)
+    # IT IS KEYED ON THE DATES CME HAS PRINTED, not on "the last date before
+    # the headline", which is what it was until 2026-10-20. That rule failed
+    # in two ways at once, and both were live that morning while Ross was
+    # writing: *"the feeder cattle index isn't updating to either today's FCI
+    # -- which the CME just released -- or using our JSA Daily FCI Estimate.
+    # It's stale with yesterday's CME fci."*
+    #
+    # FIRST, fci_daily CARRIES FRIDAY FORWARD OVER THE WEEKEND. 2026-10-17 and
+    # 10-18 both hold Friday's 343.45715, to the digit. They are filler, not
+    # sessions -- no auction trades on a Sunday -- and "the last date before
+    # the headline" landed on one.
+    #
+    # SECOND, THE HEADLINE DEGRADES ONTO A REAL SESSION. headline_index_date()
+    # returns the first business day after CME's last file ONLY while we hold
+    # an estimate for it; when CME has caught up with everything in fci_daily
+    # it falls back to max(available), which is deliberate and documented
+    # there. So on a morning where the MARS ingest has not yet produced
+    # today's estimate, the headline sits on the newest REAL session -- and
+    # `d < headline` then excludes precisely the index CME just published.
+    #
+    # Together, on 2026-10-20:
+    #
+    #     headline   342.16  10-19   (CME had printed this that morning)
+    #     published  343.46  10-18   a Sunday, Friday's number, change 0.00
+    #
+    # A date CME has printed is a finished session by construction, so keying
+    # on cme_dates keeps the property the old rule was written for -- it can
+    # never be the unfinished forward day -- without depending on the headline
+    # at all. The two are answering different questions and should not be
+    # chained.
+    #
+    # THE PRIOR IS THE PREVIOUS PRINTED DATE, NOT THE PREVIOUS CALENDAR ROW,
+    # and that is the same bug in the change. Against Sunday's filler the move
+    # read -1.30; against Friday, which is what CME differenced, it is -1.29 --
+    # exactly CME's own REPORTED_CHANGE for 10-19. That column is a free audit
+    # of this arithmetic and `tests/test_feeder_index.py` uses it.
+    printed = sorted(d for d in cme_dates if d in merged)
+    if printed:
+        s_date = printed[-1]
+        s_prev_date = printed[-2] if len(printed) > 1 else None
+    else:
+        # NO CME TABLE AT ALL -- a missing or empty cme_ftp_daily, which is
+        # the state the deployed app was in on 2026-10-07 and the reason this
+        # block must never fall back to `value`, the forward estimate.
+        # Weekdays only, for the carry-forward above; a holiday still slips
+        # through, but a holiday's filler equals the session before it, so the
+        # LEVEL stays right and only the date is a day early.
+        weekdays = sorted(d for d in merged
+                          if d < headline and d.weekday() < 5)
+        s_date = weekdays[-1] if weekdays else None
+        s_prev_date = weekdays[-2] if len(weekdays) > 1 else None
+
     pub_block = None
-    if settled:
-        s_date = settled[-1]
+    if s_date is not None:
         s_val = round(merged[s_date], 2)
         # Same round-then-subtract convention as below: a reader holding two
         # letters subtracts the printed figures and must get this.
-        s_prev = round(merged[settled[-2]], 2) if len(settled) > 1 else None
+        s_prev = round(merged[s_prev_date], 2) if s_prev_date is not None else None
         from_cme = s_date in cme_dates
         pub_block = {
             "value": s_val,

@@ -120,3 +120,89 @@ def test_the_prior_tracks_whatever_cme_actually_printed(monkeypatch, published_v
     pub = pd.DataFrame({"date": ["2026-09-29"], "fci_value": [published_value]})
     _install(monkeypatch, OURS, pub)
     assert sources.fetch_feeder_index()["change"] == expected
+
+
+# -- The weekend carry-forward, 2026-10-20 --------------------------------
+#
+# Ross, writing the Tuesday letter: "the feeder cattle index isn't updating
+# to either today's FCI - which the CME just released - or using our JSA
+# Daily FCI Estimate. It's stale with yesterday's CME fci."
+#
+# Two things combined, and both of these rows are the real ones.
+#
+#   fci_daily CARRIES FRIDAY FORWARD. 10-17 and 10-18 hold Friday's
+#   343.45715454692953 to the digit, with no same-day price on either. They
+#   are filler; nothing trades on a Sunday.
+#
+#   THE HEADLINE DEGRADES ONTO A REAL SESSION. headline_index_date() returns
+#   the business day after CME's last file only while we hold an estimate for
+#   it. The MARS ingest had not produced 10-20 yet, so it fell back to
+#   max(available) = 10-19 -- which is exactly the date CME had just
+#   published, and "the last date before the headline" then skipped it for
+#   Sunday's filler.
+WEEKEND_OURS = pd.DataFrame({
+    "date": ["2026-10-15", "2026-10-16", "2026-10-17", "2026-10-18", "2026-10-19"],
+    "fci_value": [343.5498980512278, 343.45715454692953, 343.45715454692953,
+                  343.45715454692953, 342.16265226582874],
+})
+WEEKEND_PUBLISHED = pd.DataFrame({
+    "date": ["2026-10-15", "2026-10-16", "2026-10-19"],
+    "fci_value": [343.54, 343.45, 342.16],
+})
+
+
+def test_the_published_line_is_the_index_cme_actually_printed(monkeypatch):
+    """What the evening letter prints. It read 343.46 for Sunday 10-18."""
+    _install(monkeypatch, WEEKEND_OURS, WEEKEND_PUBLISHED)
+    pub = sources.fetch_feeder_index()["published"]
+    assert pub["value"] == 342.16
+    assert pub["date"] == "2026-10-19"
+    assert pub["from_cme"] is True
+
+
+def test_the_published_change_matches_cmes_own_reported_change(monkeypatch):
+    """
+    THE FREE AUDIT. cme_ftp_daily carries REPORTED_CHANGE, and CME printed
+    -1.29 for 10-19. Differenced against Sunday's filler it came out -1.30,
+    because merged holds CME's rounded 343.45 for Friday and our unrounded
+    343.457 for the filler. One cent, on the figure the letter and the
+    dashboard must agree about.
+    """
+    _install(monkeypatch, WEEKEND_OURS, WEEKEND_PUBLISHED)
+    fci = sources.fetch_feeder_index()
+    assert fci["published"]["change"] == -1.29      # CME's REPORTED_CHANGE
+    assert fci["change"] == -1.29                   # and the headline's too
+
+
+def test_the_published_date_is_never_a_weekend(monkeypatch):
+    """The property, rather than this one Tuesday's numbers."""
+    import datetime as _dt
+    _install(monkeypatch, WEEKEND_OURS, WEEKEND_PUBLISHED)
+    pub = sources.fetch_feeder_index()["published"]
+    assert _dt.date.fromisoformat(pub["date"]).weekday() < 5
+
+
+def test_a_missing_cme_table_still_skips_the_filler(monkeypatch):
+    """
+    The deployed app had no cme_ftp_daily on 2026-10-07, so this path is
+    live. It must not fall back to the forward estimate -- and it must not
+    land on a Sunday either.
+    """
+    _install(monkeypatch, WEEKEND_OURS, None)
+    fci = sources.fetch_feeder_index()
+    pub = fci["published"]
+    assert pub is not None, "a missing CME table must not blank the line"
+    assert pub["from_cme"] is False
+    # Friday, not Sunday: the headline degrades to 10-19 with no CME series,
+    # so the last completed session before it is 10-16 and NOT 10-18.
+    assert pub["date"] == "2026-10-16"
+    assert pub["value"] == 343.46
+    assert pub["change"] == -0.09
+
+
+def test_the_headline_is_still_our_own_estimate_for_its_date(monkeypatch):
+    """Nothing here may move the morning brief's figure off fci_daily."""
+    _install(monkeypatch, WEEKEND_OURS, WEEKEND_PUBLISHED)
+    fci = sources.fetch_feeder_index()
+    assert fci["source"] == "JSA estimate (fci_daily)"
+    assert fci["date"] == "2026-10-19"
