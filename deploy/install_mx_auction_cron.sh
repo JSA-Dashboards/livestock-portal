@@ -82,9 +82,12 @@ if [ -f "$DEST/.env" ]; then
   say "reading $DEST/.env"
   set -a; . "$DEST/.env"; set +a
 else
-  say "no $DEST/.env yet -- on a bare host, clone $DEST and write .env BEFORE"
-  say "running this. The checks below run ahead of the clone, so this script"
-  say "refuses rather than bootstraps. That refusal is deliberate."
+  say "no $DEST/.env yet -- checking the exported environment instead."
+  say "ON A BARE HOST THAT IS THE WAY IN: export the block and this clones"
+  say "$DEST itself. Verified 2026-10-20 by running the gate against an empty"
+  say "DEST -- it reached the clone. Only install_southeast_cron.sh and"
+  say "install_cattle_cycles_cron.sh genuinely cannot bootstrap, because they"
+  say "need a file that exists only once the checkout does."
 fi
 MISSING=""
 for v in USE_SNOWFLAKE SNOWFLAKE_ACCOUNT SNOWFLAKE_USER SNOWFLAKE_ROLE \

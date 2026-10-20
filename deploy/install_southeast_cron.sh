@@ -71,8 +71,11 @@ if [ -f "$DEST/.env" ]; then
   set -a; . "$DEST/.env"; set +a
 else
   say "no $DEST/.env yet -- on a bare host, clone $DEST and write .env BEFORE"
-  say "running this. The checks below run ahead of the clone, so this script"
-  say "refuses rather than bootstraps. That refusal is deliberate."
+  say "running this. THIS script cannot bootstrap one, and the reason is the"
+  say "frozen-file check below rather than the clone ordering: it needs"
+  say "southeast_legacy.json, which exists only once the checkout does. The"
+  say "sibling installers that need no repo file DO bootstrap from an exported"
+  say "environment -- do not read this refusal as the family-wide behaviour."
 fi
 MISSING=""
 for v in USE_SNOWFLAKE SNOWFLAKE_ACCOUNT SNOWFLAKE_USER SNOWFLAKE_ROLE \
