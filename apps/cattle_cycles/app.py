@@ -410,7 +410,20 @@ if view == "This cycle in context":
     st.plotly_chart(fig, use_container_width=True)
     st.caption(money_md(
         f"Every completed {kind} run since {D['first']:%Y} in grey, each indexed to "
-        f"100 at its own trough; this one in green. Indexed rather than priced "
+        f"100 at its own trough; this one in green. "
+        # WHAT 100 MEANS, asked by Ross looking at the chart. The axis title
+        # says "indexed to 100 at the trough" and that still leaves the
+        # question, because the obvious reading of a chart like this is price.
+        # Each line's 100 is a DIFFERENT dollar figure -- $84 for the 1933 run
+        # against $210 for the 1945 one -- so height is proportional gain and
+        # two lines level with each other are nowhere near the same price.
+        # That is the cost of indexing and it is not self-evident from the
+        # picture, so it is stated rather than left to be inferred.
+        f"Each line's 100 is its own trough price, this one's being "
+        f"${ctx['start_level']:,.0f}, so a line's height is how far that run "
+        f"has come in percent rather than how dear it is: two lines level "
+        f"with each other are up by the same proportion from different "
+        f"prices. Indexed rather than priced "
         # THE LOW, NOT THE FIRST VALUE. The claim is that the series spans too
         # wide a range to share a price axis, so it needs the widest gap in it.
         # De-hardcoding an earlier "$80" to series.iloc[0] quietly swapped the
