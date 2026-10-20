@@ -70,7 +70,9 @@ if [ -f "$DEST/.env" ]; then
   say "reading $DEST/.env"
   set -a; . "$DEST/.env"; set +a
 else
-  say "no $DEST/.env yet (it is created with the checkout below on a new host)"
+  say "no $DEST/.env yet -- on a bare host, clone $DEST and write .env BEFORE"
+  say "running this. The checks below run ahead of the clone, so this script"
+  say "refuses rather than bootstraps. That refusal is deliberate."
 fi
 MISSING=""
 for v in USE_SNOWFLAKE SNOWFLAKE_ACCOUNT SNOWFLAKE_USER SNOWFLAKE_ROLE \
@@ -115,8 +117,9 @@ if [ -n "$MISSING" ]; then
   echo
   echo "STOPPING: missing:$MISSING" >&2
   echo "Put the env in $DEST/.env (the same block the am_cutout job uses);" >&2
-  echo "the frozen file ships with the repo, so a miss there means a stale" >&2
-  echo "checkout -- pull and re-run." >&2
+  echo "The frozen file ships with the repo. If $DEST has no checkout at all" >&2
+  echo "this is a bare host: clone it and write .env, then re-run. If it does," >&2
+  echo "the checkout is stale -- pull and re-run." >&2
   echo "Nothing was changed." >&2
   exit 1
 fi
