@@ -154,6 +154,14 @@ TOOLS = [
      "desc": "Every dashboard's headline on one page: what is moving the cattle "
              "market, what it means, and how far back the evidence actually "
              "goes. Passphrase required."},
+    # NO SECRET AND NO DATABASE. It reads a committed seed of USDA NASS price
+    # received plus BLS CPI-U, so unlike the two above it cannot be taken down
+    # by a Snowflake outage or a missing key -- only by its own data file.
+    {"title": "Cattle Cycles", "page": "apps/cattle_cycles/app.py",
+     "url_path": "cattle-cycles",
+     "desc": "Where this cattle price run sits against every completed one since "
+             "1913 — how old it is, how far it has come, and what the runs that "
+             "got this far did next. Passphrase required."},
 ]
 
 _TILE_CSS = """
