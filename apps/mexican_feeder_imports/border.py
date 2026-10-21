@@ -1151,9 +1151,10 @@ def price_series(conn, class_desc=INDEX_CLASS, grade=None, since=None):
     return out
 
 
-def index_spread(conn, limit=None):
+def index_spread(conn, limit=None, crossing=None):
     """
-    [(date, border_price, index_value, spread)] for the index-comparable slice.
+    [(date, border_price, index_value, spread, crossings)] for the
+    index-comparable slice.
 
     The border quote is Mexican-origin cattle at the crossing; the index is US
     cattle sold at auction and direct across 12 states. The gap is a real market
@@ -1164,26 +1165,49 @@ def index_spread(conn, limit=None):
     Reads fci_daily, which lives in the same schema. Uses the reconstruction
     rather than CME's published file because it carries the current date, and a
     spread against a value three days stale would mostly measure the staleness.
+
+    **WITH NO `crossing`, A DAY'S PRICE IS AVERAGED OVER WHICHEVER CROSSINGS
+    QUOTED, AND THE ROSTER MOVES.** That is not a detail: in 2025 four crossings
+    quoted this rung (Nogales, Douglas, Santa Teresa, Presidio) and in 2026 only
+    two, and they are not interchangeable -- where both quoted in 2026 they sat
+    $1 to $6 apart, mean $4, and over the year Douglas averaged $4.87 under
+    Santa Teresa. So a crossing joining or leaving a day moves the average with
+    no buyer changing his bid, which is the failure
+    `six_state.bracket_move()` exists for on the other dashboard.
+
+    Each row therefore carries the crossings it was built from, so a caller can
+    name them instead of guessing, and `crossing` restricts the series to one
+    so a comparison can be made on a fixed roster.
     """
+    where = (f"AND p.crossing_point = '{crossing}' " if crossing else "")
     rows = conn.cursor().execute(
-        "SELECT p.report_date, AVG(p.avg_price), MAX(f.fci_value) "
+        "SELECT p.report_date, AVG(p.avg_price), MAX(f.fci_value), "
+        "       LISTAGG(DISTINCT p.crossing_point, '|') "
         "FROM border_prices p JOIN fci_daily f ON p.report_date = f.report_date "
         f"WHERE p.class_desc = '{INDEX_CLASS}' "
         f"AND p.muscle_grade = '{INDEX_GRADE}' "
         f"AND p.weight_low = {INDEX_WEIGHT_LOW} "
         "AND p.avg_price IS NOT NULL "
+        f"{where}"
         "GROUP BY p.report_date ORDER BY p.report_date").fetchall()
-    out = [(str(db.iso(d)), float(b), float(f), float(b) - float(f))
-           for d, b, f in rows if b is not None and f is not None]
+    out = [(str(db.iso(d)), float(b), float(f), float(b) - float(f),
+            sorted(str(c).split("|")) if c else [])
+           for d, b, f, c in rows if b is not None and f is not None]
     return out[-limit:] if limit else out
 
 
-def spread_by_year(conn):
-    """{year: {"n", "mean", "median", "last"}} for the index spread."""
-    rows = index_spread(conn)
-    by = {}
-    for d, _b, _f, s in rows:
-        by.setdefault(str(d)[:4], []).append(s)
+def spread_by_year(conn, crossing=None):
+    """{year: {"n", "mean", "median", "last", "crossings"}} for the index spread.
+
+    `crossings` is every crossing that contributed to that year, so a caller can
+    see the roster rather than assume it held.
+    """
+    rows = index_spread(conn, crossing=crossing)
+    by, seen = {}, {}
+    for d, _b, _f, s, cr in rows:
+        y = str(d)[:4]
+        by.setdefault(y, []).append(s)
+        seen.setdefault(y, set()).update(cr)
     out = {}
     for y, vals in sorted(by.items()):
         v = sorted(vals)
@@ -1193,8 +1217,58 @@ def spread_by_year(conn):
             "mean": sum(v) / n,
             "median": v[n // 2] if n % 2 else (v[n // 2 - 1] + v[n // 2]) / 2,
             "last": vals[-1],
+            "crossings": sorted(seen.get(y, ())),
         }
     return out
+
+
+def basis_move(conn, year, prior):
+    """
+    The year-on-year change in the border basis, as REPORTED and on a FIXED
+    ROSTER of crossings. Returns None if either year is missing.
+
+    THE TWO ARE DIFFERENT NUMBERS AND THE DIFFERENCE IS THE WHOLE POINT, the
+    same shape `six_state.bracket_move()` uses. 2025 carried four crossings on
+    this rung and 2026 carries two, so the reported narrowing mixes a market
+    move with a roster change. `same_crossing` restricts BOTH years to the
+    crossings they share, which is the only comparison in which no crossing
+    entering or leaving can move the answer.
+
+    `reported` is kept beside it rather than thrown away -- it is what USDA's
+    own published rows average to, and the page shows both when they differ.
+    """
+    allyr = spread_by_year(conn)
+    a, b = allyr.get(str(prior)), allyr.get(str(year))
+    if not a or not b:
+        return None
+
+    panel = sorted(set(a["crossings"]) & set(b["crossings"]))
+    pa = pb = None
+    if panel:
+        # Restricted to the shared roster, both years, one crossing at a time
+        # and then averaged -- never a single SQL AVG over the set, which would
+        # weight a crossing by how often it quoted rather than equally.
+        def restricted(y):
+            vals = []
+            for cx in panel:
+                yr = spread_by_year(conn, crossing=cx).get(str(y))
+                if yr:
+                    vals.append(yr["mean"])
+            return sum(vals) / len(vals) if vals else None
+        pa, pb = restricted(prior), restricted(year)
+
+    reported = b["mean"] - a["mean"]
+    same = (pb - pa) if (pa is not None and pb is not None) else None
+    return {
+        "reported": reported,
+        "same_crossing": same,
+        "roster": (reported - same) if same is not None else None,
+        "panel": panel,
+        "prior_panel": a["crossings"],
+        "year_panel": b["crossings"],
+        "prior_same": pa,
+        "year_same": pb,
+    }
 
 
 def price_coverage(conn):

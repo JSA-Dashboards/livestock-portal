@@ -222,6 +222,8 @@ def load_all():
             "price_series": bd.price_series(conn, grade=bd.INDEX_GRADE),
             "spread": bd.index_spread(conn),
             "spread_yr": bd.spread_by_year(conn),
+            "basis_move": bd.basis_move(conn, date.today().year,
+                                        date.today().year - 1),
             "price_cov": bd.price_coverage(conn),
         }
     except Exception as e:
@@ -850,10 +852,22 @@ with tab_crossings:
 
         c = st.columns(4)
         with c[0]:
+            # THE CROSSINGS ARE NAMED FROM THE DATA, NEVER TYPED. This read
+            # "Douglas" over a figure that is AVG(avg_price) across whichever
+            # crossings quoted that day -- on 2026-10-20 that is $324.50, the
+            # mean of Douglas $324.00 and Santa Teresa $325.00, so it was
+            # neither crossing's quote under one crossing's name. Both quote on
+            # 9 of 2026's 32 priced days and Santa Teresa quotes ALONE on
+            # several, where the label was simply the wrong port. Same defect
+            # the Mexican Feeder Prices tab was corrected for.
+            _xing = latest[4] if latest else []
             st.markdown(tile("700–800 lb #1-2 Steers",
                              f"${latest[1]:,.2f}" if latest else "—",
-                             sub(f"Douglas, {fmt_date(latest[0])}" if latest
-                                 else "not quoted")), unsafe_allow_html=True)
+                             sub(f"{' + '.join(_xing)}, {fmt_date(latest[0])}"
+                                 if latest and _xing
+                                 else (fmt_date(latest[0]) if latest
+                                       else "not quoted"))),
+                        unsafe_allow_html=True)
         with c[1]:
             st.markdown(tile("CME Feeder Index",
                              f"${latest[2]:,.2f}" if latest else "—",
@@ -864,11 +878,14 @@ with tab_crossings:
                              f"${latest[3]:,.2f}" if latest else "—",
                              sub("border minus index, $/cwt")), unsafe_allow_html=True)
         with c[3]:
+            _nx = len(cur_yr_s["crossings"]) if cur_yr_s else 0
             st.markdown(tile(f"{this_yr} Avg Basis",
                              f"${cur_yr_s['mean']:,.2f}" if cur_yr_s else "—",
                              sub(f"vs ${prev_yr_s['mean']:,.2f} in {this_yr - 1}"
-                                 f" · n={cur_yr_s['n']}" if cur_yr_s and prev_yr_s
-                                 else "")), unsafe_allow_html=True)
+                                 f" · {cur_yr_s['n']} quoted days across "
+                                 f"{_nx} crossing{'s' if _nx != 1 else ''}"
+                                 if cur_yr_s and prev_yr_s else "")),
+                        unsafe_allow_html=True)
 
         if cur_yr_s and prev_yr_s:
             # Dollar signs MUST be escaped in st.caption. Two unescaped ones in the
@@ -876,14 +893,41 @@ with tab_crossings:
             # math, and this caption rendered as a wall of italic variables before
             # the escapes went in. The tiles above are exempt because they are raw
             # HTML. Escape in prose, never inside a code fence.
-            st.caption(
-                f"**The border discount has roughly halved.** Mexican cattle at "
-                f"Douglas averaged **\\${prev_yr_s['mean']:,.2f}/cwt** under the "
-                f"index in {this_yr - 1} and **\\${cur_yr_s['mean']:,.2f}** in "
-                f"{this_yr} — consistent with scarcity, since the few head crossing "
-                f"are bid much closer to the US market. Read the {this_yr} figure "
-                f"with care: it rests on **{cur_yr_s['n']} quoted days** against "
-                f"{prev_yr_s['n']} last year."
+                # THE AVERAGE IS ACROSS CROSSINGS AND IS NOT DOUGLAS'S. This said
+                # "Mexican cattle at Douglas averaged -42.27" where Douglas alone
+                # averaged -45.74 and -42.27 is the mean over four crossings. Both
+                # figures were real and the sentence belonged to neither.
+                _bm = D.get("basis_move")
+                _roster = ""
+                if _bm and _bm.get("same_crossing") is not None:
+                    # THE ROSTER CHANGED AND IT IS WORTH SAYING IT DID NOT
+                    # MATTER. Four crossings quoted this rung in 2025 and two
+                    # do now, which is exactly the setup where a move is really
+                    # a roster change -- the trap six_state.bracket_move()
+                    # exists for. Measured rather than assumed: holding both
+                    # years to the crossings they share moves the narrowing by
+                    # about a third of a point.
+                    _roster = (
+                        f" The crossings quoting it changed over that span — "
+                        f"{len(_bm['prior_panel'])} reported this rung in "
+                        f"{this_yr - 1} and {len(_bm['year_panel'])} do now — "
+                        f"but holding both years to the "
+                        f"{' and '.join(_bm['panel'])} pair they share gives "
+                        f"**{_bm['same_crossing']:+.2f}** against the "
+                        f"**{_bm['reported']:+.2f}** above, so the narrowing is "
+                        f"the market rather than the roster."
+                    )
+                st.caption(
+                    f"**The border discount has roughly halved.** Averaged over "
+                    f"the crossings that quoted, Mexican cattle came in "
+                    f"**\\${prev_yr_s['mean']:,.2f}/cwt** under the index in "
+                    f"{this_yr - 1} and **\\${cur_yr_s['mean']:,.2f}** in "
+                    f"{this_yr} — consistent with scarcity, since the few head "
+                    f"crossing are bid much closer to the US market."
+                    + _roster
+                    + f" Read the {this_yr} figure with care: it rests on "
+                    f"**{cur_yr_s['n']} quoted days** against "
+                    f"{prev_yr_s['n']} last year."
             )
 
         t_now, t_wt, t_sp = st.tabs(
