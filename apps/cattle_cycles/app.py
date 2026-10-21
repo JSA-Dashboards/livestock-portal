@@ -250,12 +250,209 @@ def load_summary(schema: int = cycles.SCHEMA, key: str = cycles.DEFAULT_SERIES,
     return cycles.summary(seed, key=key, real=real, min_phase=min_phase)
 
 
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def load_herd(schema: int = cycles.SCHEMA, key: str = cycles.DEFAULT_INVENTORY,
+              window: int = cycles.HERD_WINDOW_YEARS):
+    """The herd view's own loader, keyed the same way as the price one.
+
+    SEPARATE FROM load_summary ON PURPOSE. They read different series, return
+    different shapes and are selected by different controls; sharing one cache
+    entry would mean changing the price basis silently refetched the inventory.
+    """
+    conn = None
+    if _DB.use_snowflake():
+        try:
+            conn = _DB.get_conn()
+        except Exception:
+            conn = None
+    try:
+        seed = cycles.load(conn)
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    if not seed:
+        return None
+    return cycles.herd_summary(seed, key=key, window=window)
+
+
 st.title("Cattle Cycles")
 
+# One definition each, used by the switch and by the branches below. Spelled
+# out twice they drift, and a branch comparing against a string that no longer
+# matches simply renders nothing.
+VIEW_CTX = "This cycle in context"
+VIEW_LONG = "The long record"
+VIEW_HERD = "Herd cycle"
+
 view = st.segmented_control(
-    "View", ["This cycle in context", "The long record"],
-    default="This cycle in context", label_visibility="collapsed",
+    "View", [VIEW_CTX, VIEW_LONG, VIEW_HERD],
+    default=VIEW_CTX, label_visibility="collapsed",
 )
+
+# -- the herd cycle view ------------------------------------------------------
+#
+# IT RENDERS AND STOPS, above every price control. The two price views share a
+# series picker, a basis toggle and a minimum-phase selector, none of which
+# mean anything here: this view reads an annual head count, not a deflated
+# monthly price. Branching here and calling st.stop() leaves the price path
+# below untouched rather than wrapping a thousand lines in an else.
+if view == VIEW_HERD:
+    h1, h2 = st.columns([2, 1])
+    with h1:
+        herd_label = st.selectbox(
+            "Inventory series", [cycles.INVENTORY[k] for k in cycles.INVENTORY],
+            index=list(cycles.INVENTORY).index(cycles.DEFAULT_INVENTORY),
+            help="USDA NASS January 1 inventory, national. Beef cows are the "
+                 "productive base that makes the next calf crop; all cattle and "
+                 "calves is the headline number and carries the consequence of "
+                 "breeding decisions already made.",
+        )
+        herd_key = next(k for k, v in cycles.INVENTORY.items() if v == herd_label)
+    with h2:
+        herd_window = st.selectbox(
+            "Turn window", cycles.HERD_WINDOW_CHOICES,
+            index=list(cycles.HERD_WINDOW_CHOICES).index(cycles.HERD_WINDOW_YEARS),
+            format_func=lambda y: f"{y} years",
+            help="How many years either side a year must beat to count as a peak "
+                 "or a trough. Annual data is sparse, so this does the job the "
+                 "minimum phase does for price — a control, not a constant.",
+        )
+
+    H = load_herd(cycles.SCHEMA, herd_key, herd_window)
+    if not H or H["context"] is None:
+        st.error("The herd cycle view could not read its inventory data.")
+        st.caption("The seed ships with the page; a miss here means the file is "
+                   "incomplete rather than the series having stopped.")
+        st.stop()
+
+    hc = H["context"]
+    h_source = ("the live table" if H.get("source") == "snowflake"
+                else "the committed seed, which does not advance on its own")
+    st.caption(
+        f"USDA NASS January 1 inventory, {H['label'].lower()} · head · "
+        f"{H['first']} to {H['last']} · turns dated on a {H['window']}-year "
+        f"window · read from {h_source}"
+    )
+
+    # THE BANNER IS THE WHOLE HONESTY OF THIS VIEW. A trough at the end of the
+    # record is the lowest year SO FAR, never a dated bottom -- the window that
+    # found it is truncated. Both series are still falling as of Jan 1 2026, so
+    # every figure below describes a liquidation in progress.
+    if hc["provisional"]:
+        falling = ("and it is still falling" if hc["still_falling"]
+                   else "though the latest year did not make a new low")
+        st.html(
+            f'<div class="cyc-note"><b>This liquidation has not bottomed.</b> '
+            f'January {hc["year"]} is the lowest reading so far {falling}, which is '
+            f'not the same as a trough: a bottom is only datable once the herd has '
+            f'turned away from it for long enough to rule out another leg down. '
+            f'Every figure here is therefore <b>so far</b>, and the run in progress '
+            f'is excluded from the medians and the ranks below so it is never '
+            f'compared against itself.</div>'
+        )
+
+    last_y, last_v = hc["recent_yoy"][-1] if hc["recent_yoy"] else (hc["year"], 0.0)
+    tiles = [
+        tile(f"Decline so far, from the {hc['peak']} peak", f"{hc['drop']:.1%}",
+             sub=f"{H['label'].lower()}, Jan {hc['peak']} to Jan {hc['year']}"),
+        tile(f"Years since the {hc['peak']} peak", f"{hc['years']} years",
+             sub=f"median completed liquidation ran {hc['median_years']:.0f}"),
+        tile("Median completed liquidation",
+             f"{hc['median_drop']:.1%}" if hc["median_drop"] is not None else "—",
+             sub=f"across {hc['n_peers']} of them, peak to trough"),
+        tile("Completed liquidations that went deeper",
+             f"{hc['deeper']} of {hc['n_peers']}",
+             sub=f"the other {hc['n_peers'] - hc['deeper']} stopped short of "
+                 f"{abs(hc['drop']):.1%}"),
+        tile(f"Head change, Jan {last_y - 1} to Jan {last_y}", f"{last_v:+.2%}",
+             sub=f"{hc['head']:,.0f} head on Jan 1 {hc['year']}"),
+    ]
+    st.html(f'<div class="cyc-tiles">{"".join(tiles)}</div>')
+
+    # -- the overlay ----------------------------------------------------------
+    st.subheader("This liquidation against every completed one")
+    hfig = go.Figure()
+    _hy = [v for r in H["overlay"] for v in r["y"]]
+    _hx = [v for r in H["overlay"] for v in r["x"]]
+    hoff = label_offsets(H["overlay"], max(_hy) - min(_hy), max(_hx) - min(_hx))
+    for run in H["overlay"]:
+        live = run["running"]
+        hfig.add_trace(go.Scatter(
+            x=run["x"], y=run["y"], mode="lines",
+            name=run["label"], showlegend=False,
+            line=dict(color=JSA_GREEN if live else PAST_LINE,
+                      width=3.2 if live else 1.4),
+            hovertemplate=f"<b>{run['label']} peak</b><br>year %{{x}} after the peak"
+                          f"<br>%{{y:.1f}} vs 100 at the peak<extra></extra>",
+        ))
+        _ay = hoff[id(run)]
+        hfig.add_annotation(
+            x=run["x"][-1], y=run["y"][-1],
+            text=f"<b>{run['label']}</b>" if live else run["label"],
+            xanchor="left", yanchor="middle", ax=8, ay=_ay,
+            showarrow=bool(_ay), arrowhead=0, arrowsize=1, arrowwidth=1,
+            arrowcolor=JSA_GREEN if live else PAST_LINE,
+            xshift=0 if _ay else 4,
+            font=dict(size=10 if live else 9,
+                      color=JSA_GREEN if live else DM_MUTED),
+        )
+    hfig.add_hline(y=100, line=dict(color=DM_BORDER, width=1), layer="below")
+    hfig.update_layout(
+        height=CHART_PX, margin=dict(l=10, r=70, t=10, b=10),
+        paper_bgcolor=DM_SURFACE, plot_bgcolor=DM_SURFACE,
+        hovermode="closest", showlegend=False,
+        xaxis={**AXIS, "title": "years from the peak"},
+        yaxis={**AXIS, "title": "head, indexed to 100 at the peak"},
+    )
+    st.plotly_chart(hfig, use_container_width=True)
+    st.caption(
+        f"Every completed liquidation since {H['first']} in grey, each indexed to "
+        f"100 at its own peak; the one in progress in green. Indexed at the PEAK "
+        f"rather than the trough because what is being compared is how far the "
+        f"herd fell — the price overlay indexes at the trough for the mirror "
+        f"reason, and the two are not the same chart."
+    )
+
+    st.subheader("Every liquidation, peak to trough")
+    rows = []
+    for q in H["liquidations"]:
+        live = hc["provisional"] and q["peak"] == hc["peak"]
+        rows.append({
+            "Peak": f"Jan {q['peak']}",
+            "Trough": (f"Jan {q['trough']} (so far)" if live else f"Jan {q['trough']}"),
+            "Years": q["years"],
+            "Decline": f"{q['drop']:.1%}",
+            # GROUPED AS STRINGS, which costs numeric sorting and is worth it
+            # here. st.column_config.NumberColumn has no thousands separator
+            # that is safe across the Streamlit versions this app runs on, and
+            # a head count reading 31640700 is one a reader has to count the
+            # digits of. CLAUDE.md rejects TextColumn for a numeric column on
+            # the Cattle on Feed page because sorting matters there; this
+            # table is six rows, fixed most-recent-first, and nobody sorts it.
+            "Peak head": f"{q['from']:,.0f}",
+            "Trough head": f"{q['to']:,.0f}",
+        })
+    st.dataframe(list(reversed(rows)), use_container_width=True, hide_index=True)
+    st.caption(
+        f"Most recent first. The top row is the liquidation in progress and its "
+        f"trough is the lowest year so far, not a dated bottom — it is left out "
+        f"of every median and rank above. Declines are not coloured: a shrinking "
+        f"herd is bullish for the man selling cattle and bearish for the man "
+        f"buying them, and this page does not know which one is reading it."
+    )
+
+    st.caption(
+        f"The herd cycle is not the price cycle. This view dates peaks and troughs "
+        f"in head; the other two date phases in price, and they run roughly inverse "
+        f"— cows going to town is liquidation and is price-bullish. US Cow Herd "
+        f"answers whether the signals called each turn; this answers how far the "
+        f"herd fell."
+    )
+    st.stop()
+
 
 c1, c2, c3 = st.columns([2, 1, 1])
 with c1:
@@ -328,7 +525,7 @@ if ctx["provisional"]:
         f'excluded from every figure below.</div>',
     )
 
-if view == "This cycle in context":
+if view == VIEW_CTX:
     kind = ctx["kind"]
     alive = ctx["still_running_at_age"]
     tiles = [
