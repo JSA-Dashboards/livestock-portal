@@ -89,7 +89,7 @@ import pandas as pd
 # arguments and never on the modules it calls, so without this a reshaped
 # return value is served from a cache built before the reshape and the tile
 # reading a new key renders an em dash with nothing raising.
-SCHEMA = 1
+SCHEMA = 2          # bumped: load() carries inventory now, and the herd view reads it
 
 DATA = Path(__file__).parent / "data" / "cattle_cycles.json"
 
@@ -439,4 +439,231 @@ def summary(seed: dict, key: str = DEFAULT_SERIES, real: bool = True,
         "context": ctx,
         "overlay": overlay(s, tp, ctx if ctx and ctx["kind"] == "bull" else None),
         "first": s.index[0], "last": s.index[-1],
+    }
+
+
+# -- the herd cycle -----------------------------------------------------------
+#
+# A SECOND CLOCK, NOT A SECOND VIEW OF THE FIRST. Everything above dates PRICE
+# phases. This dates the HERD: peak-to-trough liquidations in USDA's January 1
+# inventory, which is the cycle the received "every ten years" actually
+# describes. The two run roughly inverse and on different periods -- cows going
+# to town is liquidation and is price-bullish -- so a figure from one must
+# never be set beside a figure from the other as though they measured the same
+# thing. They are deliberately separate functions over separate series.
+#
+# WHY BEEF COWS LEAD. All cattle and calves is the number most people quote,
+# and it is a consequence: it carries feeders and calves that exist because of
+# breeding decisions already made. Beef cows are the productive base that makes
+# the next calf crop, so a liquidation there is the cycle rather than its echo.
+# The two disagree materially about depth -- a median -17.6% against -9.6% --
+# which is why the page offers both and always names which it is showing.
+
+INVENTORY = {
+    "beef_cows": "Beef cows",
+    "all_cattle": "All cattle & calves",
+}
+DEFAULT_INVENTORY = "beef_cows"
+
+# Years either side a year must beat to be called a turn. Annual data is far
+# sparser than monthly, so this does the job min_phase does for price.
+HERD_WINDOW_YEARS = 3
+HERD_WINDOW_CHOICES = (2, 3, 4, 5)
+HERD_FIRST_YEAR = 1920          # the modern record; earlier years are thin
+
+
+def inventory(seed: dict, key: str = DEFAULT_INVENTORY) -> pd.Series:
+    """January 1 head, indexed by YEAR as an int -- not a timestamp.
+
+    A Jan 1 inventory is a point-in-time count stamped with its year, and
+    giving it a date would invite someone to line it up against a monthly
+    price series and difference the two. The index type is the guard.
+    """
+    block = (seed.get("inventory") or {}).get(key)
+    if not block:
+        return pd.Series(dtype=float)
+    s = pd.Series({int(y): float(v) for y, v in block["rows"].items()}).sort_index()
+    return s[s.index >= HERD_FIRST_YEAR]
+
+
+def herd_turns(s: pd.Series, window: int = HERD_WINDOW_YEARS):
+    """Alternating peaks and troughs. Returns (turns, provisional_last).
+
+    `provisional_last` is True when the final turn sits within `window` years
+    of the end of the record, which means the window that found it is
+    truncated -- it is the lowest year SO FAR, not a dated trough. January 1
+    2026 is exactly that case on both series today, and calling it a bottom is
+    the single most likely way this view misleads.
+    """
+    ys = list(s.index)
+    if len(ys) < window * 2 + 1:
+        return [], False
+    raw = []
+    for i, y in enumerate(ys):
+        win = [s[ys[j]] for j in range(max(0, i - window), min(len(ys), i + window + 1))]
+        if s[y] == max(win):
+            raw.append((y, "P"))
+        elif s[y] == min(win):
+            raw.append((y, "T"))
+    alt: list[tuple[int, str]] = []
+    for y, kind in raw:
+        if alt and alt[-1][1] == kind:
+            prev = alt[-1][0]
+            better = s[y] > s[prev] if kind == "P" else s[y] < s[prev]
+            if better:
+                alt[-1] = (y, kind)
+        else:
+            alt.append((y, kind))
+    # BOTH ENDS OF THE RECORD MANUFACTURE TURNS, and only one of them was
+    # being handled. A year at the very start is the max or min of a window
+    # with nothing on its left, so it is reported as a peak -- which is how
+    # 1920 came to open a 28.7% beef-cow "liquidation" that is really a
+    # partial decline from a peak the record does not reach. Counting it as
+    # complete pulled the median down with it.
+    #
+    # The two ends differ in what can be done about it. A turn at the START
+    # can never become datable, because no more history is coming, so it is
+    # DROPPED. A turn at the END may be confirmed by next January, so it is
+    # KEPT and flagged provisional. Found by a synthetic-series test, not by
+    # reading the output -- the invented decline looked entirely plausible.
+    alt = [(y, k) for y, k in alt if y >= ys[0] + window]
+    # dropping the first turn can leave two of a kind adjacent
+    pruned: list[tuple[int, str]] = []
+    for y, kind in alt:
+        if pruned and pruned[-1][1] == kind:
+            prev = pruned[-1][0]
+            better = s[y] > s[prev] if kind == "P" else s[y] < s[prev]
+            if better:
+                pruned[-1] = (y, kind)
+        else:
+            pruned.append((y, kind))
+    alt = pruned
+    # PROVISIONAL MEANS "MAY BE A BOTTOM", NOT "IS NEAR THE END". The last
+    # point of any record is the max or min of a window with nothing on its
+    # right, so SOME turn always lands there and a flag that only tested
+    # nearness would be raised on every series forever -- the banner that
+    # fires every time and so is read none of the times it matters.
+    #
+    # It is a trough near the end that the herd view has to qualify, because
+    # that is the one the page would otherwise report as a bottom. A peak
+    # there means the herd is climbing, which needs no such warning.
+    last_y, last_kind = alt[-1] if alt else (None, None)
+    provisional = bool(alt) and last_kind == "T" and last_y > ys[-1] - window
+    return alt, provisional
+
+
+def liquidations(s: pd.Series, turns: list) -> list[dict]:
+    """Every completed peak-to-trough decline. Expansions are not returned.
+
+    What this view answers is how far the herd fell and over how long, so a
+    rally between a trough and the next peak is not a row here. It is visible
+    on the chart as the gap between one decline ending and the next starting.
+    """
+    out = []
+    for (a, ka), (b, _kb) in zip(turns, turns[1:]):
+        if ka != "P":
+            continue
+        out.append({
+            "peak": a, "trough": b, "years": b - a,
+            "drop": s[b] / s[a] - 1.0,
+            "from": float(s[a]), "to": float(s[b]),
+        })
+    return out
+
+
+def herd_overlay(s: pd.Series, turns: list, running: dict | None = None) -> list[dict]:
+    """Each liquidation indexed to 100 at its PEAK, on years-from-peak.
+
+    Indexed at the peak rather than the trough because the quantity being
+    compared is the DEPTH of a fall, so every line starts from the same place
+    and goes down. The price overlay indexes at the trough for the mirror
+    reason, and the two must not be read as the same chart.
+    """
+    runs = []
+    for q in liquidations(s, turns):
+        # THE RUN IN PROGRESS IS NOT ALSO A COMPLETED ONE. Its provisional
+        # trough is a dated turn as far as liquidations() can tell, so without
+        # this the same liquidation is drawn twice -- once in grey as though
+        # it had finished, once in green as the live one. Two lines, one
+        # market, and the grey one asserting a bottom the page spends a
+        # banner denying.
+        if running and q["peak"] == running["peak"]:
+            continue
+        seg = s[(s.index >= q["peak"]) & (s.index <= q["trough"])]
+        runs.append({
+            "label": str(q["peak"]), "peak": q["peak"], "trough": q["trough"],
+            "years": q["years"], "drop": q["drop"], "running": False,
+            "x": [int(y) - q["peak"] for y in seg.index],
+            "y": list((seg / seg.iloc[0] * 100.0).values),
+        })
+    if running:
+        seg = s[s.index >= running["peak"]]
+        if len(seg) > 1:
+            runs.append({
+                "label": str(running["peak"]), "peak": running["peak"],
+                "trough": int(seg.index[-1]), "years": running["years"],
+                "drop": running["drop"], "running": True,
+                "x": [int(y) - running["peak"] for y in seg.index],
+                "y": list((seg / seg.iloc[0] * 100.0).values),
+            })
+    return runs
+
+
+def herd_context(s: pd.Series, turns: list, provisional: bool) -> dict | None:
+    """Where the liquidation in progress sits against every completed one."""
+    if not turns or s.empty:
+        return None
+    peaks = [y for y, k in turns if k == "P"]
+    if not peaks:
+        return None
+    peak = max(peaks)
+    last = int(s.index[-1])
+    if last <= peak:
+        return None
+
+    done = liquidations(s, turns)
+    # A PROVISIONAL FINAL TROUGH IS NOT A COMPLETED DECLINE, so the run it
+    # belongs to is dropped from the peer set and reported as the live one
+    # instead. Leaving it in would have the current liquidation compared
+    # against itself, which flatters every rank on the panel.
+    if provisional and done and done[-1]["peak"] == peak:
+        done = done[:-1]
+
+    drop = s[last] / s[peak] - 1.0
+    years = last - peak
+    drops = [q["drop"] for q in done]
+    lengths = [q["years"] for q in done]
+    yoy = [(int(y), float(s[y] / s[y - 1] - 1.0)) for y in s.index[-4:] if y - 1 in s.index]
+    return {
+        "peak": peak, "peak_head": float(s[peak]),
+        "year": last, "head": float(s[last]),
+        "drop": drop, "years": years,
+        "still_falling": bool(yoy and yoy[-1][1] < 0),
+        "provisional": provisional,
+        "n_peers": len(done),
+        "median_drop": float(np.median(drops)) if drops else None,
+        "median_years": float(np.median(lengths)) if lengths else None,
+        "deeper": sum(1 for d in drops if d < drop),
+        "longer": sum(1 for n in lengths if n > years),
+        "recent_yoy": yoy,
+        "running": {"peak": peak, "drop": drop, "years": years},
+    }
+
+
+def herd_summary(seed: dict, key: str = DEFAULT_INVENTORY,
+                 window: int = HERD_WINDOW_YEARS) -> dict | None:
+    """Everything the herd view draws, from one pass over one inventory series."""
+    s = inventory(seed, key)
+    if s.empty:
+        return None
+    turns, provisional = herd_turns(s, window)
+    ctx = herd_context(s, turns, provisional)
+    return {
+        "series": s, "key": key, "label": INVENTORY.get(key, key),
+        "window": window, "turns": turns, "provisional": provisional,
+        "liquidations": liquidations(s, turns),
+        "context": ctx,
+        "overlay": herd_overlay(s, turns, ctx["running"] if ctx else None),
+        "first": int(s.index[0]), "last": int(s.index[-1]),
+        "source": seed.get("source", "file"),
     }

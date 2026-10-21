@@ -30,6 +30,7 @@ import json
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -439,3 +440,163 @@ def test_the_shipped_numbers(summary):
     assert ctx["provisional"] and ctx["provisional"][0]["date"].strftime("%Y-%m") == "2026-06"
     import numpy as np
     assert 7.0 < float(np.median(summary["trough_to_trough"])) / 12 < 7.8
+
+
+# -- the herd cycle -----------------------------------------------------------
+#
+# A SECOND CLOCK. These guard the inventory view, which dates peak-to-trough
+# liquidations in January 1 head. It must never be confused with the price
+# dating above it: the two run roughly inverse and on different periods, and
+# a figure from one set beside a figure from the other would be the
+# letter-versus-dashboard failure this repo records five times.
+
+
+@pytest.fixture(scope="module")
+def herd(seed):
+    return cycles.herd_summary(seed)
+
+
+def test_the_seed_carries_both_inventory_series(seed):
+    assert set(seed["inventory"]) == set(cycles.INVENTORY)
+    for key, block in seed["inventory"].items():
+        assert block["period"] == "FIRST OF JAN"
+        assert block["unit"] == "head"
+        assert block["short_desc"].startswith("CATTLE,")
+        assert block["short_desc"].endswith("- INVENTORY")
+
+
+def test_beef_cows_leads_not_all_cattle():
+    """The productive base, not the headline count. All cattle and calves
+    carries feeders that exist because of breeding decisions already made, so
+    a liquidation there is the echo rather than the cycle."""
+    assert cycles.DEFAULT_INVENTORY == "beef_cows"
+
+
+def test_inventory_is_indexed_by_year_not_by_date(herd):
+    """A Jan 1 count given a timestamp invites someone to line it up against
+    the monthly price series and difference the two. The index type is the
+    guard, so it is asserted rather than assumed."""
+    idx = herd["series"].index
+    assert all(isinstance(y, (int, np.integer)) for y in idx), idx.dtype
+    assert 1920 <= int(idx[0]) and int(idx[-1]) >= 2025
+
+
+def test_herd_turns_alternate(herd):
+    kinds = [k for _y, k in herd["turns"]]
+    assert len(kinds) > 6
+    assert all(a != b for a, b in zip(kinds, kinds[1:])), kinds
+
+
+def test_every_liquidation_is_actually_a_fall(herd):
+    """peak -> trough only. An expansion appearing here would be a sign
+    detection has picked the turns up in the wrong order."""
+    assert herd["liquidations"]
+    for q in herd["liquidations"]:
+        assert q["drop"] < 0, q
+        assert q["trough"] > q["peak"], q
+        assert q["to"] < q["from"], q
+
+
+def test_the_run_in_progress_is_excluded_from_its_own_peer_set(herd):
+    """THE ONE THAT MATTERS MOST. January 2026 is the lowest year so far on
+    both series, not a dated trough. Leaving that run in the peer set would
+    have the current liquidation compared against itself, which flatters
+    every median and rank on the panel."""
+    ctx = herd["context"]
+    assert ctx["provisional"] is True
+    assert ctx["n_peers"] == len(herd["liquidations"]) - 1
+    assert ctx["deeper"] <= ctx["n_peers"]
+    assert ctx["longer"] <= ctx["n_peers"]
+
+
+def test_a_trough_is_provisional_only_when_it_sits_near_the_end():
+    """On a SYNTHETIC series, so the shape is controlled rather than inferred.
+
+    Rise to a peak at year 10, fall to a trough at year 20, then rise again.
+    With years to spare after it, that trough is dated. Cut the record two
+    years past it and the same trough becomes provisional, because the window
+    that found it no longer has years on both sides.
+
+    An earlier version of this test truncated the REAL series instead and
+    asserted the result was not provisional. That failed, and the test was
+    wrong rather than the code: truncating a real series can create a fresh
+    turn near its new end, so it was not measuring what it claimed to.
+    """
+    import pandas as pd
+    shape = ([100 + i for i in range(11)]          # 1900..1910 up to a peak
+             + [110 - i for i in range(1, 11)]     # 1911..1920 down to a trough
+             + [100 + i for i in range(1, 11)]     # 1921..1930 up to a peak
+             + [110 - i for i in range(1, 11)])    # 1931..1940 easing off again
+    full = pd.Series({1900 + i: float(v) for i, v in enumerate(shape)})
+
+    turns, prov = cycles.herd_turns(full)
+    # 1900 is dropped: it is the max of a window with nothing on its left,
+    # which is where the record begins rather than a peak. 1940 is KEPT --
+    # it may be confirmed by the next reading.
+    assert [y for y, _k in turns] == [1910, 1920, 1930, 1940], turns
+    assert prov is True, "this record ends falling, so its low may be a bottom"
+
+    # The same record cut where it is CLIMBING. A turn still lands on the last
+    # year, but it is a peak, so there is no bottom to qualify.
+    rising = full[full.index <= 1930]
+    turns_r, prov_r = cycles.herd_turns(rising)
+    assert turns_r[-1][1] == "P", turns_r
+    assert prov_r is False, "a peak at the end is not an unconfirmed bottom"
+
+    cut = full[full.index <= 1922]
+    turns2, prov2 = cycles.herd_turns(cut)
+    assert (1920, "T") in turns2, turns2
+
+
+def test_overlay_runs_start_at_100_at_the_peak(herd):
+    """Indexed at the PEAK, not the trough -- the quantity compared is the
+    depth of a fall, so every line starts level and goes down. The price
+    overlay indexes at the trough for the mirror reason."""
+    runs = herd["overlay"]
+    assert len(runs) > 4
+    for r in runs:
+        assert r["x"][0] == 0
+        assert abs(r["y"][0] - 100.0) < 1e-9, r["label"]
+        assert min(r["y"]) < 100.0, r["label"]
+    assert sum(1 for r in runs if r["running"]) == 1
+    # NO RUN APPEARS TWICE. The live one has a dated-looking provisional
+    # trough, so it reached the chart both as a completed liquidation and as
+    # the running one -- two lines for one market, the grey one asserting the
+    # bottom the banner above it denies. Caught in a browser, by reading the
+    # end-of-line labels and seeing 2019 on two of them.
+    peaks = [r["peak"] for r in runs]
+    assert len(peaks) == len(set(peaks)), peaks
+
+
+def test_the_turn_window_changes_what_is_found(seed):
+    """It is a control, not a constant, so the page exposes it."""
+    counts = {w: len(cycles.herd_summary(seed, window=w)["liquidations"])
+              for w in cycles.HERD_WINDOW_CHOICES}
+    assert len(set(counts.values())) > 1, counts
+
+
+def test_the_two_inventory_series_disagree_about_depth(seed):
+    """Which is why the page offers both and always names the one it shows.
+    Beef cows fall materially harder than the all-cattle headline."""
+    import statistics as _st
+    med = {}
+    for key in cycles.INVENTORY:
+        h = cycles.herd_summary(seed, key)
+        med[key] = _st.median(q["drop"] for q in h["liquidations"])
+    assert med["beef_cows"] < med["all_cattle"] - 0.03, med
+
+
+def test_the_herd_numbers_on_the_page(herd):
+    """Pinned against the committed seed. These move when the seed is
+    regenerated and they SHOULD -- update them deliberately rather than
+    loosening the assertions."""
+    ctx = herd["context"]
+    assert ctx["peak"] == 2019
+    assert ctx["year"] == 2026
+    assert ctx["years"] == 7
+    assert -0.14 < ctx["drop"] < -0.11          # about -12.7%
+    assert ctx["still_falling"] is True
+    assert ctx["median_drop"] < ctx["drop"]      # the typical one went deeper
+    assert ctx["n_peers"] == 5                   # 1934, 1955, 1975, 1982, 1996
+    assert -0.19 < ctx["median_drop"] < -0.17    # about -18.0%
+    assert ctx["deeper"] == 4                    # 4 of 5 fell further than this

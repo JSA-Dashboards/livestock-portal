@@ -325,6 +325,21 @@ def seed_payload(prices: dict[str, dict[str, float]], cpi: dict[str, float],
         }),
         "series": {k: series[k] for k in sorted(series)},
         "cpi_u": {**describe(cpi), "rows": {k: cpi[k] for k in sorted(cpi)}},
+        # INVENTORY IS CARRIED OVER, NOT REBUILT, AND THAT IS A STOPGAP.
+        #
+        # The herd view reads January 1 head counts from this same file. This
+        # job does not fetch them yet, and a rebuild that simply omitted the
+        # key would DELETE a series the page depends on -- silently, on the
+        # next scheduled run, with the page falling back to showing nothing
+        # rather than erroring.
+        #
+        # Carrying it over makes the job safe without making it complete: the
+        # inventory half stops advancing until somebody regenerates it. That
+        # is tolerable only because the series is ANNUAL -- USDA publishes
+        # January 1 inventory once, in late January -- and because the page
+        # prints the span it is showing, so a stale half is visible rather
+        # than silent. Teaching this job to fetch it is the real fix.
+        **({"inventory": prev["inventory"]} if prev.get("inventory") else {}),
     }
 
 
