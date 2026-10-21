@@ -1642,6 +1642,135 @@ def band_shares(conn, year=None, kinds=("feeder",)):
     return out, year
 
 
+# Below this a month's MIX is one shipment's worth of cattle and moves on
+# nothing. Measured: the two thin months on file are 2025-07 at 4,339 head and
+# 2026-08 at 2,453, against a normal month of 85,000-150,000. July 2025 prints
+# 52.8% in the top band off 4,339 head, which on a share chart reads as a
+# regime change and is a single load.
+MIN_MIX_HEAD = 20_000
+
+# A band that never reaches this share in any month is a flat line on the axis
+# and a fourth legend entry for nothing. Only `<90 kg` is affected -- 252 head
+# in seven years, four months, peak share 0.15% -- and the caller is handed the
+# omitted total so the page can say what was left out rather than quietly
+# dropping it.
+MIN_BAND_SHARE = 1.0
+
+
+def band_mix_monthly(conn, kinds=("feeder",)):
+    """
+    The weight-class mix of crossing cattle, month by month.
+
+    {"months", "head", "share", "bands", "omitted", "thin", "baseline",
+     "latest"} -- `months` is a CONTIGUOUS run of 'YYYY-MM', `head` and each
+    series in `share` carry None where no cattle crossed.
+
+    **THIS IS THE ONLY ASSUMPTION-FREE WEIGHT STATEMENT AVAILABLE, AND IT IS A
+    MIX RATHER THAN AN AVERAGE.** Census publishes head against its own HS
+    weight classes, so a share is division and nothing else. An AVERAGE is not
+    available from it and must not be derived here: the top class is
+    OPEN-ENDED ("320 kg or more"), and it held 1.4% of head across the record
+    but 27.8% in August 2026 -- so assuming 360 against 450 kg for it swings a
+    head-weighted average from 635 lb to 690. The assumption would be at its
+    worst in exactly the months anyone wants the figure for.
+    `weight_spans()` records the four feeds checked for a published average.
+
+    **CONTIGUOUS BY CONSTRUCTION, because the holes are the story.** Census has
+    84 months on file and two of them are absent entirely (2025-01, and
+    2026-01 through 2026-07) plus seven more at zero head -- the screwworm
+    closures. Plotting only the months that exist would pack a 14-month closure
+    into the gap between two adjacent points and hide it. The grid is filled
+    and the blanks are None, never 0: a month with no cattle has no mix, and a
+    zero share would read as "no light cattle crossed" rather than "nothing
+    crossed". Same rule `cold_storage.monthly_frame` follows.
+
+    **It independently corroborates the AMS quoted-bracket series**, which is
+    worth knowing because the two come from different agencies by different
+    routes. AMS stopped quoting its 300-400 lb bracket after 2025-02-18;
+    Census's 90-200 kg class (198-441 lb) went from 24.3% of head in 2024 to
+    2.8% in 2025. Same quarter, same direction, neither derived from the other.
+    """
+    rows = _national(conn)
+    agg = {}
+    for period, commodity, descr, head, _v in rows:
+        if kinds and classify_commodity(commodity, descr) not in kinds:
+            continue
+        m = agg.setdefault(str(period), {})
+        b = weight_band(descr)
+        m[b] = m.get(b, 0) + (head or 0)
+    if not agg:
+        return None
+
+    def nxt(p):
+        y, mo = int(p[:4]), int(p[5:7])
+        return f"{y + 1:04d}-01" if mo == 12 else f"{y:04d}-{mo + 1:02d}"
+
+    lo, hi = min(agg), max(agg)
+    months, p = [], lo
+    while True:
+        months.append(p)
+        if p == hi:
+            break
+        p = nxt(p)
+
+    head = [(sum(agg[m].values()) if m in agg else 0) or None for m in months]
+
+    # Which bands are worth a line. Computed over months that HAVE cattle, so
+    # the closure cannot dilute a band out of the chart.
+    peak = {}
+    for m, h in zip(months, head):
+        if not h:
+            continue
+        for b in BANDS:
+            peak[b] = max(peak.get(b, 0.0), agg[m].get(b, 0) / h * 100)
+    bands = [b for b in BANDS if peak.get(b, 0) >= MIN_BAND_SHARE]
+    omitted = {}
+    for b in BANDS:
+        if b in bands:
+            continue
+        t = sum(agg[m].get(b, 0) for m in agg)
+        if t:
+            omitted[b] = t
+
+    share = {b: [] for b in bands}
+    for m, h in zip(months, head):
+        for b in bands:
+            share[b].append(agg[m].get(b, 0) / h * 100 if h else None)
+
+    thin = [(m, h) for m, h in zip(months, head)
+            if h and h < MIN_MIX_HEAD]
+
+    # The baseline is the twelve months before the FIRST month with no cattle
+    # -- the border as it ran normally. Not a calendar year: the first closure
+    # landed in December, so a year would mix two regimes and understate the
+    # change the chart exists to show.
+    first_dark = next((i for i, h in enumerate(head) if not h), None)
+    baseline = None
+    if first_dark is not None and first_dark >= 12:
+        window = [(m, h) for m, h in zip(months[:first_dark],
+                                         head[:first_dark])][-12:]
+        tot = sum(h for _m, h in window)
+        if tot:
+            # Periods, never a formatted label: fmt_month lives on the page
+            # and this module has no business choosing how a month is spelled.
+            baseline = {
+                "from": window[0][0], "to": window[-1][0], "head": tot,
+                "share": {b: sum(agg[m].get(b, 0) for m, _h in window)
+                          / tot * 100 for b in bands},
+            }
+
+    latest = None
+    for m, h in zip(reversed(months), reversed(head)):
+        if h:
+            latest = {"month": m, "head": h,
+                      "share": {b: agg[m].get(b, 0) / h * 100 for b in bands}}
+            break
+
+    return {"months": months, "head": head, "share": share, "bands": bands,
+            "omitted": omitted, "thin": thin, "baseline": baseline,
+            "latest": latest}
+
+
 def kind_totals(conn, year=None):
     """{kind: head} for one year -- the audit view behind the feeder headline."""
     rows = _national(conn)

@@ -240,6 +240,9 @@ def load_all(schema=bd.SCHEMA):
             "census_through": through,
             "bands": bands,
             "band_year": band_year,
+            # The same Census rows the annual bar reads, by month. No
+            # extra fetch -- band_shares and this both walk _national().
+            "band_mix": bd.band_mix_monthly(conn),
             "kinds": kinds,
             "kind_year": kind_year,
             "vph": bd.value_per_head(conn),
@@ -1418,6 +1421,102 @@ with tab_crossings:
     st.markdown('<div class="sec-header">What Crosses — Weight Composition</div>',
                 unsafe_allow_html=True)
     if D["bands"]:
+        # A SWITCH RATHER THAN A SECOND CHART ALWAYS DRAWN. Both views read
+        # the same already-loaded Census rows, so this is about the length of
+        # the page rather than the cost of it -- the Cold Storage shape.
+        _wc = st.segmented_control(
+            "View", ["By month", "Latest year"], default="By month",
+            label_visibility="collapsed", key="mfi_wc_view")
+        # segmented_control returns None when the reader clears the selection.
+        if _wc is None:
+            _wc = "By month"
+        _mix = D.get("band_mix")
+
+    if D["bands"] and _wc == "By month" and _mix:
+        _x = [pd.Timestamp(m + "-01") for m in _mix["months"]]
+        # Light to heavy: the amber line is the one that collapses and the
+        # dark one is the one that takes its place, so the two that move are
+        # the two furthest apart in the palette.
+        _cols = [AMBER, JPSI_BLUE, JPSI_DARK]
+        fig = go.Figure()
+        for _b, _c in zip(_mix["bands"], _cols):
+            fig.add_trace(go.Scatter(
+                x=_x, y=_mix["share"][_b], name=_b, mode="lines",
+                line=dict(color=_c, width=2),
+                # EXPLICIT, AND LOAD-BEARING. The series has a 14-month hole
+                # where the border was shut; a bridged line would draw a
+                # smooth handover from light cattle to heavy ones across
+                # months in which nothing crossed at all.
+                connectgaps=False,
+                customdata=_mix["head"],
+                hovertemplate="%{x|%b %Y}<br>" + _b +
+                              ": %{y:.1f}%<br>%{customdata:,} head that month"
+                              "<extra></extra>"))
+        if SO and SO.get("from"):
+            fig.add_vline(x=pd.Timestamp(SO["from"]), line_width=1.5,
+                          line_dash="dot", line_color=POS)
+            fig.add_annotation(x=pd.Timestamp(SO["from"]), y=1, yref="paper",
+                               text="reopened", showarrow=False,
+                               yanchor="bottom", font=dict(size=10, color=POS))
+        fig.update_layout(
+            height=320, margin=dict(l=10, r=10, t=24, b=10),
+            paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
+            font=dict(color=TEXT, size=11),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+            xaxis=dict(gridcolor=BORDER, title=None),
+            yaxis=dict(gridcolor=BORDER, title="% of head",
+                       ticksuffix="%", rangemode="tozero"))
+        st.plotly_chart(fig, use_container_width=True)
+
+        _bl, _lt = _mix.get("baseline"), _mix.get("latest")
+        if _bl and _lt:
+            _lo, _hi = _mix["bands"][0], _mix["bands"][-1]
+            _lab = lambda b: b.split(" (")[0]   # noqa: E731
+            st.caption(
+                f"**The cattle crossing got heavier, and it happened at the "
+                f"closure.** Over the twelve months before the border first "
+                f"shut ({fmt_month(_bl['from'])} – {fmt_month(_bl['to'])}, "
+                f"{_bl['head']:,} head) **{_lab(_lo)}** was "
+                f"**{_bl['share'][_lo]:.1f}%** of head and **{_lab(_hi)}** was "
+                f"**{_bl['share'][_hi]:.1f}%**. In "
+                f"**{fmt_month(_lt['month'])}** they are "
+                f"**{_lt['share'][_lo]:.1f}%** and "
+                f"**{_lt['share'][_hi]:.1f}%**. "
+                f"AMS says the same by a different route — it stopped quoting "
+                f"its 300–400 lb steer bracket after Feb 18, 2025 — and the "
+                f"two are independent, one a customs count and the other a "
+                f"price report."
+            )
+        _notes = []
+        if _mix.get("thin"):
+            # Named and dated rather than counted: a reader looking at the
+            # 2025 spike needs to know THAT month is one load, and "two thin
+            # months" does not tell them which.
+            _notes.append(
+                "One shipment moves a mix this thin — "
+                + " and ".join(f"**{fmt_month(m)}** rests on {h:,} head"
+                               for m, h in _mix["thin"])
+                + ", against 85,000–150,000 in a normal month.")
+        if _mix.get("omitted"):
+            # "across the record" rather than a span in years, which would be
+            # wrong the moment Census publishes another January.
+            _notes.append(
+                "Left off as too small to draw: "
+                + ", ".join(f"{b.split(' (')[0]} at {h:,} head across the "
+                            f"whole record"
+                            for b, h in _mix["omitted"].items()) + ".")
+        st.caption(
+            "Gaps are months in which **no cattle crossed at all**, not months "
+            "Census has yet to publish, and the lines are deliberately broken "
+            "across them. "
+            + (" ".join(_notes) + " " if _notes else "")
+            + "**This is a mix, not an average weight.** Census's top class is "
+            "open-ended — “320 kg or more” — so no average can be computed "
+            "from it, and the one month that matters most is the one where "
+            "that class is largest."
+        )
+
+    elif D["bands"]:
         bands = D["bands"]
         fig = go.Figure()
         fig.add_bar(x=[h for _, h, _ in bands], y=[b for b, _, _ in bands],
@@ -1434,15 +1533,34 @@ with tab_crossings:
                        categoryarray=[b for b, _, _ in bands][::-1]),
         )
         st.plotly_chart(fig, use_container_width=True)
+        # THE SAMPLE GOES BESIDE THE YEAR. band_shares picks the newest year
+        # carrying any volume, and after a reopening that is a year holding
+        # one shipment -- 2026 is 2,453 head against 1.24m in 2024. The
+        # monthly view flags its thin months by name, so leaving this one
+        # unflagged would make the same sample honest in one view and silent
+        # in the other.
+        _by_head = sum(h for _b, h, _s in bands)
         st.caption(
-            f"Latest year with volume: **{D['band_year']}**. Census's top band is "
-            "“320 kg or more”, and 320 kg is 705 lb — the very bottom of the CME "
-            "index's 700–899 lb window. So nearly all Mexican cattle cross *below* "
-            "index weight and only reach it after months on US feed. **An import cut "
-            "moves the index with a lag, through supply — it never shows up in the "
-            "index's own composition.** Imported cattle mostly go straight to "
-            "feedyards under retained ownership and never sell through a "
-            "USDA-reported auction, so they are not index-eligible."
+            f"Latest year with volume: **{D['band_year']}**, {_by_head:,} head."
+            + (f" That is a shipment rather than a year — under "
+               f"{bd.MIN_MIX_HEAD:,} head, where one load moves every share "
+               f"above. The **By month** view shows how it got here."
+               if _by_head < bd.MIN_MIX_HEAD else ""))
+
+    if D["bands"]:
+        # Below the branch on purpose: it describes the weight classes
+        # themselves, so it is as true of the monthly view as of the annual
+        # one, and stating it in only one of them would make the other read
+        # as a different quantity.
+        st.caption(
+            "Census's top band is “320 kg or more”, and 320 kg is 705 lb — the "
+            "very bottom of the CME index's 700–899 lb window. So nearly all "
+            "Mexican cattle cross *below* index weight and only reach it after "
+            "months on US feed. **An import cut moves the index with a lag, "
+            "through supply — it never shows up in the index's own "
+            "composition.** Imported cattle mostly go straight to feedyards "
+            "under retained ownership and never sell through a USDA-reported "
+            "auction, so they are not index-eligible."
         )
 
         if D["kinds"]:
