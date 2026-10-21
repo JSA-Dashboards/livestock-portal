@@ -137,3 +137,61 @@ def test_every_dollar_in_that_caption_is_escaped():
         i = block.index(frag)
         assert block[i - 3:i] == bs + bs + "$", (
             f"{frag} is not preceded by an escaped dollar sign")
+
+
+# ── a shape change must not silently break an unpacking ─────────────────────
+
+SPREAD_FIELDS = 5          # date, border, index, spread, crossings
+
+
+def _spread_unpackings(src):
+    """[(lineno, n_names)] for every comprehension that iterates `spread`.
+
+    Walks the AST rather than grepping, so a reformat does not hide one.
+    """
+    out = []
+    for node in ast.walk(ast.parse(src)):
+        if not isinstance(node, (ast.ListComp, ast.GeneratorExp,
+                                 ast.SetComp, ast.DictComp)):
+            continue
+        for gen in node.generators:
+            if not (isinstance(gen.iter, ast.Name) and gen.iter.id == "spread"):
+                continue
+            tgt = gen.target
+            n = len(tgt.elts) if isinstance(tgt, ast.Tuple) else 1
+            out.append((node.lineno, n))
+    return out
+
+
+def test_every_spread_unpacking_matches_the_row_width():
+    """ADDING THE CROSSINGS FIELD BROKE THE 'vs CME index' CHART AND NOTHING
+    CAUGHT IT. index_spread went from 4-tuples to 5, four comprehensions in
+    the page still unpacked four, and the page died with
+    `ValueError: too many values to unpack (expected 4)` — below the fold,
+    so everything above it rendered perfectly.
+
+    py_compile passed it. 1,494 tests passed it. Only loading the page found
+    it, which is the lesson this repo keeps paying for.
+    """
+    found = _spread_unpackings(_page())
+    assert found, "no comprehension iterates `spread` — has the page changed?"
+    wrong = [(ln, n) for ln, n in found if n != SPREAD_FIELDS]
+    assert not wrong, (
+        f"index_spread yields {SPREAD_FIELDS}-tuples; these unpack a different "
+        f"number: {wrong}. Bump SPREAD_FIELDS here when the row genuinely "
+        f"changes, and fix every line it names.")
+
+
+def test_index_spread_really_yields_that_many_fields():
+    """The constant above is checked against the function, not trusted — a
+    guard keyed on a number nobody re-derives drifts out of date silently."""
+    import inspect
+    src = inspect.getsource(bd.index_spread)
+    ret = [n for n in ast.walk(ast.parse(src))
+           if isinstance(n, ast.ListComp)]
+    assert ret, "index_spread no longer builds its rows in a comprehension"
+    elts = ret[0].elt
+    assert isinstance(elts, ast.Tuple), "a row is no longer a tuple"
+    assert len(elts.elts) == SPREAD_FIELDS, (
+        f"index_spread now yields {len(elts.elts)} fields, not "
+        f"{SPREAD_FIELDS} — update SPREAD_FIELDS and every page unpacking")

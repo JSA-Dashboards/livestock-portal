@@ -460,6 +460,99 @@ def receipts_by_year(conn):
     return dict(sorted(out.items()))
 
 
+def latest_price_date(conn):
+    """The newest date carrying a price, which is NOT the newest reporting day.
+
+    AMS quotes only when enough head sell to establish a trend, so the two
+    differ by 8 days in 2026 alone -- the rule `price_grid` already follows and
+    the reason it takes its own default this way.
+    """
+    r = conn.cursor().execute(
+        "SELECT MAX(report_date) FROM border_prices "
+        "WHERE avg_price IS NOT NULL").fetchone()
+    return str(db.iso(r[0])) if r and r[0] else None
+
+
+def reopened_on(conn):
+    """The most recent reopening date, or None. Thin wrapper over
+    `reopening()` so a caller wanting only the date does not carry its dict."""
+    r = reopening(conn)
+    return r["date"] if r else None
+
+
+def receipts_on(conn, on):
+    """
+    One day's head, as AMS published it and broken out by crossing.
+
+    {"head", "wtd", "by_crossing": [(crossing, state, head)], "reconciles"}
+    or None when that day has no receipts row at all.
+
+    **THE TOTAL IS AMS'S OWN ROW, NEVER THE SUM OF THE PARTS.** `border_receipts`
+    is a hierarchy -- all-points, per-state, per-crossing -- so summing
+    everything triple-counts, and even the named crossings alone disagree with
+    the published total on 19 of 463 days measured. `is_total` flags the
+    authoritative row at ingest, which is why `daily_receipts` exists in the
+    shape it does; this follows the same rule.
+
+    `reconciles` says whether the named crossings happen to add to the published
+    figure on this day, so a caller can show the breakdown and still be honest
+    about it. It is NOT an audit in the sense `leverage.reconciles()` is -- a
+    False here is AMS's own arithmetic, not evidence of a parsing fault, and the
+    page must not cry error over it.
+
+    **THERE IS NO HEAD COUNT PER WEIGHT BRACKET, AND NONE CAN BE DERIVED.**
+    AMS publishes the price grid with no volume on it at all -- `border_prices`
+    carries LOW/HIGH/AVG and nothing else -- so "how many head traded at this
+    price" is unanswerable, and this figure is every feeder animal that crossed
+    that day whatever it weighed. A caller putting it beside a price must say
+    so, or a reader takes the day's whole count for the volume behind one rung.
+    """
+    cur = conn.cursor()
+    iso = str(db.iso(on))
+    r = cur.execute(
+        "SELECT receipts_est, receipts_wtd_est FROM border_receipts "
+        f"WHERE is_total = 1 AND report_date = '{iso}'").fetchone()
+    if not r or r[0] is None:
+        return None
+    head, wtd = int(r[0]), (int(r[1]) if r[1] is not None else None)
+
+    rows = cur.execute(
+        "SELECT crossing_point, crossing_state, receipts_est "
+        "FROM border_receipts WHERE is_total = 0 "
+        "AND crossing_point <> 'All Crossing Points' "
+        f"AND report_date = '{iso}' AND receipts_est IS NOT NULL "
+        "ORDER BY receipts_est DESC").fetchall()
+    parts = [(p, st, int(v)) for p, st, v in rows]
+    return {
+        "head": head,
+        "wtd": wtd,
+        "by_crossing": parts,
+        "reconciles": bool(parts) and sum(v for _p, _s, v in parts) == head,
+    }
+
+
+def priced_day_head(conn, since=None):
+    """
+    (head_on_priced_days, head_on_all_reporting_days) since `since`.
+
+    The gap is head that crossed on days AMS quoted no price for -- 1,350 of
+    42,600 since the 2026 reopening, 8 days of 40. Worth printing beside a
+    price because the alternative reading of "32 quoted days against 40
+    reporting days" is that the missing 8 were empty, and they were not.
+    """
+    cur = conn.cursor()
+    where = f" AND report_date >= '{since}'" if since else ""
+    total = cur.execute(
+        "SELECT SUM(receipts_est) FROM border_receipts "
+        f"WHERE is_total = 1{where}").fetchone()[0]
+    priced = cur.execute(
+        "SELECT SUM(receipts_est) FROM border_receipts "
+        f"WHERE is_total = 1{where} AND report_date IN "
+        "(SELECT DISTINCT report_date FROM border_prices "
+        " WHERE avg_price IS NOT NULL)").fetchone()[0]
+    return (int(priced) if priced else 0, int(total) if total else 0)
+
+
 def receipts_by_crossing(conn, since=None):
     """
     [(crossing, state, head)] detail, busiest first.

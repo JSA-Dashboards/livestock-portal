@@ -224,6 +224,11 @@ def load_all():
             "spread_yr": bd.spread_by_year(conn),
             "basis_move": bd.basis_move(conn, date.today().year,
                                         date.today().year - 1),
+            # Head is published per crossing per DAY and never per weight
+            # bracket, so this is the volume behind the day, not behind a rung.
+            "price_head": bd.receipts_on(conn, bd.latest_price_date(conn)),
+            "head_priced": bd.priced_day_head(
+                conn, since=bd.reopened_on(conn)),
             "price_cov": bd.price_coverage(conn),
         }
     except Exception as e:
@@ -887,6 +892,37 @@ with tab_crossings:
                                  if cur_yr_s and prev_yr_s else "")),
                         unsafe_allow_html=True)
 
+        # THE DAY'S HEAD, UNDER THE PRICES RATHER THAN BESIDE THEM. Five
+        # tiles in one row is what broke the beef cutout page -- 128px each
+        # and $375.62 split between characters -- and this row is already
+        # four across.
+        #
+        # IT IS THE WHOLE DAY'S FEEDER CATTLE, NOT THE HEAD BEHIND A BRACKET.
+        # AMS publishes the price grid with no volume on it at all, so there
+        # is no head count per weight and none can be derived. Said in the
+        # sentence rather than left to a footnote, because a head figure
+        # printed under a 700-800 lb price reads as that rung's volume.
+        _ph = D.get("price_head")
+        if _ph:
+            _parts = ", ".join(f"{p} {v:,}" for p, _st, v in _ph["by_crossing"])
+            # The named crossings disagree with AMS's published total on 19 of
+            # 463 days -- border_receipts is a hierarchy and the parts are a
+            # BREAKDOWN, not an audit. A day they differ is AMS's arithmetic,
+            # so the page says which figure is theirs and does not cry error.
+            _split = ""
+            if _parts:
+                _split = (f" — {_parts}" if _ph["reconciles"]
+                          else f" — reported by crossing as {_parts}, which "
+                               f"does not add to it")
+            _wtd = (f" Week to date **{_ph['wtd']:,}**."
+                    if _ph.get("wtd") else "")
+            st.caption(
+                f"**{_ph['head']:,} head crossed that day**{_split}."
+                f"{_wtd} That is every feeder animal that crossed, whatever "
+                f"it weighed — AMS publishes no head count against a price, "
+                f"so there is no volume behind any single weight bracket."
+            )
+
         if cur_yr_s and prev_yr_s:
             # Dollar signs MUST be escaped in st.caption. Two unescaped ones in the
             # same string make Streamlit treat everything between them as LaTeX
@@ -948,6 +984,13 @@ with tab_crossings:
                 f"{this_yr} there were "
                 f"{cov.get(str(this_yr), {}).get('price_days', 0)} quoted days "
                 f"against {len(daily)} reporting days."
+                # "32 against 40" reads as though the missing eight were
+                # empty. They were not, and the head that crossed on them is
+                # the figure that says so.
+                + (f" Those unquoted days were not empty: "
+                   f"**{_hp[1] - _hp[0]:,} head** of the {_hp[1]:,} since the "
+                   f"border reopened crossed on a day carrying no price."
+                   if (_hp := D.get("head_priced")) and _hp[1] > _hp[0] else "")
             )
 
         with t_wt:
@@ -983,13 +1026,13 @@ with tab_crossings:
             if spread:
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(
-                    x=[pd.Timestamp(d) for d, _b, _f, _s in spread],
-                    y=[b for _d, b, _f, _s in spread], mode="lines+markers",
+                    x=[pd.Timestamp(d) for d, _b, _f, _s, _c in spread],
+                    y=[b for _d, b, _f, _s, _c in spread], mode="lines+markers",
                     name="Border, 700–800 #1-2", line=dict(color=AMBER, width=2),
                     marker=dict(size=5)))
                 fig.add_trace(go.Scatter(
-                    x=[pd.Timestamp(d) for d, _b, _f, _s in spread],
-                    y=[f for _d, _b, f, _s in spread], mode="lines+markers",
+                    x=[pd.Timestamp(d) for d, _b, _f, _s, _c in spread],
+                    y=[f for _d, _b, f, _s, _c in spread], mode="lines+markers",
                     name="CME Feeder Index", line=dict(color=JPSI_BLUE, width=2),
                     marker=dict(size=5)))
                 fig.update_layout(
