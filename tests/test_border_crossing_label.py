@@ -76,12 +76,15 @@ def test_index_spread_returns_the_crossings_it_averaged():
     assert "crossing=None" in src, "there is no way to fix the roster"
 
 
-def test_spread_by_year_reports_its_roster():
+def test_spread_by_window_reports_its_roster():
     import inspect
-    src = inspect.getsource(bd.spread_by_year)
+    src = inspect.getsource(bd.spread_by_window)
     assert '"crossings"' in src, (
-        "a year's mean with no record of which crossings made it cannot be "
-        "compared with another year's")
+        "a window's mean with no record of which crossings made it cannot be "
+        "compared with another window's")
+    assert not hasattr(bd, "spread_by_year"), (
+        "the calendar-year version is still here; two bucketings of one "
+        "series is how the tile and the table come to disagree")
 
 
 # ── the roster check behind the "halved" claim ──────────────────────────────
@@ -123,20 +126,63 @@ def test_the_caption_no_longer_credits_douglas_with_the_average():
         "the caption does not say the figure is an average across crossings")
 
 
-def test_every_dollar_in_that_caption_is_escaped():
-    """Streamlit renders a PAIR of unescaped dollar signs as inline LaTeX: the
-    signs vanish and any bold between them is stranded as literal asterisks.
-    This caption quotes two prices, so both need the escape — the trap this
-    repo has shipped three times."""
-    src = _page()
-    start = src.index("The border discount has roughly halved")
-    block = src[start:start + 900]
-    bs = chr(92)
-    # Every `${` that interpolates a price must carry the backslash escape.
-    for frag in ("{prev_yr_s['mean']:,.2f}", "{cur_yr_s['mean']:,.2f}"):
-        i = block.index(frag)
-        assert block[i - 3:i] == bs + bs + "$", (
-            f"{frag} is not preceded by an escaped dollar sign")
+def _unescaped_caption_dollars(src):
+    """[(lineno, text)] for every `${...}` inside an st.caption on this page.
+
+    Streamlit renders a PAIR of unescaped dollar signs in markdown as inline
+    LaTeX: both signs vanish and any bold between them is stranded as literal
+    asterisks. This repo has shipped that four times.
+
+    Walks the AST rather than indexing a prose string. The previous version of
+    this guard located the caption by its opening words and died the moment
+    that sentence was reworded -- so the check silently stopped running at
+    exactly the edit most likely to reintroduce the bug.
+
+    TILES ARE EXEMPT and are not inspected: they are raw HTML, never passed
+    through the markdown parser, and every price on this page's tiles is a
+    bare `$`.
+    """
+    out = []
+    for node in ast.walk(ast.parse(src)):
+        if not (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "caption"):
+            continue
+        for arg in ast.walk(node):
+            if not isinstance(arg, ast.JoinedStr):
+                continue
+            parts = arg.values
+            for k, part in enumerate(parts):
+                if not isinstance(part, ast.FormattedValue) or k == 0:
+                    continue
+                prev = parts[k - 1]
+                if not (isinstance(prev, ast.Constant)
+                        and isinstance(prev.value, str)):
+                    continue
+                t = prev.value
+                # In the SOURCE the escape is `\\$`; by the time ast has
+                # parsed the literal it is a single backslash then `$`.
+                if t.endswith("$") and not t.endswith(chr(92) + "$"):
+                    out.append((getattr(node, "lineno", 0), t[-24:]))
+    return out
+
+
+def test_every_dollar_in_every_caption_is_escaped():
+    """A standing guard over the whole page, not over one sentence."""
+    bad = _unescaped_caption_dollars(_page())
+    assert not bad, (
+        "these st.caption interpolations print a bare $ and will open an "
+        f"inline LaTeX span if the caption holds a second one: {bad}")
+
+
+def test_that_guard_actually_catches_an_unescaped_dollar():
+    """A guard that cannot fail is the thing it guards against."""
+    broken = "import streamlit as st\nst.caption(f\"a ${x:,.2f} and ${y:,.2f}\")\n"
+    assert _unescaped_caption_dollars(broken), "the detector accepts the bug"
+    fixed = ("import streamlit as st\n"
+             "st.caption(f\"a " + chr(92) + chr(92) + "${x:,.2f} and "
+             + chr(92) + chr(92) + "${y:,.2f}\")\n")
+    assert not _unescaped_caption_dollars(fixed), "the detector rejects the fix"
 
 
 # ── a shape change must not silently break an unpacking ─────────────────────

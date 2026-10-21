@@ -1244,6 +1244,75 @@ def price_series(conn, class_desc=INDEX_CLASS, grade=None, since=None):
     return out
 
 
+def weight_spans(conn, since=None, class_desc=None):
+    """
+    {date: {"low", "high", "n", "classes", "label"}} -- the weight range AMS
+    QUOTED that day, which is the only daily weight signal that exists.
+
+    **IT IS A SPAN OF WHAT WAS QUOTED, NOT AN AVERAGE OF WHAT CROSSED, AND
+    THERE IS NO AVERAGE TO BE HAD.** Established by probe on 2026-10-21 against
+    the feeds themselves rather than inferred from the shape of our own tables:
+
+      * AMS 3486 has four sections. `Report Volume` carries head and nothing
+        else -- and `receipts_current_wtd_est` is WEEK-TO-DATE head, not a
+        weighted anything, which is the one field name on this feed that
+        invites exactly the wrong reading. `Report Detail Current` and
+        `Report Detail WTD` carry `weight_break_low`/`weight_break_high`, which
+        are quote brackets with no head against them, plus `weight_collect`,
+        which is the string "Estimate" describing how the break was collected
+        rather than a number.
+      * AMS 3629 has three sections and 21,179 rows and NOT ONE weight field.
+      * Census does publish head by HS weight class -- a real distribution, and
+        what `band_shares()` already reads -- but its top class is OPEN-ENDED
+        ("320 kg or more"). That class held 1.4% of head across the whole
+        record and **27.8% in August 2026**, so assuming 360 against 450 kg for
+        it moves a head-weighted average from 635 lb to 690 lb. An average
+        resting on a 55 lb assumption nobody can check is not a figure this
+        page should print, and it would be at its worst precisely in the
+        reopening months anyone would want it for.
+
+    So the span is what AMS actually says, and it earns a column because it
+    MOVES: inside the current window alone it is 400-800 lb on 19 days and
+    500-800 lb on 13. The light end carries the signal: the 300-400 lb bracket
+    ran until 2025-02-18 and has not been quoted since, and the light end came
+    back only to 400 lb on reopening, never to 300. The calves that used to
+    cross are not crossing.
+
+    AMS quotes a bracket only when enough head sell to establish a trend in it,
+    the rule `price_grid` already records for the day as a whole. An absent
+    bracket is therefore one that did not trade in volume rather than one
+    nobody looked at -- which is the strongest inference available here, and is
+    still not a head count.
+
+    `classes` is carried because the span pools whatever classes were quoted
+    and they are not interchangeable: heifers are quoted on 1 day of 2026
+    against steers on 32, so a day pooling both is a different population from
+    its neighbours and the caller can say so rather than guess.
+    """
+    sql = ("SELECT report_date, MIN(weight_low), MAX(weight_high), "
+           "       COUNT(DISTINCT weight_low), "
+           "       LISTAGG(DISTINCT class_desc, '|') "
+           "FROM border_prices WHERE avg_price IS NOT NULL")
+    if class_desc:
+        sql += f" AND class_desc = '{class_desc}'"
+    if since:
+        sql += f" AND report_date >= '{since}'"
+    sql += " GROUP BY report_date ORDER BY report_date"
+    out = {}
+    for d, lo, hi, n, cls in conn.cursor().execute(sql).fetchall():
+        if lo is None or hi is None:
+            continue
+        out[str(db.iso(d))] = {
+            "low": int(lo), "high": int(hi), "n": int(n),
+            "classes": sorted(str(cls).split("|")) if cls else [],
+            # Formatted HERE so the tile, the table and any caption cannot
+            # drift into two spellings of one span -- the en dash and the unit
+            # are part of the figure, not of the layout.
+            "label": f"{int(lo)}–{int(hi)} lb",
+        }
+    return out
+
+
 def index_spread(conn, limit=None, crossing=None):
     """
     [(date, border_price, index_value, spread, crossings)] for the
@@ -1289,33 +1358,137 @@ def index_spread(conn, limit=None, crossing=None):
     return out[-limit:] if limit else out
 
 
-def spread_by_year(conn, crossing=None):
-    """{year: {"n", "mean", "median", "last", "crossings"}} for the index spread.
+# A gap this long in the QUOTED SPREAD closes a window. It is `reopening()`'s
+# own default, deliberately: one definition of "shut" in this module, so if a
+# window boundary and a reopening date ever differ it is because of what was
+# QUOTED, never because two functions disagree about what a closure is.
+#
+# MEASURED, NOT CHOSEN. The spread series has 84 dates and exactly ONE gap of
+# 20 days or more -- 470 days, May 2025 to Aug 2026 -- so every threshold from
+# 20 to 470 yields today's two windows. 45 sits well above the longest quote
+# drought inside an open border (2026 has 32 quoted days across 40 reporting
+# days and its longest unquoted run is under 20) and well below every real
+# closure on file (72, 56 and 410 days). Nothing here is delicate; the number
+# is headroom on both sides rather than a fitted parameter.
+WINDOW_GAP_DAYS = 45
 
-    `crossings` is every crossing that contributed to that year, so a caller can
-    see the roster rather than assume it held.
+# Below this a window is REPORTED and FLAGGED, never dropped and never
+# headlined against another window. One reporting week.
+#
+# It guards a future reopening, not anything on file: both current windows are
+# 52 and 32 quoted days. The case is a border that reopens, quotes three days
+# and shuts -- which is not hypothetical, since crossings did exactly that over
+# 2025-07-07..07-10. A 3-day mean set against a 52-day one under a sentence
+# saying the discount "has roughly halved" is a plausible claim about nothing,
+# and it is what this page would have printed.
+MIN_WINDOW_DAYS = 5
+
+
+# Bump when spread_by_window(), spread_windows() or basis_move() change the
+# SHAPE of what they return. st.cache_data keys on the decorated loader's own
+# code and arguments and is BLIND to the modules it calls, so a reshaped dict
+# is served from a cache built before the reshape and the tile reading a new
+# key renders an em dash with nothing raising -- the leverage.SCHEMA trap. The
+# page now reads this module's window dicts BY KEY, which is exactly that
+# shape, so it has to be passed at the call site: a default is not part of the
+# key, and neither is an argument whose name starts with an underscore.
+SCHEMA = 1
+
+
+def _window_bounds(dates, gap_days=WINDOW_GAP_DAYS):
+    """[(start, end)] -- split an ascending ISO date list wherever it jumps.
+
+    Pure and connection-free so a test can hand it the real 84 dates, which is
+    the only way to pin the boundaries without a warehouse.
     """
+    if not dates:
+        return []
+    out, start, prev = [], dates[0], dates[0]
+    for d in dates[1:]:
+        if (_as_date(d) - _as_date(prev)).days >= gap_days:
+            out.append((start, prev))
+            start = d
+        prev = d
+    out.append((start, prev))
+    return out
+
+
+def spread_windows(conn, gap_days=WINDOW_GAP_DAYS):
+    """[(start, end)] for the priced spread, oldest first.
+
+    The enumeration `reopening()` deliberately does not provide -- it answers
+    only "when did the border last reopen", and the PRIOR window's mean is a
+    figure this page has always printed, so something has to list them all.
+    """
+    return _window_bounds([d for d, _b, _f, _s, _c in index_spread(conn)],
+                          gap_days)
+
+
+def spread_by_window(conn, crossing=None, gap_days=WINDOW_GAP_DAYS, today=None):
+    """
+    {start: {"n","mean","median","last","crossings","start","end","open"}} --
+    the index spread, one entry per OPEN WINDOW, oldest first.
+
+    **THIS REPLACED A CALENDAR-YEAR BUCKET AND THE YEAR WAS NEVER THE UNIT.**
+    The border is shut for long stretches -- screwworm closed it Nov 2024, it
+    ran Feb-May 2025, shut again, and reopened 2026-08-24 -- so a year splits
+    one trading window and pools two others. Today the two windows coincide
+    exactly with calendar 2025 and 2026, which is why the old keying looked
+    right: every figure it printed was correct and would have stayed correct
+    until 1 January, when the tile would have rolled to a near-empty "2027"
+    while the window that began in August ran on unbroken.
+
+    **THE BOUNDS ARE COMPUTED ON THE UNFILTERED SERIES, ALWAYS, AND THEN
+    APPLIED AS A DATE FILTER.** Segmenting a single crossing's own dates would
+    let that crossing invent a boundary: Santa Teresa quotes on 12 days of the
+    current window against Douglas's 29, so a crossing that happens to skip
+    seven weeks would split one window in two and `basis_move` would then
+    compare a window to half of itself. A window is a property of the BORDER.
+
+    Segmented on the priced spread rather than on crossings, for three reasons.
+    A window is a claim about which rows belong in one average, so it has to be
+    a property of the series being averaged. Crossings resumed for three days
+    in July 2025 (07-07..07-10) with no index-rung price quoted at all, so a
+    crossing-derived boundary produces a window holding zero priced days -- a
+    row with n=0 and no mean, needing a suppression rule that exists only
+    because the boundary came from the wrong series. And it is self-auditing:
+    the windows' counts sum to len(index_spread(conn)), so no quoted day can
+    fall between two windows.
+
+    `open` says the newest window is still running -- no closure-length gap
+    since its last quote -- so a caller can say "since" rather than asserting a
+    window is current when the border has shut again.
+    """
+    bounds = spread_windows(conn, gap_days)
     rows = index_spread(conn, crossing=crossing)
-    by, seen = {}, {}
-    for d, _b, _f, s, cr in rows:
-        y = str(d)[:4]
-        by.setdefault(y, []).append(s)
-        seen.setdefault(y, set()).update(cr)
+    ref = _as_date(today) if today else date.today()
     out = {}
-    for y, vals in sorted(by.items()):
+    for lo, hi in bounds:
+        vals = [s for d, _b, _f, s, _c in rows if lo <= d <= hi]
+        if not vals:
+            # Only reachable with a `crossing` filter: the border was open and
+            # this one crossing never quoted in it. Skipped rather than stored
+            # as n=0, so a caller averaging windows cannot divide by nothing.
+            continue
+        seen = sorted({c for d, _b, _f, _s, cr in rows if lo <= d <= hi
+                       for c in cr})
         v = sorted(vals)
         n = len(v)
-        out[y] = {
+        out[lo] = {
             "n": n,
             "mean": sum(v) / n,
             "median": v[n // 2] if n % 2 else (v[n // 2 - 1] + v[n // 2]) / 2,
             "last": vals[-1],
-            "crossings": sorted(seen.get(y, ())),
+            "crossings": seen,
+            "start": lo,
+            "end": hi,
+            "open": (ref - _as_date(hi)).days < gap_days,
+            "thin": n < MIN_WINDOW_DAYS,
         }
     return out
 
 
-def basis_move(conn, year, prior):
+def basis_move(conn, window=None, prior=None):
     """
     The year-on-year change in the border basis, as REPORTED and on a FIXED
     ROSTER of crossings. Returns None if either year is missing.
@@ -1330,25 +1503,47 @@ def basis_move(conn, year, prior):
     `reported` is kept beside it rather than thrown away -- it is what USDA's
     own published rows average to, and the page shows both when they differ.
     """
-    allyr = spread_by_year(conn)
-    a, b = allyr.get(str(prior)), allyr.get(str(year))
+    allw = spread_by_window(conn)
+    keys = list(allw)
+    # Defaulting to the two newest windows is what keeps this function and the
+    # tile on the same pair by construction. Both read one ordered dict, so a
+    # caller cannot headline one window while the roster check describes
+    # another -- the letter-versus-dashboard failure this file records five
+    # times, which only ever needed two surfaces picking their own rows.
+    if window is None:
+        window = keys[-1] if keys else None
+    if prior is None:
+        prior = keys[-2] if len(keys) > 1 else None
+    a, b = allw.get(prior), allw.get(window)
     if not a or not b:
+        return None
+    # A roster decomposition across a 3-day window is arithmetic on noise, and
+    # it would render as confidently as any other. Refusing here rather than in
+    # the page means every caller gets the refusal, and the page's existing
+    # `if _bm` guard already drops the sentence.
+    if a["thin"] or b["thin"]:
         return None
 
     panel = sorted(set(a["crossings"]) & set(b["crossings"]))
     pa = pb = None
     if panel:
-        # Restricted to the shared roster, both years, one crossing at a time
-        # and then averaged -- never a single SQL AVG over the set, which would
-        # weight a crossing by how often it quoted rather than equally.
-        def restricted(y):
+        # Restricted to the shared roster, both windows, one crossing at a
+        # time and then averaged -- never a single SQL AVG over the set, which
+        # would weight a crossing by how often it quoted rather than equally.
+        #
+        # spread_by_window takes its BOUNDS from the unfiltered series even on
+        # a filtered call, so `key` still names the same span for every
+        # crossing. Segmenting a crossing's own dates would let Santa Teresa,
+        # which quotes on 12 of the current window's 32 days, split that window
+        # and have this average a sub-window against a whole one.
+        def restricted(key):
             vals = []
             for cx in panel:
-                yr = spread_by_year(conn, crossing=cx).get(str(y))
-                if yr:
-                    vals.append(yr["mean"])
+                w = spread_by_window(conn, crossing=cx).get(key)
+                if w:
+                    vals.append(w["mean"])
             return sum(vals) / len(vals) if vals else None
-        pa, pb = restricted(prior), restricted(year)
+        pa, pb = restricted(prior), restricted(window)
 
     reported = b["mean"] - a["mean"]
     same = (pb - pa) if (pa is not None and pb is not None) else None
@@ -1362,21 +1557,6 @@ def basis_move(conn, year, prior):
         "prior_same": pa,
         "year_same": pb,
     }
-
-
-def price_coverage(conn):
-    """{year: {"price_days", "brackets"}} -- how thin the series is, per year."""
-    rows = conn.cursor().execute(
-        "SELECT report_date, weight_low FROM border_prices").fetchall()
-    out = {}
-    for d, wl in rows:
-        y = str(db.iso(d))[:4]
-        r = out.setdefault(y, {"days": set(), "brackets": set()})
-        r["days"].add(str(db.iso(d)))
-        r["brackets"].add(wl)
-    return {y: {"price_days": len(r["days"]),
-                "brackets": sorted(r["brackets"])}
-            for y, r in sorted(out.items())}
 
 
 def _national(conn):

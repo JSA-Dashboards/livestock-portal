@@ -157,6 +157,47 @@ def fmt_date(d, fmt="%b %d, %Y"):
     return pd.Timestamp(str(d)).strftime(fmt)
 
 
+def win_span(w):
+    """'Feb 20 - May 12, 2025' -- ONE spelling of a window.
+
+    The caption names two windows and the table names every one, so a span
+    formatted at each site is three chances to describe the same stretch two
+    ways. Same reason border.weight_spans() formats its own label.
+    """
+    if not w:
+        return "—"
+    a, b = w["start"], w["end"]
+    if a[:4] == b[:4]:
+        return (f"{fmt_date(a, '%b %d')} – {fmt_date(b, '%b %d')}, "
+                f"{b[:4]}")
+    return f"{fmt_date(a)} – {fmt_date(b)}"
+
+
+def narrowing_phrase(cur, prev):
+    """How the discount moved, COMPUTED rather than typed.
+
+    "has roughly halved" was true when it was written and is printed in the
+    same breath as the two figures it describes, so it has to be derived from
+    them. The southeast retention caption is this page's precedent: prose
+    naming a high and a low went stale against the chart directly above it,
+    and the fix was to read them off the series at render time.
+    """
+    if not prev:
+        return "has moved"
+    r = cur / prev          # both negative; r < 1 means a narrower discount
+    if r < 0:
+        return "has flipped to a premium"
+    if r < 0.40:
+        return "has all but closed"
+    if r <= 0.60:
+        return "has roughly halved"
+    if r < 0.85:
+        return "has narrowed sharply"
+    if r <= 1.15:
+        return "is little changed"
+    return "has widened"
+
+
 def fmt_month(p):
     if not p:
         return "—"
@@ -166,7 +207,7 @@ def fmt_month(p):
 # ── Data ────────────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def load_all():
+def load_all(schema=bd.SCHEMA):
     """
     Everything the page needs, in one connection. None on any failure.
 
@@ -221,15 +262,20 @@ def load_all():
             "price_grid": bd.price_grid(conn),
             "price_series": bd.price_series(conn, grade=bd.INDEX_GRADE),
             "spread": bd.index_spread(conn),
-            "spread_yr": bd.spread_by_year(conn),
-            "basis_move": bd.basis_move(conn, date.today().year,
-                                        date.today().year - 1),
+            # Keyed on the border's OPEN WINDOWS, not the calendar year.
+            # basis_move defaults to the two newest, so it and the tile read
+            # one ordered dict and cannot pick different spans.
+            "spread_win": bd.spread_by_window(conn),
+            "basis_move": bd.basis_move(conn),
             # Head is published per crossing per DAY and never per weight
             # bracket, so this is the volume behind the day, not behind a rung.
             "price_head": bd.receipts_on(conn, bd.latest_price_date(conn)),
             "head_priced": bd.priced_day_head(
                 conn, since=bd.reopened_on(conn)),
-            "price_cov": bd.price_coverage(conn),
+            # The weights AMS QUOTED per day. Not an average weight --
+            # there is no published one; weight_spans() records why.
+            "spans": bd.weight_spans(conn),
+            "reopened": bd.reopened_on(conn),
         }
     except Exception as e:
         st.session_state["_mfi_error"] = f"{type(e).__name__}: {e}"
@@ -240,7 +286,10 @@ def load_all():
 
 
 with st.spinner("Loading border reports and Census trade data…"):
-    D = load_all()
+    # PASSED, never left to the default: st.cache_data hashes the
+    # arguments it is CALLED with, so a parameter sitting at its default
+    # contributes nothing to the key.
+    D = load_all(bd.SCHEMA)
 
 if not D:
     st.error("Could not load the Mexican import data.")
@@ -399,6 +448,7 @@ with tab_crossings:
     # the last reporting day, what that adds up to since the border reopened, the
     # official year to date, and the same point last year.
     daily = D.get("daily") or []
+    spans = D.get("spans") or {}
     last_day = daily[-1] if daily else None
 
     # Deliberately NOT inside load_all(). That function is @st.cache_data with a
@@ -847,13 +897,17 @@ with tab_crossings:
 
     grid, grid_date = D.get("price_grid", ([], None))
     spread = D.get("spread") or []
-    spread_yr = D.get("spread_yr") or {}
-    cov = D.get("price_cov") or {}
+    spread_win = D.get("spread_win") or {}
 
     if grid:
         latest = spread[-1] if spread else None
-        cur_yr_s = spread_yr.get(str(this_yr))
-        prev_yr_s = spread_yr.get(str(this_yr - 1))
+        # The two newest OPEN WINDOWS. The len() >= 2 guard is not
+        # decoration: one window is the state this page is in after the next
+        # closure plus any rebuild that drops 2025, and [-2] would take the
+        # whole Border Prices block down with an IndexError.
+        _wk = list(spread_win)
+        cur_w = spread_win[_wk[-1]] if _wk else None
+        prev_w = spread_win[_wk[-2]] if len(_wk) >= 2 else None
 
         c = st.columns(4)
         with c[0]:
@@ -883,14 +937,41 @@ with tab_crossings:
                              f"${latest[3]:,.2f}" if latest else "—",
                              sub("border minus index, $/cwt")), unsafe_allow_html=True)
         with c[3]:
-            _nx = len(cur_yr_s["crossings"]) if cur_yr_s else 0
-            st.markdown(tile(f"{this_yr} Avg Basis",
-                             f"${cur_yr_s['mean']:,.2f}" if cur_yr_s else "—",
-                             sub(f"vs ${prev_yr_s['mean']:,.2f} in {this_yr - 1}"
-                                 f" · {cur_yr_s['n']} quoted days across "
-                                 f"{_nx} crossing{'s' if _nx != 1 else ''}"
-                                 if cur_yr_s and prev_yr_s else "")),
-                        unsafe_allow_html=True)
+            # THE LABEL CARRIES THE WINDOW, NEVER THE CALENDAR YEAR.
+            # "2026 Avg Basis" was right only while the window and the year
+            # coincided, which they do exactly today and stop doing on 1
+            # January -- when it would roll to a near-empty "2027 Avg Basis"
+            # over a window that began in August and never closed. "Since"
+            # only while the window is open: once the border shuts, asserting
+            # the figure is current is the one thing the label must not do.
+            _nx = len(cur_w["crossings"]) if cur_w else 0
+            st.markdown(tile(
+                (f"Avg Basis Since {fmt_date(cur_w['start'], '%b %Y')}"
+                 if cur_w and cur_w["open"]
+                 else (f"Avg Basis, {win_span(cur_w)}" if cur_w
+                       else "Avg Basis")),
+                f"${cur_w['mean']:,.2f}" if cur_w else "—",
+                # The crossing count stays in the sub. This page's documented
+                # failure is a roster change reading as a market move, so the
+                # size of the roster behind the figure belongs beside it.
+                #
+                # KEPT TO ONE LINE, AND THE BUDGET IS MEASURED RATHER THAN
+                # COUNTED IN CHARACTERS. A .tile-sub here has 264px. The first
+                # version of this read "32 quoted days to Oct 20 · 2 crossings
+                # · prior window $-42.27", which renders 287px: it wrapped, and
+                # took this tile to 131px against its three neighbours' 113.
+                # That is the ragged row CLAUDE.md records for the Cash Cattle
+                # Trade daily tiles -- py_compile, the suite and get_page_text
+                # all pass it, and only a DOM measurement shows it.
+                #
+                # The end date came out because the label already carries the
+                # window: "Since Aug 2026" while it is open (so it runs to
+                # now), and both ends once it has closed.
+                sub(f"{cur_w['n']} quoted days · {_nx} "
+                    f"crossing{'s' if _nx != 1 else ''}"
+                    + (f" · prior ${prev_w['mean']:,.2f}" if prev_w else "")
+                    if cur_w else "")),
+                unsafe_allow_html=True)
 
         # THE DAY'S HEAD, UNDER THE PRICES RATHER THAN BESIDE THEM. Five
         # tiles in one row is what broke the beef cutout page -- 128px each
@@ -916,14 +997,28 @@ with tab_crossings:
                                f"does not add to it")
             _wtd = (f" Week to date **{_ph['wtd']:,}**."
                     if _ph.get("wtd") else "")
+            # THE WEIGHTS ARE THE ONES AMS QUOTED, NOT AN AVERAGE OF WHAT
+            # CROSSED, and the two are different populations on the same day:
+            # the head is every feeder animal over the border, the span is the
+            # brackets that traded in enough volume to price. No feed anywhere
+            # publishes a head count against a weight -- see
+            # border.weight_spans() for the four places that were checked --
+            # so no weighted average exists to print instead.
+            _sp = spans.get(grid_date)
+            _wspan = ""
+            if _sp:
+                _cls = " and ".join(c.lower() for c in _sp["classes"]) or "cattle"
+                _wspan = f" AMS quoted {_cls} at **{_sp['label']}**."
             st.caption(
                 f"**{_ph['head']:,} head crossed that day**{_split}."
-                f"{_wtd} That is every feeder animal that crossed, whatever "
-                f"it weighed — AMS publishes no head count against a price, "
-                f"so there is no volume behind any single weight bracket."
+                f"{_wtd}{_wspan} The head is every feeder animal that crossed, "
+                f"whatever it weighed; the span is the weights AMS found enough "
+                f"trade to quote. It publishes no head against any weight, so "
+                f"there is no average weight to be had and no volume behind any "
+                f"single bracket."
             )
 
-        if cur_yr_s and prev_yr_s:
+        if cur_w and prev_w:
             # Dollar signs MUST be escaped in st.caption. Two unescaped ones in the
             # same string make Streamlit treat everything between them as LaTeX
             # math, and this caption rendered as a wall of italic variables before
@@ -944,26 +1039,35 @@ with tab_crossings:
                     # years to the crossings they share moves the narrowing by
                     # about a third of a point.
                     _roster = (
-                        f" The crossings quoting it changed over that span — "
+                        f" The crossings quoting it changed between them — "
                         f"{len(_bm['prior_panel'])} reported this rung in "
-                        f"{this_yr - 1} and {len(_bm['year_panel'])} do now — "
-                        f"but holding both years to the "
+                        f"the earlier window and {len(_bm['year_panel'])} "
+                        f"do now — but holding both windows to the "
                         f"{' and '.join(_bm['panel'])} pair they share gives "
                         f"**{_bm['same_crossing']:+.2f}** against the "
                         f"**{_bm['reported']:+.2f}** above, so the narrowing is "
                         f"the market rather than the roster."
                     )
+                # The verb is COMPUTED, and the two periods are named as
+                # SPANS rather than years -- the border was shut for 470
+                # days between them, so "2025" and "2026" named
+                # stretches of calendar that were mostly closed.
                 st.caption(
-                    f"**The border discount has roughly halved.** Averaged over "
-                    f"the crossings that quoted, Mexican cattle came in "
-                    f"**\\${prev_yr_s['mean']:,.2f}/cwt** under the index in "
-                    f"{this_yr - 1} and **\\${cur_yr_s['mean']:,.2f}** in "
-                    f"{this_yr} — consistent with scarcity, since the few head "
-                    f"crossing are bid much closer to the US market."
+                    f"**The border discount "
+                    f"{narrowing_phrase(cur_w['mean'], prev_w['mean'])}.** "
+                    f"Averaged over the crossings that quoted, Mexican "
+                    f"cattle came in **\\${prev_w['mean']:,.2f}/cwt** "
+                    f"under the index over **{win_span(prev_w)}** and "
+                    f"**\\${cur_w['mean']:,.2f}** over "
+                    f"**{win_span(cur_w)}** — consistent with scarcity, "
+                    f"since the few head crossing are bid much closer to "
+                    f"the US market."
                     + _roster
-                    + f" Read the {this_yr} figure with care: it rests on "
-                    f"**{cur_yr_s['n']} quoted days** against "
-                    f"{prev_yr_s['n']} last year."
+                    + f" These are the border's two open windows, not two "
+                    f"calendar years: it was shut between them. Read the "
+                    f"current figure with care — it rests on "
+                    f"**{cur_w['n']} quoted days** against "
+                    f"{prev_w['n']} in the earlier window."
             )
 
         t_now, t_wt, t_sp = st.tabs(
@@ -977,19 +1081,27 @@ with tab_crossings:
                     "Crossing": cp,
                 } for c_, wl, wh, g, lo, hi, mid, cp in grid]),
                 use_container_width=True, hide_index=True)
+            # COUNTED OVER THE WINDOW, not the calendar year, so both
+            # halves of this sentence measure the same span. The quoted count
+            # is the window's own n -- read off the same dict as the tile
+            # rather than recounted here, since two counts of one thing is
+            # how a page comes to disagree with itself.
+            _reop = D.get("reopened")
+            _cov_q = cur_w["n"] if cur_w else 0
+            _cov_r = (len([1 for _d, _v, _w in daily if _d >= _reop])
+                      if _reop else len(daily))
             st.caption(
                 f"AMS quotes for **{fmt_date(grid_date)}**, $/cwt F.O.B. Prices are "
                 f"published only when enough head sell to establish a trend, so a "
-                f"day can report cattle crossing and carry no quote at all — in "
-                f"{this_yr} there were "
-                f"{cov.get(str(this_yr), {}).get('price_days', 0)} quoted days "
-                f"against {len(daily)} reporting days."
+                f"day can report cattle crossing and carry no quote at all — "
+                f"since the border reopened there have been "
+                f"{_cov_q} quoted days against {_cov_r} reporting days."
                 # "32 against 40" reads as though the missing eight were
                 # empty. They were not, and the head that crossed on them is
                 # the figure that says so.
                 + (f" Those unquoted days were not empty: "
-                   f"**{_hp[1] - _hp[0]:,} head** of the {_hp[1]:,} since the "
-                   f"border reopened crossed on a day carrying no price."
+                   f"**{_hp[1] - _hp[0]:,} head** of the {_hp[1]:,} crossed "
+                   f"on a day carrying no price."
                    if (_hp := D.get("head_priced")) and _hp[1] > _hp[0] else "")
             )
 
@@ -1045,10 +1157,12 @@ with tab_crossings:
                 st.plotly_chart(fig, use_container_width=True)
 
                 st.dataframe(
-                    pd.DataFrame([{"Year": y, "Quoted days": d["n"],
+                    pd.DataFrame([{"Window": win_span(d),
+                                   "Quoted days": d["n"],
                                    "Mean basis": round(d["mean"], 2),
                                    "Median basis": round(d["median"], 2)}
-                                  for y, d in spread_yr.items()]),
+                                  for d in reversed(
+                                      list(spread_win.values()))]),
                     use_container_width=True, hide_index=True)
                 st.caption(
                     "Both series are **$/cwt F.O.B.**, which is what makes "
@@ -1105,7 +1219,13 @@ with tab_crossings:
                 f"Head counts are AMS estimates, rounded to the nearest hundred."
             )
             st.dataframe(
-                pd.DataFrame([{"Date": d, "Head": v, "Week to date": w}
+                pd.DataFrame([{"Date": d, "Head": v, "Week to date": w,
+                               # A reporting day with no quote gets a dash
+                               # rather than a carried-forward span: the
+                               # head crossed, nothing was priced, and
+                               # those are different facts.
+                               "Weights quoted": (spans.get(d) or {})
+                               .get("label", "–")}
                               for d, v, w in reversed(daily)]),
                 use_container_width=True, hide_index=True)
 
