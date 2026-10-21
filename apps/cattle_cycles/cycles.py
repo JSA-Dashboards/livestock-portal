@@ -89,7 +89,7 @@ import pandas as pd
 # arguments and never on the modules it calls, so without this a reshaped
 # return value is served from a cache built before the reshape and the tile
 # reading a new key renders an em dash with nothing raising.
-SCHEMA = 2          # bumped: load() carries inventory now, and the herd view reads it
+SCHEMA = 3          # bumped: load() carries inventory from SNOWFLAKE too, not only the file
 
 DATA = Path(__file__).parent / "data" / "cattle_cycles.json"
 
@@ -141,6 +141,26 @@ def _from_snowflake(conn) -> dict | None:
     regenerates it. deploy/refresh_cattle_cycles.py keeps this table current
     from the droplet instead, which is where the 464MB NASS bulk dump can
     reasonably be streamed.
+
+    THE INVENTORY SERIES COME OUT OF THIS SAME TABLE, which is named for
+    prices and is not only prices. The job writes `beef_cows` and `all_cattle`
+    beside the three price series, with PERIOD holding a bare year ("2026")
+    where a price holds "2026-08" -- PERIOD is a string, so that fits, and no
+    key collides because the series names differ. The alternative, leaving the
+    herd series in the committed file while prices came from the table, would
+    have made the page caption say "the live table" over a chart drawn from a
+    file nobody had regenerated. That caption is the only thing standing
+    between a reader and a silently stale series, so it cannot be the thing
+    that is wrong.
+
+    A table written by the version of the job that fetched prices only carries
+    no inventory, so _at_least_as_long rejects it and the page falls back to
+    the file whole until the job has run once. Prices stop advancing for that
+    interval; nothing goes dark.
+
+    INVENTORY is defined further down this module. That is fine -- a name in a
+    function body is resolved when the function is CALLED -- and it is left
+    where it is because it belongs beside the herd arithmetic it labels.
     """
     try:
         cur = conn.cursor().execute(
@@ -158,10 +178,13 @@ def _from_snowflake(conn) -> dict | None:
             continue
         by.setdefault(str(series), {})[str(period)] = float(value)
     cpi = by.pop(CPI_KEY, {})
+    inv = {k: by.pop(k, {}) for k in INVENTORY}
     if not cpi or not any(by.get(k) for k in SERIES):
         return None
     return {"series": {k: {"rows": by.get(k, {})} for k in SERIES},
-            "cpi_u": {"rows": cpi}, "source": "snowflake"}
+            "cpi_u": {"rows": cpi},
+            "inventory": {k: {"rows": inv[k]} for k in INVENTORY},
+            "source": "snowflake"}
 
 
 def _at_least_as_long(live: dict, seed: dict) -> bool:
@@ -180,10 +203,24 @@ def _at_least_as_long(live: dict, seed: dict) -> bool:
     value has not moved, so it can never legitimately shrink. Falling back
     whole costs the advancement and keeps the past intact, which is the right
     way round.
+
+    THE INVENTORY SERIES ARE IN THIS TEST FOR A DIFFERENT REASON FROM THE
+    PRICES. They are an independent clock -- nothing here deflates them or
+    sets them beside a price -- so admitting a table that had prices and no
+    inventory would not splice anything. It would do something quieter and
+    worse: the herd view would lose its series and leave the page while every
+    price view went on working, under a caption naming the live table. A view
+    that vanishes reads as a feature nobody built. So the table has to carry
+    all of it or none of it, and until the job has fetched inventory once the
+    answer here is none.
     """
     for key in SERIES:
         want = len((seed.get("series", {}).get(key) or {}).get("rows") or {})
         if len((live.get("series", {}).get(key) or {}).get("rows") or {}) < want:
+            return False
+    for key in INVENTORY:
+        want = len((seed.get("inventory", {}).get(key) or {}).get("rows") or {})
+        if len((live.get("inventory", {}).get(key) or {}).get("rows") or {}) < want:
             return False
     want_cpi = len((seed.get("cpi_u") or {}).get("rows") or {})
     return len((live.get("cpi_u") or {}).get("rows") or {}) >= want_cpi
