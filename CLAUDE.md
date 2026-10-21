@@ -1060,11 +1060,11 @@ numbers and runs the REAL `index_dates` rule rather than a fake.
       headline   342.16  10-19    (CME had printed this that morning)
       published  343.46  10-18    a Sunday, Friday's number, change 0.00
 
-  **`published` is keyed on the dates CME has PRINTED now**, not on the
-  headline. A date CME printed is a finished session by construction, so
-  that keeps the property the old rule existed for — it can never be the
-  unfinished forward day — without chaining two questions that are not the
-  same question. The no-CME-table fallback stays, and skips weekends.
+  **`published` was keyed on the dates CME has PRINTED** rather than on the
+  headline — a date CME printed is a finished session by construction, so
+  that kept the property the old rule existed for without chaining two
+  questions that are not the same question. **That lasted one day. See
+  below.**
 
   **The change was a cent out too, and CME's own column says so.** The prior
   was the previous calendar row rather than the previous printed date, so
@@ -1080,6 +1080,49 @@ numbers and runs the REAL `index_dates` rule rather than a fake.
   ingest**, which is the ordinary state on any morning the MARS job has not
   run yet. It is not rare and it was not new — it simply needed a Monday
   holiday-shaped weekend and someone reading the two side by side.
+
+- **2026-10-21, and CME's archive is not CME's publication.** The next
+  afternoon: *"now my email for this afternoon isn't updating to today's fci
+  estimate or the cme fci. it's still showing yesterday's."* I checked CME's
+  FTP, found no 10/20 file, and told him CME had not published. **He replied
+  that they had, and he was right** — he was watching it on **QST**.
+
+  CME disseminates the index on their **market-data feed** the moment they
+  compute it. The only channel this pipeline reads is the FTP
+  settlement-calculation archive at
+  `ftp.cmegroup.com/cash_settled_commodity_index_prices/daily_data/feeder_cattle/`,
+  and the upload stamps there say that file for date D lands on **D+1 between
+  about 13:00 and 14:35 CT** — 10/19's arrived Oct 20 at 13:34. On 10/21 it
+  had not arrived at all by 16:14. So keying the line on CME's archive froze
+  it on Monday while his screen showed Tuesday. **Same number, hours apart,
+  and our side was not broken.**
+
+  **Do not conclude CME has not published from the FTP alone.** It is an
+  archive, not the wire.
+
+  Ross's call: the line takes **the most recent COMPLETED session, whoever
+  holds it** — CME's print for a date they have archived, ours for one they
+  have not. What makes that acceptable is that it is the same number: over
+  the 21 days both series cover, the reconstruction differs from CME's print
+  by at most **0.022**, median **0.004**. It costs a rounding cent and buys a
+  day of currency. The consequence, which he accepted when choosing it: in
+  practice the line is usually OURS now, because our estimate for yesterday
+  exists before CME archives it.
+
+  **COMPLETED MEANS STRICTLY BEFORE TODAY, in Central**, and that is the
+  safety property the original `d < headline` rule was really protecting:
+  never the unfinished forward day. Today's row exists from the first barn
+  report — 10/21 stood at 248 locations and 868 same-day head against
+  Tuesday's 303 and 19,504.
+
+  **`today` is an argument, defaulting to `config.now_central().date()`.**
+  What counts as completed depends on the date, so a test that reads the real
+  clock passes in October and fails in November for no reason anyone will
+  remember.
+
+  One thing worth knowing before chasing this again: **the CME pull is a
+  separate 14:15 CT step** and there is no later retry, so a CME file that
+  lands after it is not picked up until the next morning's run.
 
 The general lesson, since it has now cost three mornings: **when the letter and
 a dashboard quote the same figure, a disagreement is a bug even when both

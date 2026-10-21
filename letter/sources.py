@@ -1732,7 +1732,7 @@ def _load_index_dates():
     return mod
 
 
-def fetch_feeder_index() -> dict:
+def fetch_feeder_index(today: date = None) -> dict:
     """
     JSA's OWN feeder cattle index estimate, as the dashboard headlines it.
 
@@ -1928,21 +1928,45 @@ def fetch_feeder_index() -> dict:
     # read -1.30; against Friday, which is what CME differenced, it is -1.29 --
     # exactly CME's own REPORTED_CHANGE for 10-19. That column is a free audit
     # of this arithmetic and `tests/test_feeder_index.py` uses it.
-    printed = sorted(d for d in cme_dates if d in merged)
-    if printed:
-        s_date = printed[-1]
-        s_prev_date = printed[-2] if len(printed) > 1 else None
-    else:
-        # NO CME TABLE AT ALL -- a missing or empty cme_ftp_daily, which is
-        # the state the deployed app was in on 2026-10-07 and the reason this
-        # block must never fall back to `value`, the forward estimate.
-        # Weekdays only, for the carry-forward above; a holiday still slips
-        # through, but a holiday's filler equals the session before it, so the
-        # LEVEL stays right and only the date is a day early.
-        weekdays = sorted(d for d in merged
-                          if d < headline and d.weekday() < 5)
-        s_date = weekdays[-1] if weekdays else None
-        s_prev_date = weekdays[-2] if len(weekdays) > 1 else None
+    # THE MOST RECENT COMPLETED SESSION, WHOEVER HOLDS IT -- CME's print for
+    # a date they have archived, ours for one they have not. Ross's call,
+    # 2026-10-21, after this line sat on Monday's index for two days.
+    #
+    # IT WAS KEYED ON cme_dates FOR A DAY AND THAT WAS TOO NARROW. CME
+    # disseminates the index on their market-data feed the moment they
+    # compute it -- which is where Ross sees it, on QST -- but the only
+    # channel this pipeline reads is the FTP settlement-calculation archive,
+    # `ftp.cmegroup.com/cash_settled_commodity_index_prices/...`, and that
+    # lands the NEXT DAY between about 13:00 and 14:35 CT. On 2026-10-21 it
+    # had not landed at all by 16:14, so the letter was still printing 10/19
+    # while his screen showed 10/20. Nothing was broken; we were reading a
+    # slower channel.
+    #
+    # WHAT MAKES OUR OWN NUMBER ACCEPTABLE HERE is that it is the same
+    # number. Over the 21 days both series cover, the reconstruction differs
+    # from CME's print by at most **0.022** and a median of 0.004 -- 10/19
+    # was ours 342.17 against their 342.16. So "most recent completed
+    # session" costs a rounding cent and buys a day of currency.
+    #
+    # COMPLETED MEANS STRICTLY BEFORE TODAY, in Central, and that is the
+    # safety property the old `d < headline` rule was really protecting: it
+    # can never be the unfinished forward day. Today's row exists from the
+    # moment the first barn reports -- 2026-10-21 stood at 248 locations and
+    # 868 same-day head against Tuesday's 303 and 19,504 -- and quoting that
+    # as the index is the 2026-10-07 defect over again.
+    #
+    # Weekdays only: fci_daily carries Friday forward across Saturday and
+    # Sunday (10/17 and 10/18 both hold 343.45715 to the digit), and those
+    # rows are filler, not sessions.
+    # INJECTABLE, so a test is not a function of the day it runs on.
+    # What counts as a completed session depends on today's date, and a
+    # test that reads the real clock passes in October and fails in
+    # November for no reason anyone will remember.
+    today_ct = today or config.now_central().date()
+    completed = sorted(d for d in merged
+                       if d < today_ct and d.weekday() < 5)
+    s_date = completed[-1] if completed else None
+    s_prev_date = completed[-2] if len(completed) > 1 else None
 
     pub_block = None
     if s_date is not None:

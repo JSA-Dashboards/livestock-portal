@@ -18,6 +18,7 @@ Both numbers were real, so nothing raised. A change that contradicts the
 dashboard is wrong however it was computed.
 """
 import sys
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -122,87 +123,130 @@ def test_the_prior_tracks_whatever_cme_actually_printed(monkeypatch, published_v
     assert sources.fetch_feeder_index()["change"] == expected
 
 
-# -- The weekend carry-forward, 2026-10-20 --------------------------------
+# -- Which session the letter quotes -------------------------------------
 #
-# Ross, writing the Tuesday letter: "the feeder cattle index isn't updating
-# to either today's FCI - which the CME just released - or using our JSA
-# Daily FCI Estimate. It's stale with yesterday's CME fci."
+# Settled over two days and two reports from Ross.
 #
-# Two things combined, and both of these rows are the real ones.
+# 2026-10-20, the Tuesday: the line printed 343.46 dated SUNDAY 10/18 --
+# Friday's number -- where CME had published 342.16 for Monday that
+# morning. fci_daily carries Friday forward over the weekend (10/17 and
+# 10/18 both hold 343.45715454692953 to the digit) and the old rule took
+# "the last date before the headline", which on a Tuesday is Sunday.
 #
-#   fci_daily CARRIES FRIDAY FORWARD. 10-17 and 10-18 hold Friday's
-#   343.45715454692953 to the digit, with no same-day price on either. They
-#   are filler; nothing trades on a Sunday.
+# 2026-10-21, the Wednesday: *"now my email for this afternoon isn't
+# updating to today's fci estimate or the cme fci."* CME had computed
+# 10/20 and it was on his QST screen, but the only channel this pipeline
+# reads is the FTP settlement archive, which lands the next day about
+# 13:00-14:35 CT and on that day had not landed at all by 16:14. Keying
+# the line on CME's archive alone therefore froze it on Monday.
 #
-#   THE HEADLINE DEGRADES ONTO A REAL SESSION. headline_index_date() returns
-#   the business day after CME's last file only while we hold an estimate for
-#   it. The MARS ingest had not produced 10-20 yet, so it fell back to
-#   max(available) = 10-19 -- which is exactly the date CME had just
-#   published, and "the last date before the headline" then skipped it for
-#   Sunday's filler.
-WEEKEND_OURS = pd.DataFrame({
-    "date": ["2026-10-15", "2026-10-16", "2026-10-17", "2026-10-18", "2026-10-19"],
+# Ross's call: the most recent COMPLETED session, CME's print where they
+# have archived it and ours where they have not. Our reconstruction is
+# within 0.022 of their print over the 21 days both cover (median 0.004),
+# so that costs a rounding cent and buys a day of currency.
+#
+# Real rows throughout.
+OURS_1021 = pd.DataFrame({
+    "date": ["2026-10-15", "2026-10-16", "2026-10-17", "2026-10-18",
+             "2026-10-19", "2026-10-20", "2026-10-21"],
     "fci_value": [343.5498980512278, 343.45715454692953, 343.45715454692953,
-                  343.45715454692953, 342.16265226582874],
+                  343.45715454692953, 342.16265226582874,
+                  342.77714544819287, 342.0953710021258],
 })
-WEEKEND_PUBLISHED = pd.DataFrame({
+PUBLISHED_1021 = pd.DataFrame({
     "date": ["2026-10-15", "2026-10-16", "2026-10-19"],
     "fci_value": [343.54, 343.45, 342.16],
 })
+# The Tuesday, before our 10/20 and 10/21 rows existed.
+OURS_1020 = OURS_1021.iloc[:5].copy()
 
 
-def test_the_published_line_is_the_index_cme_actually_printed(monkeypatch):
-    """What the evening letter prints. It read 343.46 for Sunday 10-18."""
-    _install(monkeypatch, WEEKEND_OURS, WEEKEND_PUBLISHED)
-    pub = sources.fetch_feeder_index()["published"]
+def test_the_tuesday_printed_a_sundays_filler(monkeypatch):
+    """2026-10-20. It read 343.46 for Sunday 10/18; CME had printed 342.16."""
+    _install(monkeypatch, OURS_1020, PUBLISHED_1021)
+    pub = sources.fetch_feeder_index(today=date(2026, 10, 20))["published"]
     assert pub["value"] == 342.16
     assert pub["date"] == "2026-10-19"
-    assert pub["from_cme"] is True
+    assert pub["from_cme"] is True, "CME's print must win for a date they cover"
 
 
-def test_the_published_change_matches_cmes_own_reported_change(monkeypatch):
+def test_the_change_matches_cmes_own_reported_change(monkeypatch):
     """
-    THE FREE AUDIT. cme_ftp_daily carries REPORTED_CHANGE, and CME printed
-    -1.29 for 10-19. Differenced against Sunday's filler it came out -1.30,
+    THE FREE AUDIT. cme_ftp_daily carries REPORTED_CHANGE and CME printed
+    -1.29 for 10/19. Differenced against Sunday's filler it came out -1.30,
     because merged holds CME's rounded 343.45 for Friday and our unrounded
     343.457 for the filler. One cent, on the figure the letter and the
     dashboard must agree about.
     """
-    _install(monkeypatch, WEEKEND_OURS, WEEKEND_PUBLISHED)
-    fci = sources.fetch_feeder_index()
-    assert fci["published"]["change"] == -1.29      # CME's REPORTED_CHANGE
-    assert fci["change"] == -1.29                   # and the headline's too
+    _install(monkeypatch, OURS_1020, PUBLISHED_1021)
+    fci = sources.fetch_feeder_index(today=date(2026, 10, 20))
+    assert fci["published"]["change"] == -1.29
+    assert fci["change"] == -1.29
 
 
-def test_the_published_date_is_never_a_weekend(monkeypatch):
-    """The property, rather than this one Tuesday's numbers."""
-    import datetime as _dt
-    _install(monkeypatch, WEEKEND_OURS, WEEKEND_PUBLISHED)
-    pub = sources.fetch_feeder_index()["published"]
-    assert _dt.date.fromisoformat(pub["date"]).weekday() < 5
+def test_the_wednesday_moves_on_without_cmes_archive(monkeypatch):
+    """
+    2026-10-21. CME's archive still stops at 10/19, but Tuesday is a
+    finished session and we hold it, so that is what the letter quotes.
+    """
+    _install(monkeypatch, OURS_1021, PUBLISHED_1021)
+    fci = sources.fetch_feeder_index(today=date(2026, 10, 21))
+    pub = fci["published"]
+    assert pub["value"] == 342.78
+    assert pub["date"] == "2026-10-20"
+    assert pub["from_cme"] is False, "ours, and the source line must say so"
+    # against Monday, which is CME's own print -- 342.78 - 342.16
+    assert pub["change"] == 0.62
 
 
-def test_a_missing_cme_table_still_skips_the_filler(monkeypatch):
+def test_it_is_never_todays_unfinished_session(monkeypatch):
+    """
+    THE PROPERTY THE OLD RULE WAS REALLY PROTECTING. Today's row exists
+    from the first barn report -- 10/21 stood at 248 locations and 868
+    same-day head against Tuesday's 303 and 19,504 -- and quoting it as
+    the index is the 2026-10-07 defect over again.
+    """
+    _install(monkeypatch, OURS_1021, PUBLISHED_1021)
+    for day in (date(2026, 10, 20), date(2026, 10, 21), date(2026, 10, 22)):
+        pub = sources.fetch_feeder_index(today=day)["published"]
+        assert pub["date"] < day.isoformat(), f"quoted an unfinished session on {day}"
+
+
+def test_the_date_is_never_a_weekend(monkeypatch):
+    """Monday and Tuesday both reach back past the carry-forward rows."""
+    _install(monkeypatch, OURS_1021, PUBLISHED_1021)
+    for day in (date(2026, 10, 19), date(2026, 10, 20), date(2026, 10, 21)):
+        pub = sources.fetch_feeder_index(today=day)["published"]
+        assert date.fromisoformat(pub["date"]).weekday() < 5, f"weekend row on {day}"
+
+
+def test_a_missing_cme_table_still_answers(monkeypatch):
     """
     The deployed app had no cme_ftp_daily on 2026-10-07, so this path is
-    live. It must not fall back to the forward estimate -- and it must not
-    land on a Sunday either.
+    live. It must not blank the line and must not fall back to the forward
+    estimate -- it is our own completed session, labelled as ours.
     """
-    _install(monkeypatch, WEEKEND_OURS, None)
-    fci = sources.fetch_feeder_index()
+    _install(monkeypatch, OURS_1021, None)
+    fci = sources.fetch_feeder_index(today=date(2026, 10, 21))
     pub = fci["published"]
     assert pub is not None, "a missing CME table must not blank the line"
+    assert pub["date"] == "2026-10-20"
+    assert pub["value"] == 342.78
     assert pub["from_cme"] is False
-    # Friday, not Sunday: the headline degrades to 10-19 with no CME series,
-    # so the last completed session before it is 10-16 and NOT 10-18.
-    assert pub["date"] == "2026-10-16"
-    assert pub["value"] == 343.46
-    assert pub["change"] == -0.09
 
 
-def test_the_headline_is_still_our_own_estimate_for_its_date(monkeypatch):
+def test_the_headline_is_still_our_own_estimate(monkeypatch):
     """Nothing here may move the morning brief's figure off fci_daily."""
-    _install(monkeypatch, WEEKEND_OURS, WEEKEND_PUBLISHED)
-    fci = sources.fetch_feeder_index()
+    _install(monkeypatch, OURS_1021, PUBLISHED_1021)
+    fci = sources.fetch_feeder_index(today=date(2026, 10, 21))
     assert fci["source"] == "JSA estimate (fci_daily)"
-    assert fci["date"] == "2026-10-19"
+
+
+def test_today_is_injectable_so_the_tests_are_not_a_function_of_the_clock():
+    """
+    What counts as a completed session depends on today's date. A test
+    reading the real clock passes in October and fails in November for no
+    reason anyone will remember.
+    """
+    import inspect
+    assert "today" in inspect.signature(sources.fetch_feeder_index).parameters
