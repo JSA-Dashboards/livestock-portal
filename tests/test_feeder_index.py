@@ -62,9 +62,10 @@ def _install(monkeypatch, ours, published):
 
     monkeypatch.setattr(sources, "_load_fci_db", lambda: DB)
     # index_dates is NOT stubbed. It has no database of its own, so the real
-    # headline rule runs here -- "the first business day after CME's last
-    # published file" -- and these tests would catch a change to it rather
-    # than quietly re-implementing it in a fake.
+    # headline rule runs here -- since 2026-10-22, "the freshest complete
+    # estimate": the most recent weekday strictly before today. These tests
+    # would catch a change to it rather than quietly re-implementing it in a
+    # fake, which is how they caught that change.
 
 
 def test_the_change_uses_cmes_published_prior_not_our_estimate(monkeypatch):
@@ -79,9 +80,15 @@ def test_the_change_uses_cmes_published_prior_not_our_estimate(monkeypatch):
 
 def test_the_headline_value_stays_our_own_estimate(monkeypatch):
     """
-    CME has not printed the headline date by definition -- it is the first
-    business day AFTER their last file -- so the headline must stay JSA's
-    number. Only the PRIOR date gets overridden.
+    The headline must stay JSA's number whenever CME has not printed that date,
+    and only the PRIOR date gets overridden.
+
+    NOT "by definition" ANY MORE. Until 2026-10-22 the headline was the first
+    business day AFTER CME's last file, so it could never be a printed date and
+    this held for free. The rule now follows the calendar instead, so once CME
+    catches up the headline CAN be a date CME has published -- and then the
+    value is rightly CME's, and the page relabels the tile "Current Index".
+    Here CME stops at 09-29 and the headline is 09-30, so ours still wins.
     """
     _install(monkeypatch, OURS, PUBLISHED)
     out = sources.fetch_feeder_index()
