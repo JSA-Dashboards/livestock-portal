@@ -984,15 +984,28 @@ header_slot = st.container()
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
 
-# SEVEN TABS IS THE DENSEST PAGE ON THE PORTAL AND A CLIENT GETS FOUR.
-# Summary, COF Recap, On-Feed & Flows and Heifers on Feed each answer a market
-# question off the report USDA just published. The three that go are the ones
-# that answer a research question instead: Seasonality overlays eight years to
-# show the shape of a normal calendar, State Comparison is a fourteen-state
-# ranking nobody trades off, and Data is the raw frame.
+# SEVEN TABS IS THE DENSEST PAGE ON THE PORTAL AND A CLIENT GETS THREE.
+# Summary, On-Feed & Flows and Heifers on Feed each answer a market question
+# off the report USDA just published. Seasonality overlays eight years to show
+# the shape of a normal calendar, State Comparison is a fourteen-state ranking
+# nobody trades off, and Data is the raw frame -- research, not a reading.
+#
+# COF RECAP GOES FOR A DIFFERENT REASON, and the docstring below still calls it
+# "the client one-pager", which is true of the ARTEFACT and not of this tab.
+# Ross builds the recap here and sends it out himself (2026-10-23: "the clients
+# don't need to see the COF Recap page that I use to edit and send to
+# clients"). What a client receives is the finished one-pager in their inbox;
+# the live tab is the workbench it was made on, and showing both invites the
+# question of why they disagree -- which they will, since this tab re-reads
+# USDA's file every hour and the thing they were sent did not.
+#
+# Hiding it also skips `_latest_recap()`, which fetches and parses USDA's
+# released report text -- the body is behind `if tab_recap.open:`, so a client
+# costs that fetch nothing.
 tab_summary, tab_recap, tab_flows, tab_season, tab_heifer, tab_state, tab_data = portal_view.tabs([
     "⭐  Summary", "📄  COF Recap", "📊  On-Feed & Flows", "📅  Seasonality", "🐄  Heifers on Feed", "🗺️  State Comparison", "📋  Data",
-], hide={"📅  Seasonality", "🗺️  State Comparison", "📋  Data"}, on_change="rerun")
+], hide={"📄  COF Recap", "📅  Seasonality", "🗺️  State Comparison", "📋  Data"},
+    on_change="rerun")
 
 # ── COF Recap ─────────────────────────────────────────────────────────────────
 # The client one-pager, drawn BEFORE the QuickStats load on purpose: it reads

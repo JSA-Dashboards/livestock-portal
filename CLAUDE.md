@@ -42,7 +42,21 @@ descriptions. Ross asked for exactly that.
 2. **Raw `Data` tabs and the download panels under them.**
 3. **Method and audit furniture** — "How this is built" tabs, "Technical
    details" expanders, provenance sidebars, "(JSA internal)" blocks.
-4. **Anything commercial, and anything built from somebody else's product.**
+4. **The workbench a client-facing artefact was built on.** Cattle on Feed's
+   **COF Recap** tab is gone from the client view (2026-10-23: "the clients
+   don't need to see the COF Recap page that I use to edit and send to
+   clients"). The section further down this file opens by calling it "the
+   client one-pager" and that is still true of the ARTEFACT -- it is false of
+   the TAB. Ross builds the recap there and emails it; what a client holds is
+   the finished sheet. The live tab re-reads USDA's released file every hour
+   and the thing they were sent did not, so showing both is an invitation to
+   ask why two JSA figures disagree -- the failure this file records five
+   times over. Hiding it also skips `_latest_recap()`, since the body is
+   behind `if tab_recap.open:`.
+
+   Cattle on Feed is now **3 client tabs out of 7**.
+
+5. **Anything commercial, and anything built from somebody else's product.**
    Added 2026-10-23 on Ross's "the clients don't need to see the versus CIH &
    Compass table". That panel scores JSA's call against the two desks it
    competes with, off THEIR published figures hand-entered from their daily
