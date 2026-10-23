@@ -507,7 +507,22 @@ Beyond the Snowflake block (`USE_SNOWFLAKE=1`, `SNOWFLAKE_ACCOUNT`/`USER`/
 
 - `MARS_API_KEY` — Beef Trimmings. Reads USDA MARS `NW_LS421`. No fallback: the
   page fails on load without it.
-- `NASS_API_KEY` — Cattle on Feed. Still calls USDA NASS live. No fallback.
+- `NASS_API_KEY` — **NOT READ BY THIS REPO, and this line said "Cattle on Feed.
+  Still calls USDA NASS live. No fallback." until 2026-10-23.** Nothing here
+  calls NASS live. Cattle on Feed, Cold Storage, Cattle Weights, Livestock
+  Inventory and US Cow Herd all go through the vendored `nass_cache_client.py`,
+  which reads `JSA.NASS_CACHE` over Snowflake; the key lives in the separate
+  `usda-nass-etl` job that FILLS that cache on a daily schedule. A repo-wide
+  grep finds the name only in those docstrings. (`Client.py` still lists it as
+  required — that is a third statement and was not reconciled here.)
+
+  **The practical consequence, and why it is worth knowing on a release day:**
+  these pages cannot be made fresher by fixing a key. On 2026-10-23 the COF
+  Recap tab had the October report within minutes — it reads USDA's released
+  text directly over plain HTTP — while every other tab on the same page still
+  showed September, because QuickStats and then the ETL had not carried the new
+  month yet. Two halves of one page on two different clocks. Check
+  `JSA.NASS_CACHE`'s newest row before suspecting the dashboard.
 - `MASSIVE_API_KEY` — Seasonal Futures & Spreads
 - `ANTHROPIC_API_KEY` — the Ask AI tab
 - `CHAT_PASSPHRASE`
@@ -1558,8 +1573,165 @@ Two things in it look wrong and are not:
   offsets were derived from one example sheet, so a wrong window is a wrong
   offset in `WEIGHT_CLASSES`, not a parsing bug.
 
-The tab sits behind the page's `st.stop()` guard, so a QuickStats outage takes
-it down even though it needs no API key. Known, not yet changed.
+**THE TAB DOES NOT SIT BEHIND THE PAGE'S `st.stop()` GUARD, and this said it
+did.** It read "a QuickStats outage takes it down even though it needs no API
+key. Known, not yet changed." Read off the file on 2026-10-23: `with tab_recap:`
+is at app.py:975 and the `st.stop()` that fires on an empty QuickStats load is
+at app.py:1065, ninety lines further down. The tab body runs first and its
+content is already in the container, so the recap survives the outage — which
+is what the comment above the block has claimed all along. The stale line
+invited someone to "fix" something that was already right.
+
+## The COF Recap's letterhead
+
+Added 2026-10-23 at Ross's ask: *"i want to have the JSA logo and watermarks on
+the page so when I print it- it looks like my daily emails do."* He sends this
+one-pager to the same clients who get the daily letter, so it now carries the
+same stationery — wordmark top-right on the title row, the 50-years roundel
+faint behind the table, a hairline sage frame.
+
+**`letter/render.py` IS THE AUTHORITY AND NOTHING IS IMPORTED FROM IT.** That
+module builds an 8.5x11in HTML document; this is a 520x740 Plotly figure. There
+is no code to share, only geometry, so every rule is restated in `cof_recap.py`
+as a FRACTION OF THE PAGE and multiplied back out — which is what makes the two
+look alike at different sizes:
+
+| letter/render.py | here |
+|---|---|
+| `.wm` width 4.4in of 8.5in | `WM_WIDTH_FRAC = 0.52` |
+| `.wm top: 46%` | `WM_CENTRE_Y = 0.46` |
+| `.wm opacity: 0.07` | `WM_OPACITY = 0.07` |
+| `.masthead img` height 0.34in of 11in | `LOGO_H_FRAC = 0.031` |
+| `config.FRAME` / `FRAME_WIDTH` | `BRAND_SAGE` / `FRAME_PT` |
+
+`tests/test_cof_letterhead.py` imports `letter.config` and compares, so
+restyling the letter's frame fails THERE rather than leaving two subtly
+different pieces of stationery going to the same clients. Nothing else connects
+the two files.
+
+### Four things in it that look wrong and are not
+
+- **`FRAME_INSET` is NOT the letter's 0.52in**, and copying it literally is the
+  mistake. There the frame sits 0.33in OUTSIDE a text block beginning at
+  0.85in; here the text begins at 34px, which is 6.5% of 520 and already
+  tighter than 0.52in would be. Taken literally the frame lands 2px off the
+  first column and reads as a box drawn round the table. It is 14px.
+- **The asset aspect is read from each PNG's IHDR, not written down.**
+  `sizex` and `sizey` are fractions of two DIFFERENT lengths, so one number for
+  both squashes the wordmark into something still perfectly legible — and a
+  hard-coded constant that stops matching the file does the same thing
+  silently. Eight bytes of header slicing, and no new dependency: Pillow is not
+  in `requirements.txt` and this must not be what puts it there.
+- **Both sources are embedded data URIs, never paths.** The figure is
+  serialised to JSON, cached, and handed to kaleido IN A SEPARATE PROCESS, so a
+  relative path resolves against whatever directory that process is in and
+  exports a silently image-less PNG.
+- **`FIG_H` is 740, not the original 690.** At 690 the page had no bottom
+  margin at all: the weight-class block ends on its Total row near y=644 and
+  the source line sat 12px under it, reading as a fourth entry in the table.
+  Ross, on the HubSpot image: *"should sit further down in the left hand corner
+  so it's not right next to the numbers."* The extra 50px is bottom margin
+  only — **every annotation on this page is positioned in pixels FROM THE
+  TOP**, which is the whole reason the figure could grow without relaying out
+  the table.
+
+### What Ross changed on the day, and why each one is not arbitrary
+
+- **The data column is black.** It was `#963634`, the maroon carried over from
+  the hand-built Excel original. The title and column headers were already
+  black, so the page now has one ink. The footer and the missing-report note
+  stay muted grey — they are provenance and a caveat, not data.
+- **A `Total Head` heading** over the weight-class figures, between `Weight
+  Classes Placed` and `Marketing Window`. That column had no heading at all, so
+  the only thing naming it was the `Total` row at its foot. Right-aligned on
+  270 like the figures beneath it: the two headings either side are
+  left-aligned on their own text, and matching THEM hangs this one off the
+  wrong edge of the column it labels.
+- **`Released` and `Guesses` are capitalised** in the footer. Going with the
+  capital `N` Ross asked for on the missing-report note — `Released Oct 23,
+  2026 · guesses: Reuters poll` on one line reads as an oversight.
+
+### The export was already a single page; what was missing is that it said so
+
+Ross also asked for *"a print to hubspot single page like we have for the daily
+emails"*. The letter needs html2canvas because it is an HTML document that has
+to be captured, and it has TWO exports with different capture heights — the
+paged one rounds up to whole sheets, the HubSpot one must not, and getting that
+wrong is what put 951px of blank paper in a client email and threw the
+watermark off centre.
+
+**None of that applies here.** The figure is one page by construction, kaleido
+already renders it, and the PNG this page has always produced IS the single
+image HubSpot wants. So the fix was naming: the buttons are `Save one image
+(HubSpot)` and `Download PDF (print)`, the letter's own vocabulary. Porting
+html2canvas would have added a second renderer that could disagree with the
+figure, for nothing.
+
+### USDA PUBLISHED NO OCTOBER 2025 CATTLE ON FEED REPORT
+
+Established 2026-10-23 because the Year-Ago column came back empty. It is not a
+fetch bug and not a hole in `Todays_Reports` alone:
+
+- `cofd1025.txt` 404s while `cofd0925.txt` and `cofd1125.txt` both serve, so it
+  is not a retention window closing.
+- **ESMIS does not have it either** — the publication page's own date filter
+  steps straight from Sep 2025 to Nov 2025.
+
+Two independent sources, so the column is right to be empty. But three bare
+em-dashes on a client page read as a broken fetch, so it prints `No Oct 2025
+report`, centred on the Year-Ago column. **It does not say WHY.** A government
+shutdown is the obvious guess and it was not checked, and this file's standing
+rule is that a caption with no cause beats a caption with a plausible wrong one.
+
+Centred at `C3 - 14` rather than right-aligned on the C3 rule: right-aligned,
+the line is far wider than the column it explains, so it hangs left and sits
+under Guesses — Ross, *"needs moved over and centered better. looks weird where
+it's at."* `published` came off the end for the same reason; centred, it
+reached back over Guesses again.
+
+### The cache held an hour, on the one page where that is fatal
+
+`_latest_recap` was `@st.cache_data(ttl=3600)`. On release afternoon that is
+exactly wrong: the entry predates USDA's 2pm CT post and the page serves last
+month until it expires. **Seen live on 2026-10-23** — October was on
+nass.usda.gov, a local run read it fine, and the deployed tab still showed
+September. Ross: *"mine isn't showing updated."*
+
+It is `ttl=300` now, and a **`Check for a new release`** button calls
+`_latest_recap.clear()` and reruns, which closes the window rather than
+narrowing it. The fetch is two small text GETs behind `if tab_recap.open:`, so
+the hour was buying almost nothing and cost the one afternoon it mattered.
+
+**The instant fix on any deployed Streamlit app is the ⋮ menu → Clear cache →
+Rerun**, which needs no reboot and so does not disturb whoever is mid-letter.
+Worth reaching for before a reboot.
+
+### VERIFYING THIS LOCALLY IS HARDER THAN IT LOOKS — three dead ends
+
+None of these is a code problem and all three cost time on 2026-10-23.
+
+- **The base interpreter has plotly 7.0.0 while `requirements.txt` pins
+  `<6`.** `fig.to_image()` therefore refuses outright, demanding
+  `kaleido>=1` — which reads as the export being broken when it is the local
+  environment that does not match the deploy. Check `plotly.__version__`
+  before concluding anything about the export.
+- **kaleido 0.2.1 cannot start in this sandbox at all**: `Failed to start
+  Kaleido subprocess ... Cannot create Pref Service with no user data dir`. So
+  **the PNG/PDF path cannot be exercised on this machine**, with any
+  interpreter. It works on the deployed host; verify it there, or by eye in a
+  browser.
+- **A pinned venv built with `uv` cannot reach USDA** — `SSLError
+  (UNEXPECTED_EOF_WHILE_READING)` against nass.usda.gov, where the base
+  interpreter is fine. If you build one, decouple: fetch the recap with the
+  base interpreter, dump it to JSON, and render from that.
+
+**What does work, and is the better check anyway:** `fig.to_html()` into a file
+and screenshot it with headless Edge via `letter/topdf.find_browser()`. That
+renders through plotly.js — the same path `st.plotly_chart` uses — so it shows
+what Ross actually sees on the page, and it is how every layout fix above was
+checked before shipping. Poll for the file and retry: headless Edge exits 0
+before the screenshot is flushed, the trap `letter/topdf._wrote` already
+documents for PDFs.
 
 ## The Data tab's "% of year ago"
 
@@ -1658,7 +1830,10 @@ release at `esmis.nal.usda.gov/.../cost{MM}{YY}.pdf` is one month with two
 comparison columns. QuickStats carries the same series from **1917** for beef,
 pork, lamb, turkey and cheese (1915 for butter, 1972 for the boneless/bone-in
 beef split), which is the only reason a real history exists here. No new
-secret — it is the `NASS_API_KEY` this page already requires.
+secret — it reads the same `JSA.NASS_CACHE` the rest of the page does, through
+`nass_cache_client.fetch_cached`. (This said "it is the `NASS_API_KEY` this
+page already requires" until 2026-10-23; that page requires no such key — see
+Required secrets above.)
 
 Four things that look wrong and are not:
 
