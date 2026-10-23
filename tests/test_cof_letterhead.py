@@ -158,13 +158,13 @@ def test_the_frame_does_not_crowd_the_first_column():
 # ── the empty year-ago column ────────────────────────────────────────────────
 
 def _notes(fig):
-    return [a["text"] for a in fig.layout.annotations if "report published" in a["text"]]
+    return [a["text"] for a in fig.layout.annotations if a["text"].startswith("No ") and "report" in a["text"]]
 
 
 def test_an_empty_year_ago_column_says_why():
     """Three bare em-dashes on a client page read as a broken fetch."""
     notes = _notes(_fig(year_ago={}))
-    assert notes == ["No Oct 2025 report published"], notes
+    assert notes == ["No Oct 2025 report"], notes
 
 
 def test_a_populated_year_ago_column_says_nothing():
@@ -174,4 +174,4 @@ def test_a_populated_year_ago_column_says_nothing():
 def test_the_note_names_the_year_before_the_report():
     """Not 'last year' and not this year — the month that is missing."""
     assert _notes(_fig(year_ago={}, month=1, year=2027)) == \
-        ["No Jan 2026 report published"]
+        ["No Jan 2026 report"]

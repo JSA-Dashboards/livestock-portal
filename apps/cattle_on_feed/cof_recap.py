@@ -418,10 +418,17 @@ def build_figure(recap: dict, guesses: dict = None, footer: bool = True,
     # verified is worth less than none.
     if not any(year_ago.get(k) is not None
                for k in ("on_feed", "placed", "marketed")):
-        ann.append(_ann(C3, y - 8,
-                        f"No {MONTH_ABBR[recap['month'] - 1]} {recap['year'] - 1} "
-                        "report published",
-                        color=MUTED, size=8))
+        # CENTRED ON THE YEAR-AGO COLUMN, not right-aligned on its rule. Right
+        # aligned at C3 the line is far wider than the column it explains, so it
+        # hangs left and sits under Guesses -- Ross, 2026-10-23: "needs moved
+        # over and centered better. looks weird where it's at". C3-14 is about
+        # the optical centre of the column: its values right-align at C3 and its
+        # header runs ~45px left of it. Shortened to suit -- "published" put the
+        # line back over Guesses, and the em-dashes beside it already say the
+        # figures are absent rather than zero.
+        ann.append(_ann(C3 - 14, y - 8,
+                        f"No {MONTH_ABBR[recap['month'] - 1]} {recap['year'] - 1} report",
+                        color=MUTED, size=8, align="center"))
 
     ann.append(_ann(34, 222, "Percent of Last Year", align="left"))
     for x, lab in ((C1, "On-Feed"), (C2, "Placed")):
