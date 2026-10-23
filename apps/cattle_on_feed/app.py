@@ -1002,8 +1002,8 @@ header_slot = st.container()
 # Hiding it also skips `_latest_recap()`, which fetches and parses USDA's
 # released report text -- the body is behind `if tab_recap.open:`, so a client
 # costs that fetch nothing.
-tab_summary, tab_recap, tab_flows, tab_season, tab_heifer, tab_state, tab_data = portal_view.tabs([
-    "⭐  Summary", "📄  COF Recap", "📊  On-Feed & Flows", "📅  Seasonality", "🐄  Heifers on Feed", "🗺️  State Comparison", "📋  Data",
+tab_summary, tab_recap, tab_flows, tab_weights, tab_season, tab_heifer, tab_state, tab_data = portal_view.tabs([
+    "⭐  Summary", "📄  COF Recap", "📊  On-Feed & Flows", "⚖️  Placements by Weight", "📅  Seasonality", "🐄  Heifers on Feed", "🗺️  State Comparison", "📋  Data",
 ], hide={"📄  COF Recap", "📅  Seasonality", "🗺️  State Comparison", "📋  Data"},
     on_change="rerun")
 
@@ -1170,6 +1170,96 @@ with tab_recap:
                     st.rerun()
 
 
+# ── Placements by weight ─────────────────────────────────────────────────────
+# Asked for 2026-10-23: the weight classes placed, the head in each, and when
+# those cattle come to market.
+#
+# EVERY FIGURE HERE ALREADY EXISTED. build_recap returns `weight_classes` as
+# (label, head, window) and `placed_total`, and until now both went only into
+# the PNG one-pager Ross emails. This RENDERS that object; it does not
+# recompute any of it, so the tab and the sheet cannot drift -- the failure
+# this file records five times over.
+#
+# ABOVE THE QUICKSTATS GUARD, like COF Recap and for the same reason: it reads
+# USDA's released report text over plain HTTP and needs neither that API nor a
+# key, so an outage there must not take it down.
+#
+# BOTH VIEWS, unlike COF Recap directly above. The one-pager is Ross's to
+# author and send; which weights went on feed and when they market is a market
+# reading, and clients get it. It costs them nothing extra -- same cached
+# _latest_recap() the Recap tab uses, so on the client app, where that tab is
+# hidden, this is the only thing that calls it.
+with tab_weights:
+    if tab_weights.open:
+        _wr, _, _werr = _latest_recap()
+        if _werr:
+            st.error(_werr)
+        elif not _wr or not _wr.get("weight_classes"):
+            st.info("USDA's latest release carries no weight-class breakdown.")
+        else:
+            _wc = _wr["weight_classes"]
+            _wsum = sum(h for _lbl, h, _win in _wc if h)
+            _wtot = _wr.get("placed_total")
+
+            st.markdown(
+                f'<div class="sec-hdr">Placed on feed by weight &mdash; '
+                f'{_wr["placement_month"]}</div>', unsafe_allow_html=True)
+
+            _wrows = []
+            for _lbl, _head, _win in _wc:
+                _h = f"{_head:,}" if _head else "&mdash;"
+                _s = f"{_head / _wsum * 100:.1f}%" if _head and _wsum else "&mdash;"
+                _wrows.append(f"<tr><td>{_lbl}</td><td>{_h}</td>"
+                              f"<td>{_s}</td><td>{_win}</td></tr>")
+            _wrows.append(
+                f'<tr style="font-weight:700"><td>All weights</td>'
+                f'<td>{_wsum:,}</td><td>100.0%</td><td>&mdash;</td></tr>')
+
+            # st.html, not st.markdown: the six-state table on the index page
+            # shipped as an unstyled grid because a literal tag inside a style
+            # comment ended the style element, and markdown has eaten tables on
+            # this portal before. st.html does not run the markdown parser.
+            st.html(
+                '<table class="sum-table">'
+                '<thead><tr>'
+                '<th>Weight placed</th>'
+                '<th>Head placed</th>'
+                '<th>Share of placements</th>'
+                '<th>Expected marketing window</th>'
+                '</tr></thead><tbody>' + "".join(_wrows) + '</tbody></table>'
+            )
+
+            # A FREE AUDIT, checked live rather than asserted. USDA publishes
+            # the six classes and the placement total independently, so they
+            # must agree -- they do, exactly, on the September 2026 report
+            # (1,777,000 both ways). A shifted or missed class is the failure
+            # that does not look wrong on a table of plausible head counts.
+            if _wtot and _wsum == _wtot:
+                st.caption(
+                    f"The six classes sum to **{_wsum:,} head** — exactly the placement "
+                    f"total USDA publishes in the same report, which is the check that "
+                    f"no class has been missed or misread.")
+            elif _wtot:
+                st.warning(
+                    f"These classes sum to {_wsum:,} head against USDA's published "
+                    f"placement total of {_wtot:,} — a difference of "
+                    f"{_wsum - _wtot:+,}. One of the two is being read wrongly; "
+                    f"treat the breakdown as unreliable until that is resolved.")
+
+            # THE WINDOW IS JSA'S, NOT USDA'S, and saying so is not optional.
+            # USDA publishes the head in each class and nothing about when
+            # those cattle market; the months are a fixed per-class offset in
+            # cof_recap.WEIGHT_CLASSES, derived from one example sheet. A
+            # reader who takes it for a USDA forecast has been misled by us.
+            st.caption(
+                "**USDA publishes the head; the marketing window is JSA's.** It is a "
+                "fixed offset from the placement month — ten to eleven months out for "
+                "cattle under 600 lb, down to four to five months for 1,000 lb and "
+                "over — so read it as a planning guide rather than a USDA forecast. "
+                "Placements are for the month USDA reports, which is the month before "
+                "the report's own title.")
+
+
 # ── Load data ────────────────────────────────────────────────────────────────
 
 # Spinner goes in the reserved header slot, not here: this block now runs after
@@ -1195,6 +1285,12 @@ with header_slot:
         inv_full   = overlay_released(inv_full,   "inventory",  _rows)
         place_full = overlay_released(place_full, "placements", _rows)
         sales_full = overlay_released(sales_full, "marketings", _rows)
+        # The quarterly class split, carried only by the Jan/Apr/Jul/Oct
+        # reports. heifer_pct_frame divides these by inv_full, which is
+        # overlaid above, so all three sides of that ratio come from the same
+        # release rather than two of them moving and one lagging a quarter.
+        heifer     = overlay_released(heifer,     "heifers",    _rows)
+        steer      = overlay_released(steer,      "steers",     _rows)
 
 if inv.empty:
     with header_slot:

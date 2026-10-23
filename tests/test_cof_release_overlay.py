@@ -67,6 +67,18 @@ Cattle Marketed on 1,000+ Capacity Feedlots by Month - States and United States:
 Iowa .............:       74             59             68            92            115
 United States ....:    1,632          1,517          1,524            93            100
 ------------------------------------------------------------------------------
+
+Cattle on Feed by Class on 1,000+ Capacity Feedlots by Quarter - States and United States:
+2025 and 2026
+------------------------------------------------------------------------------
+                    :       Steers and steer calves        :      Heifers and heifer calves
+        State       :   Oct 1,   :   Jul 1,   :   Oct 1,   :   Oct 1,   :   Jul 1,   :   Oct 1,
+                    :    2025    :    2026    :    2026    :    2025    :    2026    :    2026
+------------------------------------------------------------------------------
+                    :                                 1,000 Head
+Iowa ...............:     550          540          540          140          140          140
+United States ......:   7,063        7,120        7,072        4,355        4,250        4,300
+------------------------------------------------------------------------------
 """
 
 
@@ -113,6 +125,69 @@ def test_the_offsets_differ_between_the_two_kinds_of_table():
 ])
 def test_month_shift_rolls_the_year(y, m, delta, expect):
     assert cof_recap._shift(y, m, delta) == expect
+
+
+# ── the quarterly class split ────────────────────────────────────────────────
+
+def test_the_class_split_steps_back_a_QUARTER_not_a_month():
+    """Its header reads "Oct 1, 2025 | Jul 1, 2026 | Oct 1, 2026" per class.
+
+    Reuse the monthly -1 and July's figure is filed under September — a quarter
+    the series has never had a value for, so a real number lands on a date USDA
+    never published and the chart simply grows a point.
+    """
+    assert _one("heifers", "United States", 2026, 10) == 4_300_000
+    assert _one("heifers", "United States", 2026, 7) == 4_250_000     # prior QUARTER
+    assert _one("heifers", "United States", 2025, 10) == 4_355_000
+    assert not [r for r in _rows()
+                if r["series"] == "heifers" and (r["year"], r["month"]) == (2026, 9)]
+
+
+def test_steers_and_heifers_read_their_own_halves_of_the_row():
+    """Six columns: steers for three periods, then heifers for the same three.
+    Off-by-three here swaps the two classes and the share inverts."""
+    assert _one("steers", "United States", 2026, 10) == 7_072_000
+    assert _one("heifers", "United States", 2026, 10) == 4_300_000
+    assert _one("steers", "Iowa", 2026, 10) == 540_000
+    assert _one("heifers", "Iowa", 2026, 10) == 140_000
+
+
+@pytest.mark.parametrize("state", ["United States", "Iowa"])
+@pytest.mark.parametrize("period", [(2026, 10), (2025, 10)])
+def test_steers_plus_heifers_equals_the_inventory(state, period):
+    """USDA's own free audit, and the reason a column slip cannot hide: the
+    class split must reconcile to the headline inventory for the same date."""
+    y, m = period
+    assert (_one("steers", state, y, m) + _one("heifers", state, y, m)
+            == _one("inventory", state, y, m))
+
+
+def test_a_non_quarterly_report_yields_no_class_rows():
+    """Eight reports a year carry no class table at all. No month test does
+    this -- the table is simply absent and _table_block finds nothing."""
+    monthly_only = RELEASE[:RELEASE.index("Cattle on Feed by Class")]
+    rows = cof_recap.released_rows(monthly_only, 2026, 11)
+    assert not [r for r in rows if r["series"] in ("steers", "heifers")]
+    assert [r for r in rows if r["series"] == "inventory"], "the rest must still parse"
+
+
+def test_the_class_row_shape_is_passed_to_the_table_reader():
+    """The six-column row matches neither _STATE_ROW nor _US_ROW, so without
+    the explicit shape _table_block returns nothing and the split silently
+    never appears."""
+    assert cof_recap._table_block(RELEASE, cof_recap._CLASS_TABLE) == []
+    assert cof_recap._table_block(RELEASE, cof_recap._CLASS_TABLE,
+                                  cof_recap._CLASS_ROW)
+
+
+def test_no_compiled_pattern_carries_a_literal_backspace():
+    """A heredoc turned \\b into a backspace in this repo once; re compiles it
+    silently and the pattern then matches nothing at all."""
+    import re as _re
+    for name in dir(cof_recap):
+        v = getattr(cof_recap, name)
+        if isinstance(v, _re.Pattern):
+            assert "\x08" not in v.pattern, name
 
 
 # ── units and naming ─────────────────────────────────────────────────────────
@@ -211,7 +286,8 @@ def test_the_overlay_is_applied_outside_load_all_s_cache():
 def test_all_four_monthly_series_are_overlaid():
     src = _APP.read_text(encoding="utf-8-sig")
     for frame, key in (("inv", "inventory"), ("place", "placements"),
-                       ("sales", "marketings"), ("other", "other")):
+                       ("sales", "marketings"), ("other", "other"),
+                       ("heifer", "heifers"), ("steer", "steers")):
         assert f'overlay_released({frame}, ' in src.replace("  ", " ") or \
                f'overlay_released({frame},' in src, f"{frame} not overlaid"
         assert f'"{key}"' in src

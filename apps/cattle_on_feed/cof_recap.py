@@ -67,7 +67,15 @@ _ONFEED_TABLE = "Cattle on Feed Inventory on 1,000+ Capacity Feedlots by Month"
 _PLACED_TABLE = "Cattle Placed on Feed on 1,000+ Capacity Feedlots by Month"
 _MKT_TABLE    = "Cattle Marketed on 1,000+ Capacity Feedlots by Month"
 _OTHER_TABLE  = "Cattle Other Disappearance on 1,000+ Capacity Feedlots by Month"
+_CLASS_TABLE  = "Cattle on Feed by Class on 1,000+ Capacity Feedlots by Quarter"
 _US_TABLE = "1,000+ Capacity Feedlots - United States:"
+
+# "Kansas .....:  1,460  1,390  1,430   950   910   950" -- the quarterly class
+# table is SIX head columns, steers for three periods then heifers for the same
+# three, and no percentages. It matches neither _STATE_ROW (which ends in two
+# percents) nor _US_ROW, which is why _table_block has to be told the shape.
+_CLASS_ROW = re.compile(
+    r"^([A-Za-z][A-Za-z .]*?)\s*\.{2,}:\s*" + r"\s+".join([_NUM] * 6) + r"\s*$")
 
 # series -> (table marker, month offset of the table's CURRENT column from the
 # report month). THE OFFSET IS THE WHOLE CORRECTNESS OF THIS. The October report
@@ -125,8 +133,13 @@ def latest_report(today: date = None):
     return None, None, ""
 
 
-def _table_block(text: str, marker: str) -> list:
-    """Data rows of the first table whose header contains `marker`."""
+def _table_block(text: str, marker: str, row_re=None) -> list:
+    """Data rows of the first table whose header contains `marker`.
+
+    `row_re` overrides the default state/US shapes for a table that prints
+    something else -- the quarterly class table is six head columns with no
+    percentages, and matches neither.
+    """
     lines = text.splitlines()
     try:
         head = next(i for i, ln in enumerate(lines) if marker in ln)
@@ -134,7 +147,8 @@ def _table_block(text: str, marker: str) -> list:
         return []
     out, seen_data = [], False
     for ln in lines[head:head + 60]:
-        if _STATE_ROW.match(ln) or _US_ROW.match(ln):
+        if (row_re.match(ln) if row_re else
+                (_STATE_ROW.match(ln) or _US_ROW.match(ln))):
             out.append(ln)
             seen_data = True
         elif seen_data and ln.startswith("---"):
@@ -215,6 +229,29 @@ def released_rows(text: str, year: int, month: int) -> list:
                 out.append({"series": series, "state_name": name,
                             "year": py, "month": pm,
                             "value": _int(m.group(2 + col)) * 1000})
+
+    # The quarterly steer/heifer split, which only the Jan, Apr, Jul and Oct
+    # reports carry — in the other eight months _table_block finds no such
+    # table and this loop simply does not run, which is why there is no month
+    # test here.
+    #
+    # ITS MIDDLE COLUMN IS THE PRIOR QUARTER, NOT THE PRIOR MONTH. The header
+    # reads "Oct 1, 2025 | Jul 1, 2026 | Oct 1, 2026" per class, so reusing the
+    # monthly -1 above would file July's figure under September — a quarter the
+    # series has never had a value for, landing a real number on a date USDA
+    # never published.
+    for ln in _table_block(text, _CLASS_TABLE, _CLASS_ROW):
+        m = _CLASS_ROW.match(ln)
+        if not m:
+            continue
+        name = m.group(1).strip()
+        for series, base in (("steers", 0), ("heifers", 3)):
+            for (py, pm), col in (( _shift(year, month, -12), 0),
+                                  ( _shift(year, month, -3),  1),
+                                  ( (year, month),            2)):
+                out.append({"series": series, "state_name": name,
+                            "year": py, "month": pm,
+                            "value": _int(m.group(2 + base + col)) * 1000})
     return out
 
 
