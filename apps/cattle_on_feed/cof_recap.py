@@ -449,9 +449,9 @@ def build_figure(recap: dict, guesses: dict = None, footer: bool = True,
         released = recap["release_date"]
         bits = ["USDA NASS Cattle on Feed"]
         if released:
-            bits.append(f"released {released:%b %d, %Y}")
+            bits.append(f"Released {released:%b %d, %Y}")
         if guess_source:
-            bits.append(f"guesses: {guess_source}")
+            bits.append(f"Guesses: {guess_source}")
         # Bottom-left corner: 14px above the frame line and ~68px below the
         # Total row, so it reads as provenance on stationery rather than as
         # another figure in the table. At FIG_H-20 it sat INSIDE the frame.
