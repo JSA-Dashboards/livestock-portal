@@ -1512,11 +1512,21 @@ def main():
         st.image(JSA_LOGO_FULL, width=140)
     with col_title:
         st.title("Livestock Seasonal Futures & Spreads")
-    st.caption(
-        "Live CME livestock futures, aligned across prior contract years to reveal seasonal "
-        "patterns in outright price and in calendar spreads. "
-        f"Data as of {datetime.now():%b %d, %Y %I:%M %p} · quotes delayed per Massive API."
-    )
+    asof_col, refresh_col = st.columns([6, 1], vertical_alignment="center")
+    with asof_col:
+        st.caption(
+            "Live CME livestock futures, aligned across prior contract years to reveal seasonal "
+            "patterns in outright price and in calendar spreads. "
+            f"Data as of {datetime.now():%b %d, %Y %I:%M %p} · quotes delayed per Massive API."
+        )
+    with refresh_col:
+        # A cache control, so staff only: a client has no use for one.
+        if portal_view.pick(False, lambda: st.button(
+                "Refresh prices", icon=":material/refresh:", width="stretch",
+                help="Re-read live quotes now instead of waiting out the 5-minute cache. "
+                     "Settlement-history charts are not re-pulled.")):
+            load_curve.clear()
+            st.toast("Fetching fresh prices…")
     st.caption(DATA_START_NOTE)
 
     api_key = get_api_key()
