@@ -2008,11 +2008,55 @@ is why there is no month test in the code.
   handed `_CLASS_ROW` explicitly.** Without it the split never appears and the
   page looks exactly as it did before. That is why `_table_block` grew an
   optional row shape rather than the regexes being widened.
-- **Its middle column is the prior QUARTER.** The header reads
-  `Oct 1, 2025 | Jul 1, 2026 | Oct 1, 2026` per class, against the monthly
-  tables' one-month step. Reuse the monthly −1 and July's figure is filed under
-  September — a quarter the series has never held a value for, so a real number
-  lands on a date USDA never published and the chart simply grows a point.
+- **Its periods are READ FROM ITS OWN HEADER, never computed.** The header
+  reads `Oct 1, 2025 | Jul 1, 2026 | Oct 1, 2026` per class, against the monthly
+  tables' one-month step — so the obvious fix is a −3 instead of a −1, and
+  **that is what shipped first and it was wrong.** See below.
+
+#### USDA DATES THIS TABLE BY THE CALENDAR QUARTER, NOT BY THE REPORT
+
+Found by adversarial verification after the first version shipped, and it is the
+most valuable thing on this page's history because **nothing about today's
+report reveals it**. The first version derived the three periods from the report
+month at (−12, −3, 0), on the stated assumption that only the Jan/Apr/Jul/Oct
+reports carry the table.
+
+**That assumption is false, and the counter-example is eleven months old and
+still live on nass.usda.gov.** USDA never published an October 2025 report — the
+same gap recorded above, where `cofd1025.txt` 404s and ESMIS skips Sep→Nov 2025
+— so the **November 2025** report carried the Oct 1 class split. In that one
+file:
+
+    class table   : Oct 1, 2024 | Jul 1, 2025 | Oct 1, 2025
+    monthly tables: November 1, 2024 | October 1, 2025 | November 1, 2025
+
+The monthly tables follow the report; the class table follows the quarter. The
+report-month derivation filed all seventy-eight class figures a month late, on
+2024-11, 2025-08 and 2025-11 — months the quarterly series has **never** held a
+value for, so every one was absent from QuickStats rather than merely wrong. The
+Heifers tile would have read 37.2% dated Nov 2025 against a true 38.1% dated Oct
+1, with a quarter-on-quarter of −1.6 pts measured against a non-existent August
+quarter where the real move is +0.03.
+
+`_class_periods()` reads the header instead. It is what USDA actually says and
+it cannot drift from the rows beneath it. `released_rows`'s `year` and `month`
+arguments are deliberately unused by the class block — **that is the fix, not an
+oversight**, and a test feeds deliberately wrong arguments and asserts the class
+rows do not move.
+
+When the header cannot be read it returns None and the block is skipped
+entirely. **Keeping the cached figures is the conservative failure**; guessing
+the periods is the one that puts a real number on a date USDA never published.
+
+Verified against the cache for five reports including the slipped one: **78 of
+78 agree, zero disagree, zero absent, on every one.** Before the fix the
+November 2025 report scored 0 agree / 78 absent.
+
+The general lesson, which this file keeps relearning: **today's report is one
+sample.** The monthly offsets were established by reading one release's headers
+and they were right; the quarterly one was established the same way and was
+wrong, because the single sample happened to be a report published in its own
+quarter. Read the header at parse time rather than inferring a rule from it.
 
 **THE GATE, BEFORE ANY OF IT: the cached heifer/steer series is 1,000+ capacity
 ONLY**, even though `load_all` fetches those two WITHOUT the `CAP_1000`

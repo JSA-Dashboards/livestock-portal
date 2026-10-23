@@ -162,6 +162,83 @@ def test_steers_plus_heifers_equals_the_inventory(state, period):
             == _one("inventory", state, y, m))
 
 
+# A quarterly report published OUTSIDE its quarter month. Real: USDA never
+# published an October 2025 report, so the NOVEMBER one carried the Oct 1 class
+# split. Its monthly tables read November and its class table reads October —
+# in the same file.
+SLIPPED = """
+Cattle on Feed Inventory on 1,000+ Capacity Feedlots by Month - States and United States:
+------------------------------------------------------------------------------
+       State      :November 1, 2024 : October 1, 2025 : November 1, 2025
+------------------------------------------------------------------------------
+                  :     --------------- 1,000 head --------------
+United States ....:     11,980            11,418           11,706          98            102
+------------------------------------------------------------------------------
+
+Cattle on Feed by Class on 1,000+ Capacity Feedlots by Quarter - States and United States:
+2024 and 2025
+------------------------------------------------------------------------------
+                    :       Steers and steer calves        :      Heifers and heifer calves
+        State       :   Oct 1,   :   Jul 1,   :   Oct 1,   :   Oct 1,   :   Jul 1,   :   Oct 1,
+                    :    2024    :    2025    :    2025    :    2024    :    2025    :    2025
+------------------------------------------------------------------------------
+                    :                                 1,000 Head
+United States ......:   7,380        7,210        7,063        4,600        4,240        4,355
+------------------------------------------------------------------------------
+"""
+
+
+def test_the_class_table_is_dated_by_its_own_header_not_the_report_month():
+    """THE DEFECT THIS EXISTS FOR. USDA dates the class table by the CALENDAR
+    QUARTER; the monthly tables follow the report. They came apart in November
+    2025 and deriving the class periods from the report month filed every
+    figure a month late, on quarters the series has never held a value for.
+    """
+    rows = cof_recap.released_rows(SLIPPED, 2025, 11)
+    us = {(r["year"], r["month"]): r["value"]
+          for r in rows if r["series"] == "heifers" and r["state_name"] == "United States"}
+    assert sorted(us) == [(2024, 10), (2025, 7), (2025, 10)], sorted(us)
+    assert us[(2025, 10)] == 4_355_000
+    # and emphatically NOT the report-month derivation
+    assert (2025, 11) not in us and (2025, 8) not in us and (2024, 11) not in us
+
+
+def test_the_monthly_tables_still_follow_the_report_month():
+    """The same file proves the two rules must stay separate: its inventory
+    header reads November while its class header reads October."""
+    rows = cof_recap.released_rows(SLIPPED, 2025, 11)
+    inv = {(r["year"], r["month"]) for r in rows
+           if r["series"] == "inventory" and r["state_name"] == "United States"}
+    assert (2025, 11) in inv and (2025, 10) in inv and (2024, 11) in inv
+
+
+def test_the_class_block_ignores_the_year_and_month_passed_in():
+    """Belt and braces on the above: feed deliberately wrong args and the class
+    rows must not move, because they come from the header."""
+    a = [r for r in cof_recap.released_rows(SLIPPED, 2025, 11) if r["series"] == "heifers"]
+    b = [r for r in cof_recap.released_rows(SLIPPED, 1999, 3) if r["series"] == "heifers"]
+    assert {(r["year"], r["month"], r["value"]) for r in a} == \
+           {(r["year"], r["month"], r["value"]) for r in b}
+
+
+def test_an_unreadable_class_header_skips_the_block_rather_than_guessing():
+    """Keeping the cached figures is the conservative failure; guessing the
+    periods is the one that puts a real number on a date USDA never published."""
+    broken = SLIPPED.replace("    2024    :    2025    :    2025    :"
+                             "    2024    :    2025    :    2025", "  (NA)")
+    assert cof_recap._class_periods(broken) is None
+    rows = cof_recap.released_rows(broken, 2025, 11)
+    assert not [r for r in rows if r["series"] in ("steers", "heifers")]
+    assert [r for r in rows if r["series"] == "inventory"], "the rest must still parse"
+
+
+@pytest.mark.parametrize("header_month,expect", [
+    ("Jan", 1), ("Apr", 4), ("Jul", 7), ("Oct", 10)])
+def test_every_quarter_month_abbreviation_is_understood(header_month, expect):
+    txt = SLIPPED.replace("Oct 1,", f"{header_month} 1,")
+    assert cof_recap._class_periods(txt)[2][1] == expect
+
+
 def test_a_non_quarterly_report_yields_no_class_rows():
     """Eight reports a year carry no class table at all. No month test does
     this -- the table is simply absent and _table_block finds nothing."""

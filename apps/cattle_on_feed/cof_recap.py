@@ -188,6 +188,51 @@ def parse_us(text: str) -> dict:
     return out
 
 
+_CLASS_MONTH = re.compile(r"([A-Z][a-z]{2})\s+1,")
+
+
+def _class_periods(text: str):
+    """The six (year, month) the class table's OWN HEADER names, or None.
+
+    **USDA DATES THIS TABLE BY THE CALENDAR QUARTER, NOT BY THE REPORT**, and
+    the two come apart whenever a quarterly report slips. It has happened: the
+    October 2025 report was never published, so the **November 2025** report
+    carried the Oct 1 class split — its class header reads
+    `Oct 1, 2024 | Jul 1, 2025 | Oct 1, 2025` while the monthly tables in the
+    SAME FILE read November. Deriving these from the report month filed all
+    seventy-eight class figures a month late, on quarters the series has never
+    held a value for, and the Heifers tile would have shown 37.2% dated Nov
+    2025 against a true 38.1% dated Oct 1.
+
+    So the header is read rather than the dates computed. It is what USDA
+    actually says, and it cannot drift from the rows beneath it.
+
+    Returns None when the header cannot be read, and `released_rows` then skips
+    the class block entirely — **keeping the cached figures is the conservative
+    failure**, where guessing the periods is the one that puts a real number on
+    a date USDA never published.
+    """
+    lines = text.splitlines()
+    try:
+        head = next(i for i, ln in enumerate(lines) if _CLASS_TABLE in ln)
+    except StopIteration:
+        return None
+    for i in range(head, min(head + 20, len(lines) - 1)):
+        months = _CLASS_MONTH.findall(lines[i])
+        if len(months) < 6:
+            continue
+        years = re.findall(r"\b((?:19|20)\d{2})\b", lines[i + 1])
+        if len(years) < 6:
+            continue
+        out = []
+        for mon, yr in zip(months[:6], years[:6]):
+            if mon not in MONTH_ABBR:
+                return None
+            out.append((int(yr), MONTH_ABBR.index(mon) + 1))
+        return out
+    return None
+
+
 def _shift(year: int, month: int, delta: int) -> tuple:
     """(year, month) `delta` months from (year, month)."""
     i = year * 12 + (month - 1) + delta
@@ -230,28 +275,26 @@ def released_rows(text: str, year: int, month: int) -> list:
                             "year": py, "month": pm,
                             "value": _int(m.group(2 + col)) * 1000})
 
-    # The quarterly steer/heifer split, which only the Jan, Apr, Jul and Oct
-    # reports carry — in the other eight months _table_block finds no such
-    # table and this loop simply does not run, which is why there is no month
-    # test here.
+    # The quarterly steer/heifer split. Its periods are READ FROM ITS OWN
+    # HEADER, never derived from the report month — see _class_periods for the
+    # November 2025 report that proves why. `year` and `month` are deliberately
+    # unused here, and that is the fix rather than an oversight.
     #
-    # ITS MIDDLE COLUMN IS THE PRIOR QUARTER, NOT THE PRIOR MONTH. The header
-    # reads "Oct 1, 2025 | Jul 1, 2026 | Oct 1, 2026" per class, so reusing the
-    # monthly -1 above would file July's figure under September — a quarter the
-    # series has never had a value for, landing a real number on a date USDA
-    # never published.
-    for ln in _table_block(text, _CLASS_TABLE, _CLASS_ROW):
-        m = _CLASS_ROW.match(ln)
-        if not m:
-            continue
-        name = m.group(1).strip()
-        for series, base in (("steers", 0), ("heifers", 3)):
-            for (py, pm), col in (( _shift(year, month, -12), 0),
-                                  ( _shift(year, month, -3),  1),
-                                  ( (year, month),            2)):
-                out.append({"series": series, "state_name": name,
-                            "year": py, "month": pm,
-                            "value": _int(m.group(2 + base + col)) * 1000})
+    # No month test either: the eight non-quarterly reports carry no such table,
+    # _class_periods returns None, and this block does not run.
+    periods = _class_periods(text)
+    if periods:
+        for ln in _table_block(text, _CLASS_TABLE, _CLASS_ROW):
+            m = _CLASS_ROW.match(ln)
+            if not m:
+                continue
+            name = m.group(1).strip()
+            for series, base in (("steers", 0), ("heifers", 3)):
+                for col in (0, 1, 2):
+                    py, pm = periods[base + col]
+                    out.append({"series": series, "state_name": name,
+                                "year": py, "month": pm,
+                                "value": _int(m.group(2 + base + col)) * 1000})
     return out
 
 
