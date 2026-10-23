@@ -441,6 +441,12 @@ def build_figure(recap: dict, guesses: dict = None, footer: bool = True,
         y += 26
 
     ann.append(_ann(34, 456, "Weight Classes Placed", align="left"))
+    # Ross, 2026-10-23: the head column had no heading at all, so the only thing
+    # naming it was the "Total" row at the foot of it. Right-aligned on 270 like
+    # the figures beneath it -- the two headings either side are left-aligned on
+    # their own text, and matching THEM would hang this one off the wrong edge
+    # of the column it labels.
+    ann.append(_ann(270, 456, "Total Head", align="right"))
     ann.append(_ann(300, 456, "Marketing Window", align="left"))
     y = 488
     for lab, head, window in recap["weight_classes"]:
