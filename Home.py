@@ -43,6 +43,38 @@ st.set_page_config(
     layout="wide",
 )
 
+# ── The client portal is passphrase-gated ────────────────────────────────────
+# Asked for 2026-10-23. THE CLIENT DEPLOYMENT ONLY: Ross's own app is reached
+# a hundred times a week and gating it would put a box in front of the letter
+# every morning for no gain, since that URL is not the one handed out.
+#
+# HERE, NOT IN Client.py, and not lower down. It has to be after
+# set_page_config -- which this file makes, and which must be the first
+# Streamlit call of the run -- so Client.py cannot do it before handing over.
+# And it has to be ABOVE st.navigation: Streamlit executes this file on every
+# request including a deep link straight to /beef-cutout, then dispatches, so
+# a gate below the navigation leaves every deep link open. portal_auth's own
+# docstring says both of these; this is the first caller to take it up.
+#
+# IT FAILS CLOSED, which is the whole reason the secret goes in FIRST. With no
+# PORTAL_PASSPHRASE set, the client app shows "not configured" and nothing
+# else -- and per CLAUDE.md the fix for a missing secret is a manual reboot
+# rather than a push, so shipping this before the secret exists takes the
+# client portal down until somebody notices.
+#
+# The VALUE is never in this repo. It is public, and two API keys were already
+# removed from it in September for being committed as literals.
+#
+# PORTAL_PASSPHRASE is deliberately a different secret from ADMIN_PASSPHRASE
+# and CHAT_PASSPHRASE -- portal_auth says to give every gate its own value,
+# because this one is handed to clients and those two are not. The client app
+# carries neither of the others anyway.
+if portal_view.is_client():
+    portal_auth.require_passphrase(
+        title="JSA Livestock Portal",
+        subtitle="Enter the access passphrase to continue.",
+    )
+
 # Hide Streamlit's own chrome WITHOUT hiding the portal's top navigation.
 #
 # THE NAV LIVES INSIDE THE TOOLBAR, which is not obvious and has now cost two

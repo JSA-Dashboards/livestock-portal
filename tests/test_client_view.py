@@ -448,6 +448,134 @@ def test_the_peer_table_and_the_scorecard_share_one_gate():
             )
 
 
+# -- the client portal's passphrase gate --------------------------------------
+
+def _home_tree() -> ast.Module:
+    return ast.parse((ROOT / "Home.py").read_text(encoding="utf-8"))
+
+
+def _call_line(tree, attr, owner=None):
+    for n in ast.walk(tree):
+        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr == attr):
+            if owner is None or (isinstance(n.func.value, ast.Name)
+                                 and n.func.value.id == owner):
+                return n.lineno
+    return None
+
+
+def test_the_gate_sits_above_st_navigation():
+    """
+    Streamlit executes Home.py on EVERY request, including a deep link straight
+    to /beef-cutout, and then dispatches. A gate below st.navigation leaves
+    every deep link open while the home page looks locked -- which is worse
+    than no gate, because it looks like one.
+    """
+    tree = _home_tree()
+    cfg = _call_line(tree, "set_page_config", "st")
+    gate = _call_line(tree, "require_passphrase", "portal_auth")
+    nav = _call_line(tree, "navigation", "st")
+    assert gate, "Home.py no longer calls portal_auth.require_passphrase"
+    assert cfg < gate, "the gate must follow set_page_config, the run's first st call"
+    assert gate < nav, "the gate must precede st.navigation or deep links bypass it"
+
+
+def test_the_gate_is_client_only():
+    """
+    Ross's own app is opened many times a day and is not the URL handed out.
+    Gating it would put a box in front of the letter every morning for nothing.
+    """
+    tree = _home_tree()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        if _call_line(node, "require_passphrase", "portal_auth") is None:
+            continue
+        t = node.test
+        assert (isinstance(t, ast.Call) and isinstance(t.func, ast.Attribute)
+                and t.func.attr == "is_client"
+                and isinstance(t.func.value, ast.Name)
+                and t.func.value.id == "portal_view"), (
+            "the gate must be behind `if portal_view.is_client():`"
+        )
+        return
+    raise AssertionError("require_passphrase is not inside an `if` at all")
+
+
+def test_no_passphrase_is_assigned_as_a_literal_anywhere():
+    """
+    THIS REPO IS PUBLIC. A passphrase committed here is a passphrase
+    published, and two API keys were already removed from it in September for
+    exactly that.
+
+    THIS TEST DELIBERATELY DOES NOT CONTAIN THE PASSPHRASE. The first version
+    searched for the literal value, which meant writing that value into this
+    file -- leaking it into the public repo in the course of testing that it
+    is not in the public repo. Pattern, not value: nothing may ASSIGN a
+    passphrase, and the gate may never compare against a hard-coded string.
+    """
+    import re
+    skip = {".git", "__pycache__", ".venv", "out", "node_modules", "assets"}
+    assign = re.compile(
+        r"""\b([A-Z_]*PASSPHRASE|[A-Z_]*PASSWORD)\s*=\s*["'][^"']+["']""")
+    bad = []
+    for path in ROOT.rglob("*.py"):
+        if set(path.parts) & skip:
+            continue
+        text = path.read_text(encoding="utf-8-sig", errors="replace")
+        for m in assign.finditer(text):
+            line = text[:m.start()].count(chr(10)) + 1
+            bad.append(f"{path.relative_to(ROOT)}:{line} "
+                       f"assigns {m.group(1)} to a literal")
+    assert not bad, "; ".join(bad)
+
+
+def test_the_gate_compares_against_the_configured_secret_only():
+    """
+    portal_auth must get the value from secrets or the environment, never from
+    a constant in the file. If a literal ever creeps into the comparison this
+    catches it without anyone having to know what the literal is.
+    """
+    tree = ast.parse((ROOT / "portal_auth.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "require_passphrase")
+    for node in ast.walk(fn):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "compare_digest"):
+            for arg in node.args:
+                assert not isinstance(arg, ast.Constant), (
+                    "the gate compares against a hard-coded string")
+            return
+    raise AssertionError("require_passphrase no longer uses hmac.compare_digest")
+
+
+def test_the_gate_fails_closed(monkeypatch):
+    """
+    With no secret configured nobody gets in and the page says why. A gate that
+    turns itself off when misconfigured is not a gate -- and this is the whole
+    reason the secret has to be set BEFORE the code ships.
+    """
+    import portal_auth
+    monkeypatch.setattr(portal_auth, "configured_passphrase", lambda *a, **k: "")
+    calls = {"stopped": False, "shell": None}
+    monkeypatch.setattr(portal_auth, "_shell",
+                        lambda title, body: calls.__setitem__("shell", (title, body)))
+
+    class _Stop(Exception):
+        pass
+
+    def _stop():
+        calls["stopped"] = True
+        raise _Stop
+
+    monkeypatch.setattr(portal_auth.st, "stop", _stop)
+    monkeypatch.setattr(portal_auth.st, "session_state", {})
+    with pytest.raises(_Stop):
+        portal_auth.require_passphrase("PORTAL_PASSPHRASE")
+    assert calls["stopped"]
+    assert "not configured" in calls["shell"][0]
+
+
 # -- the two entry points -----------------------------------------------------
 
 def test_client_py_sets_the_view_before_it_runs_the_shell():
