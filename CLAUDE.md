@@ -1987,14 +1987,66 @@ them a month apart by design, so one combined date would be wrong for one of
 them every month. It renders through an `st.empty()` slot booked beside the
 button and filled after the load — script order, not layout order.
 
+### The quarterly steer/heifer split, which is shaped unlike everything else
+
+Added the same day, after Ross: *"the heifers on feed hasn't updated on our
+dashboard. that is released quarterly in each cof report so today's report has
+a new update for the heifers on feed."* He was right, and the table had been on
+screen while the monthly ones were being parsed — the overlay read the four
+monthly tables and left the Heifers on Feed tab on July while everything else
+moved to October.
+
+Only the **Jan, Apr, Jul and Oct** reports carry it. The other eight months have
+no such table, `_table_block` finds nothing, and the loop does not run — which
+is why there is no month test in the code.
+
+**TWO WAYS IT FAILS SILENTLY, and they are both properties of this one table:**
+
+- **Six head columns and no percentages** — steers for three periods, then
+  heifers for the same three. It matches neither `_STATE_ROW` (which ends in two
+  percents) nor `_US_ROW`, so **`_table_block` returns an empty list unless it is
+  handed `_CLASS_ROW` explicitly.** Without it the split never appears and the
+  page looks exactly as it did before. That is why `_table_block` grew an
+  optional row shape rather than the regexes being widened.
+- **Its middle column is the prior QUARTER.** The header reads
+  `Oct 1, 2025 | Jul 1, 2026 | Oct 1, 2026` per class, against the monthly
+  tables' one-month step. Reuse the monthly −1 and July's figure is filed under
+  September — a quarter the series has never held a value for, so a real number
+  lands on a date USDA never published and the chart simply grows a point.
+
+**THE GATE, BEFORE ANY OF IT: the cached heifer/steer series is 1,000+ capacity
+ONLY**, even though `load_all` fetches those two WITHOUT the `CAP_1000`
+domaincat filter that every monthly series passes. That asymmetry looks like a
+bug and is not — `domaincat_desc` carries exactly one value on both series, so
+the filter would be a no-op. Worth checking rather than assuming, because if
+they had been all-capacities the overlay would have spliced two different
+populations and every figure would still have rendered. Confirmed to the head:
+heifers Jul 2026 cached 4,250,000 against the release's 4,250; steers Oct 2025
+cached 7,063,000 against 7,063.
+
+**USDA'S OWN FREE AUDIT IS A TEST NOW:** steers + heifers must equal the
+headline inventory for the same date. It holds across every state and both
+October periods, and it is what makes a column slip impossible to hide — an
+off-by-three between the two classes reconciles to nothing.
+
+`heifer_pct_frame` divides these by `inv_full`, which the overlay also writes,
+so all three sides of that ratio come from one release rather than two moving
+and one lagging a quarter.
+
 ### Verified end to end, 2026-10-23
 
 Against the live cache and release: on-feed Sep → **Oct 11,372,000**,
-placements Aug → **Sep 1,777,000**, marketings Aug → **Sep 1,524,000**, no
-duplicate keys. The clincher is that the Summary tiles' year-on-year now
-reproduces the Recap's published percentages exactly — **−0.4% / −12.1% /
-−6.6% against USDA's 99.6 / 87.9 / 93.4** — so the two halves of the page agree
-by construction rather than by luck.
+placements Aug → **Sep 1,777,000**, marketings Aug → **Sep 1,524,000**, and the
+heifer share **Jul 2026 37.4% → Oct 2026 37.8%**, no duplicate keys. The
+clincher is that the Summary tiles' year-on-year now reproduces the Recap's
+published percentages exactly — **−0.4% / −12.1% / −6.6% against USDA's
+99.6 / 87.9 / 93.4** — so the two halves of the page agree by construction
+rather than by luck.
+
+Every guard on this was run against a broken form that COMPILES, not just
+written: the per-table month offset, the quarterly step, the class column
+bases, the missing row shape, the ×1000, replace-vs-append, and the single
+fetch. A guard that cannot fail is the thing it guards against.
 
 ## The Cold Storage view
 
