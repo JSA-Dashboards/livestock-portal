@@ -12,7 +12,16 @@ from datetime import datetime, timedelta
 # st.Page runs this file via exec(), not as a standalone script, so its own
 # directory is never added to sys.path automatically -- without this, the
 # local snowflake_db import below raises ModuleNotFoundError.
+# `portal_view` is SHARED and lives at the repo root, the convention `wasde`
+# already uses. It decides whether this run is the client deployment, and it is
+# NOT named `view` because several pages bind that as a local -- see
+# portal_view.py.
+REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).parent))
+
+import portal_view  # noqa: E402
 
 # On Streamlit Community Cloud, secrets live in st.secrets rather than a
 # local .env file -- forward anything relevant into os.environ so
@@ -993,7 +1002,7 @@ def _render_census():
     else:
         st.caption(line)
     if rows:
-        with st.expander("AMS reconciliation detail (JSA internal)"):
+        for _ in portal_view.staff_expander("AMS reconciliation detail (JSA internal)"):
             st.dataframe(pd.DataFrame(rows), use_container_width=True,
                          hide_index=True)
 
@@ -1222,7 +1231,7 @@ if not load_ok:
         "nothing has been lost. Figures will reappear as published once the "
         "connection is restored."
     )
-    with st.expander("Technical details (JSA internal)"):
+    for _ in portal_view.staff_expander("Technical details (JSA internal)"):
         st.code(err_msg)
     st.stop()
 
@@ -2944,7 +2953,7 @@ with tab_index:
                 st.caption("No date here has been printed by CME yet, so nobody is scored.")
 
 
-        with st.expander("📋  Raw Data Table"):
+        for _ in portal_view.staff_expander("📋  Raw Data Table"):
             tab_fci, tab_loc = st.tabs(["Index Values", "Location Sales"], on_change="rerun")
             with tab_fci:
                 # Plain string formatting instead of pandas Styler -- with 10+ years
@@ -3224,7 +3233,7 @@ with tab_six:
             </div>
             """)
 
-            with st.expander("Write the why for this week", expanded=False):
+            for _ in portal_view.staff_expander("Write the why for this week", expanded=False):
                 if not six_notes_on():
                     st.caption(
                         "Snowflake is not configured for this session, so a "

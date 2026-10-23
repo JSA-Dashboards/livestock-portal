@@ -27,6 +27,7 @@ if str(REPO) not in sys.path:
 sys.path.insert(0, str(Path(__file__).parent))
 import leverage  # noqa: E402
 import scorecard  # noqa: E402
+import portal_view  # noqa: E402
 import wasde  # noqa: E402
 
 # ── JPSI Brand ───────────────────────────────────────────────────────────────
@@ -1755,9 +1756,23 @@ def wasde_steer_panel():
             f"is checked.")
 
 
-tab_weekly, tab_daily, tab_fcst, tab_lev, tab_wasde = st.tabs(
+# THE TWO THAT COME OUT FOR A CLIENT ARE WORKING TOOLS, NOT READINGS.
+# Monday Print Forecast estimates a figure USDA will publish on Monday and then
+# grades its own accuracy in a table underneath -- a thing to run, judge and
+# argue with, and this file records three separate mornings lost to it
+# disagreeing with the tiles above it. Packer Leverage is the same shape: a
+# share of the kill nobody had to bid for, published a week in arrears, read as
+# a ratio over time rather than as a number. Both answer "how is my method
+# holding up"; neither answers "what is the market doing today".
+#
+# Weekly, Daily and WASDE Steer Price stay. They are prices, and the WASDE tab
+# in particular is the one panel on this page that survives an LMR outage --
+# see the note above its own body -- which is the day a client most wants a
+# reference price.
+tab_weekly, tab_daily, tab_fcst, tab_lev, tab_wasde = portal_view.tabs(
     ["Weekly Cash Trade Averages", "Daily Cash Trade", "Monday Print Forecast",
-     "Packer Leverage", "WASDE Steer Price"], on_change="rerun")
+     "Packer Leverage", "WASDE Steer Price"],
+    hide={"Monday Print Forecast", "Packer Leverage"}, on_change="rerun")
 
 with tab_weekly:
     if tab_weekly.open:
@@ -1766,7 +1781,7 @@ with tab_weekly:
                 "⏳ **USDA data temporarily unavailable** — the USDA server is not responding. "
                 "This usually resolves in a few minutes. Use **Refresh now** in the sidebar to retry."
             )
-            with st.expander("Technical details"):
+            for _ in portal_view.staff_expander("Technical details"):
                 st.code(err_msg)
         elif price_df.empty and vol_df.empty:
             st.warning("No data returned from USDA APIs.")
@@ -1888,7 +1903,7 @@ with tab_weekly:
 
             # ── Steer / Heifer detail table ─────────────────────────────────────────────
 
-            with st.expander("📋  Steer / Heifer / Combined detail — this week, week ago, year ago"):
+            for _ in portal_view.staff_expander("📋  Steer / Heifer / Combined detail — this week, week ago, year ago"):
                 if price_df.empty:
                     st.info("No data.")
                 else:
@@ -2037,7 +2052,7 @@ with tab_weekly:
 
             # ── Data Tables ────────────────────────────────────────────────────────────
 
-            with st.expander("📋  Weekly combined price history"):
+            for _ in portal_view.staff_expander("📋  Weekly combined price history"):
                 if combo.empty:
                     st.info("No data.")
                 else:
@@ -2049,7 +2064,7 @@ with tab_weekly:
                     st.dataframe(piv.style.format({"Live FOB": "${:.2f}", "Dressed Delivered": "${:.2f}"}, na_rep="—"),
                                  width="stretch", height=320)
 
-            with st.expander("📋  Weekly negotiated cash trade volume history"):
+            for _ in portal_view.staff_expander("📋  Weekly negotiated cash trade volume history"):
                 if vol_df.empty:
                     st.info("No data.")
                 else:
@@ -2119,7 +2134,7 @@ with tab_daily:
                 "⏳ **USDA daily data unavailable** — the USDA server is not responding. "
                 "Use **Refresh now** in the sidebar to retry."
             )
-            with st.expander("Technical details"):
+            for _ in portal_view.staff_expander("Technical details"):
                 st.code(daily_err)
         elif daily_df.empty:
             st.info("USDA published no daily reports for these regions in this window.")
@@ -2512,7 +2527,7 @@ with tab_daily:
                 st.plotly_chart(fig_d, width="stretch")
 
             # ── Detail ───────────────────────────────────────────────────────────
-            with st.expander("\U0001f4cb  Daily detail — every print in the window, both cuts"):
+            for _ in portal_view.staff_expander("\U0001f4cb  Daily detail — every print in the window, both cuts"):
                 if dcombo.empty:
                     st.info("USDA published in this window but nothing priced.")
                 else:
@@ -2601,7 +2616,7 @@ with tab_fcst:
         if fcst_err:
             st.warning("⏳ **USDA daily data unavailable** — the forecast needs the daily "
                        "regional reports. Use **Refresh now** in the sidebar to retry.")
-            with st.expander("Technical details"):
+            for _ in portal_view.staff_expander("Technical details"):
                 st.code(fcst_err)
         elif not f5 or not fn:
             st.info("Not enough published history yet to build a forecast.")
@@ -3110,7 +3125,7 @@ with tab_lev:
         if lev_err:
             st.warning("⏳ **USDA data unavailable** — the purchase-mix reports are not "
                        "responding. Use **Refresh now** in the sidebar to retry.")
-            with st.expander("Technical details"):
+            for _ in portal_view.staff_expander("Technical details"):
                 st.code(lev_err)
         elif _mix.empty or "mix" not in _L:
             st.info("USDA has published no purchase-mix data for this period.")

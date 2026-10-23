@@ -41,7 +41,16 @@ import streamlit as st
 
 # Streamlit puts the MAIN script's directory on sys.path, never the page's, so a
 # multipage app's own sibling modules are not importable without this.
+# `portal_view` is SHARED and lives at the repo root, the convention `wasde`
+# already uses. It decides whether this run is the client deployment, and it is
+# NOT named `view` because several pages bind that as a local -- see
+# portal_view.py.
+REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).parent))
+
+import portal_view  # noqa: E402
 
 import snowflake_db as db
 import border as bd
@@ -1622,7 +1631,7 @@ with tab_crossings:
             st.info("No status announcements stored.")
 
     # ── Method ──────────────────────────────────────────────────────────────────
-    with st.expander("Sources and method"):
+    for _ in portal_view.staff_expander("Sources and method"):
         st.markdown(f"""
 **AMS (USDA Market News), current to {fmt_date(F['ams_through'])}**
 
@@ -1830,8 +1839,12 @@ with tab_prices:
 
         st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
-        t_bands, t_hist, t_method = st.tabs(
-            ["By weight band", "What moved it", "How this is built"])
+        # "How this is built" is provenance -- which AMS report, which rows
+        # are excluded, how a week is defined. It keeps a reader of this code
+        # honest and it is not what a client opened the page for.
+        t_bands, t_hist, t_method = portal_view.tabs(
+            ["By weight band", "What moved it", "How this is built"],
+            hide={"How this is built"})
 
         with t_bands:
             _rows = []
@@ -1984,8 +1997,9 @@ with tab_prices:
                 f"three sales is far too few to call a trend."
             )
 
-        with t_method:
-            st.markdown(_MX_METHOD)
+        if portal_view.shown(t_method):
+            with t_method:
+                st.markdown(_MX_METHOD)
 
         st.markdown("<hr style='margin:18px 0 8px;'>", unsafe_allow_html=True)
         st.markdown(

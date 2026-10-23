@@ -15,12 +15,20 @@ wired in — deferred 2026-09-22. To enable it, set PORTAL_PASSPHRASE in the
 app's secrets FIRST, then call portal_auth.require_passphrase() immediately
 after set_page_config below. It fails closed, so wiring it without the secret
 in place takes all fourteen dashboards down.
+
+THIS FILE IS ALSO THE CLIENT DEPLOYMENT'S SHELL. `Client.py` sets the client
+flag and then runs this file, so there is one DASHBOARDS list, one tile CSS
+block and one piece of grid arithmetic rather than two that drift. What
+differs is decided inside the pages by portal_view.is_client(), plus the two
+calls below: TOOLS are never registered for a client and the staff sign-in is
+not drawn. Nothing here needs to know which deployment it is beyond that.
 """
 from pathlib import Path
 
 import streamlit as st
 
 import portal_auth
+import portal_view
 
 HERE = Path(__file__).parent
 
@@ -230,7 +238,16 @@ def tools_visible() -> bool:
     as a way in for a session that has not signed in yet, so a bookmark still
     works, but signing in is the real route and the only one that opens the page
     itself.
+
+    ON THE CLIENT DEPLOYMENT THERE IS NO ROUTE AT ALL, which is the one place
+    this is a control rather than an unlisting. ?tools=1 is deliberately dead
+    there: the client app is not meant to carry an admin passphrase in its
+    secrets, so a forwarded ?tools=1 link would otherwise register three tiles
+    whose pages can only answer "not configured" -- telling a client the tools
+    exist and that they are broken, in one click.
     """
+    if portal_view.is_client():
+        return False
     if portal_auth.is_admin() or st.session_state.get(TOOLS_SESSION_KEY):
         return True
     try:
@@ -317,8 +334,14 @@ def render_home():
 
     # Discreet, and deliberately uninformative: a client who sees "Staff
     # sign-in" learns that staff exist, not that a letter tool does.
+    #
+    # On the client deployment it is not discreet, it is ABSENT. Ross asked for
+    # that directly: a client has no reason to meet a sign-in box, and this one
+    # could not let them in anyway -- the client app carries no admin
+    # passphrase, so admin_sign_in() would render an expander whose form can
+    # only ever fail. A door that cannot open is worse than no door.
     st.write("")
-    portal_auth.admin_sign_in()
+    portal_view.staff_only(portal_auth.admin_sign_in)
 
 
 home_page = st.Page(render_home, title="Home", url_path="home", default=True)

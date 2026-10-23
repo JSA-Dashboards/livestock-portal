@@ -23,7 +23,16 @@ import streamlit as st
 # the portal's shared sys.modules despite the usual by-name collision trap —
 # "cof_recap" and "cold_storage" each exist exactly once in the repo, unlike
 # snowflake_db.py and friends.
+# `portal_view` is SHARED and lives at the repo root, the convention `wasde`
+# already uses. It decides whether this run is the client deployment, and it is
+# NOT named `view` because several pages bind that as a local -- see
+# portal_view.py.
+REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).parent))
+
+import portal_view  # noqa: E402
 import cof_recap  # noqa: E402
 import cold_storage  # noqa: E402
 from nass_cache_client import fetch_cached  # noqa: E402
@@ -721,9 +730,13 @@ def render_cold_storage() -> None:
                  "the shared NASS cache has no rows for it (usda-nass-etl jobs/cold_storage.py).")
         return
 
-    tab_over, tab_hist, tab_season, tab_data = st.tabs([
+    # Cold Storage keeps Overview and Full History -- the second is the whole
+    # reason this view reads QuickStats rather than the monthly PDF, since it
+    # goes back to 1917 and a one-month release cannot. Seasonality and Data go
+    # for the same reasons they go upstairs.
+    tab_over, tab_hist, tab_season, tab_data = portal_view.tabs([
         "⭐  Overview", "📈  Full History", "📅  Seasonality", "📋  Data",
-    ], on_change="rerun")
+    ], hide={"📅  Seasonality", "📋  Data"}, on_change="rerun")
 
     with tab_over:
         if tab_over.open:
@@ -870,7 +883,10 @@ Q_YEARS     = tuple(range(1996, current_year + 1))  # full history — NASS seri
 state = st.sidebar.selectbox(
     "State", STATE_ORDER, format_func=lambda s: STATE_NAMES.get(s, s),
 )
-trend_years = st.sidebar.slider("Trend window (years)", 2, 8, 5)
+# The state picker chooses a reading and stays; the trend window is tuning and
+# goes, at the 5 years the staff page opens on. See the same line drawn on
+# Cattle Weights' sidebar.
+trend_years = portal_view.pick(5, lambda: st.sidebar.slider("Trend window (years)", 2, 8, 5))
 
 st.sidebar.divider()
 st.sidebar.markdown(
@@ -891,9 +907,15 @@ header_slot = st.container()
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
 
-tab_summary, tab_recap, tab_flows, tab_season, tab_heifer, tab_state, tab_data = st.tabs([
+# SEVEN TABS IS THE DENSEST PAGE ON THE PORTAL AND A CLIENT GETS FOUR.
+# Summary, COF Recap, On-Feed & Flows and Heifers on Feed each answer a market
+# question off the report USDA just published. The three that go are the ones
+# that answer a research question instead: Seasonality overlays eight years to
+# show the shape of a normal calendar, State Comparison is a fourteen-state
+# ranking nobody trades off, and Data is the raw frame.
+tab_summary, tab_recap, tab_flows, tab_season, tab_heifer, tab_state, tab_data = portal_view.tabs([
     "⭐  Summary", "📄  COF Recap", "📊  On-Feed & Flows", "📅  Seasonality", "🐄  Heifers on Feed", "🗺️  State Comparison", "📋  Data",
-], on_change="rerun")
+], hide={"📅  Seasonality", "🗺️  State Comparison", "📋  Data"}, on_change="rerun")
 
 # ── COF Recap ─────────────────────────────────────────────────────────────────
 # The client one-pager, drawn BEFORE the QuickStats load on purpose: it reads

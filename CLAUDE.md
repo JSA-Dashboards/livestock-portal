@@ -11,6 +11,149 @@ label changed — the folder is still `apps/beef_weight/` and the `url_path` is
 still `beef-weight`, deliberately, so existing bookmarks keep working. Do not
 "tidy" either one.
 
+## TWO DEPLOYMENTS NOW — the client view, and what it takes out
+
+Added 2026-10-23. Ross: *"i think if i just show my clients this current
+dashboard — it has too much going on ... the same main landing page layout
+but each dashboard itself has less noise going on inside it. they wouldn't
+need the staff sign in stuff either."*
+
+**THE MODE IS THE MAIN FILE, NOT A SECRET, AND THAT IS THE WHOLE SAFETY OF
+IT.** Streamlit Cloud takes a main file path per app, so the client app is
+`Client.py` and Ross's stays on `Home.py`. A `PORTAL_VIEW` secret was the
+obvious alternative and is worse in both directions: it would have to default
+to STAFF, or the live portal strips itself the first time it reboots — and a
+client deployment that then lost the secret comes up quietly serving the
+analyst view to clients. There is no such state here.
+
+`Client.py` is six lines. It calls `portal_view.set_client()` and then
+`runpy.run_path("Home.py")`, so there is ONE DASHBOARDS list, one tile CSS
+block and one piece of grid arithmetic. **It must not `import Home`**:
+Streamlit re-executes the main script every rerun and an import is a cached
+no-op from the second one on, so the portal would render once and then come
+up blank — which reads as a crashed app, not a wiring choice. A test pins it.
+
+**The landing grid is identical.** Same fifteen tiles, same order, same
+descriptions. Ross asked for exactly that.
+
+### What comes out, as a standing rule rather than a list
+
+1. **Tabs that are a working tool rather than a market reading.**
+2. **Raw `Data` tabs and the download panels under them.**
+3. **Method and audit furniture** — "How this is built" tabs, "Technical
+   details" expanders, provenance sidebars, "(JSA internal)" blocks.
+
+It does NOT take out the crush pages' "How this is calculated" explainers.
+Those are not provenance: a margin a reader cannot take apart is one they
+will not trust, and trust is the point of showing them a margin at all.
+
+Measured on the live pages, client against staff:
+
+| page | staff | client |
+|---|---|---|
+| Cattle on Feed | 7 tabs | 4 — Seasonality, State Comparison, Data gone |
+| Cash Cattle Trade | 5 tabs | 3 — Monday Print Forecast, Packer Leverage gone |
+| Seasonal Futures | 5 top + 4 nested | 3 + 3 — Spread Builder, Chat, Spread matrix gone |
+| Livestock Inventory | 4 tabs | 3 — the Data tab, on all four of its tab sets |
+| Cattle Weights | 4 sidebar controls + a 90-line Data Status panel | 2 controls, no panel |
+| Beef Cutout | Data Table + Technical details | neither |
+
+**WHICH SERIES YOU ARE LOOKING AT STAYS; HOW IT IS COMPUTED GOES.** That is
+the line drawn across every sidebar. Weight basis, trend class, state,
+commodity, series, geographic level and year all survive — they choose a
+reading. The snapshot multiselect and the two "trend window" sliders do not;
+they are tuning, and a reader who has to pick between a 26-week and a 34-week
+trend before the chart means anything has been handed the analyst's job.
+`portal_view.pick(default, lambda: widget())` takes the callable precisely so
+the widget is never drawn: Streamlit renders on call, so passing the value
+would draw it and throw the result away.
+
+### The mistake this invites, and the guard for it
+
+**HIDING A TAB'S LABEL DOES NOT STOP ITS BODY.** `portal_view.tabs` hands back
+a `Hidden` stand-in, and `Hidden` is a no-op context manager — so `with
+tab_x:` still runs everything inside it and that content renders into the
+client's page UNFRAMED, in the middle of someone else's layout, having fired
+whatever it fetches. The page then looks busy, which is what it looked like
+before, so nothing reports it.
+
+`tests/test_client_view.py` walks every `portal_view.tabs` call in the repo,
+works out which name each hidden label was bound to, and fails unless that
+name is guarded. It also asserts the detector rejects the broken form and
+accepts both fixes, because a guard that cannot fail is the thing it guards
+against.
+
+**THE TWO GUARDS ARE NOT INTERCHANGEABLE.** A real `TabContainer.open` is
+**None** unless `on_change="rerun"` was passed, and None is falsy — so
+`if tab.open:` on a tab set that is not lazy skips the body on the STAFF view
+too, rendering an empty tab that nobody notices until they open it. Use
+`.open` on a lazy set, `portal_view.shown(tab)` on an eager one. A second test
+pins that split.
+
+**Do not blanket-add `on_change="rerun"` to make `.open` available.** Both
+crush pages depend on a hidden sibling tab EXECUTING — the fed crush's
+cost-of-gain build-up is divided by widgets in the other tab — so making those
+lazy breaks them silently.
+
+### Expanders needed a different mechanism
+
+There is no way to make a context manager decline its own body, so an expander
+can only be skipped by re-indenting it under an `if`. This repo has already
+shipped a CSS block that ended up inside a comment and a `<style>` that ended
+itself, both from moving code containing a multi-line string, so a mechanical
+pass over twenty blocks was the riskier option. Hence
+
+    for _ in portal_view.staff_expander("Data Table"):
+        st.dataframe(raw)
+
+A generator that yields once or not at all. No re-indentation, the body never
+runs for a client, and nothing reaches the DOM for a reader to find in
+view-source — which matters for the two blocks literally labelled
+"(JSA internal)".
+
+### `portal_view`, not `view` — and that cost one rename
+
+It was `view.py` for about an hour. `apps/cattle_on_feed/app.py` binds
+`view = st.segmented_control("Report", ...)` at module level, so from that
+line on `view.tabs(...)` was a string attribute lookup. The same collision the
+`_h` helper hit on the index page. `portal_view` sits beside `portal_auth` and
+cannot collide; **a test asserts `rglob("portal_view.py")` returns exactly one
+path**, for the reason `wasde.py` has the same test.
+
+### Deploying the client app
+
+Second Streamlit Cloud app in the `jsa-dashboards` workspace, same repo,
+branch `master`, **main file `Client.py`**. It needs its OWN copy of the
+secrets — the Snowflake block (and still **no** `SNOWFLAKE_SCHEMA`),
+`MARS_API_KEY`, `NASS_API_KEY`, `MASSIVE_API_KEY`.
+
+It does **not** need `ANTHROPIC_API_KEY` or `CHAT_PASSPHRASE` (the Ask AI tab
+is not reachable), and it must not carry `ADMIN_PASSPHRASE` or
+`REPORTS_PASSPHRASE`. Leaving those off is belt-and-braces: `?tools=1` is
+already dead in client view and `admin_sign_in` is not drawn, but a client
+deployment with no admin passphrase cannot be talked into the staff view at
+all.
+
+**That is a second secrets console to keep in step** — the cost Ross accepted
+when choosing a separate URL over one app with a toggle. A key rotation is now
+two consoles, and a push is two reboots.
+
+### Verifying a change to this
+
+**Run BOTH.** `.claude/launch.json` carries `client-portal` (8601) and
+`staff-portal` (8602), through a scratchpad runner that loads `.env` —
+Streamlit does not read it, and without it the Snowflake-backed pages render
+their "no cache backend configured" branch and stop before anything worth
+looking at. That runner also aliases `SNOWFLAKE_PRIVATE_KEY_PASSPHRASE` into
+`SNOWFLAKE_PRIVATE_KEY_PWD`, which is what `apps/*/nass_cache_client.py`
+actually reads — a pre-existing naming mismatch that presents as
+"Password was not given but private key is encrypted".
+
+**The sidebar does not render at all when the browser pane has zero width**,
+which reads exactly like a sidebar the client view removed. Set a viewport
+(1440x900) BEFORE navigating, not after — a resize applied to an
+already-rendered page leaves it collapsed.
+
 ## The SCHEMA cache guard has TWO halves and I got both wrong
 
 `st.cache_data` keys on the decorated function and never on the modules it
