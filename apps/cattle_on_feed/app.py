@@ -889,6 +889,29 @@ state = st.sidebar.selectbox(
 trend_years = portal_view.pick(5, lambda: st.sidebar.slider("Trend window (years)", 2, 8, 5))
 
 st.sidebar.divider()
+
+# CLEARING load_all ALONE DOES NOTHING. It is cached, but its body calls
+# fetch_series, which is cached too -- so clearing only the outer one re-runs it
+# straight back into the inner cache and returns the same frames. Both, or
+# neither. The button would otherwise look like it worked.
+#
+# Staff only, like the trend slider: a client has no use for a cache control.
+if portal_view.pick(False, lambda: st.sidebar.button(
+        "Check for new data", width="stretch",
+        help="Clears the cached NASS pull and refetches. These tabs read the "
+             "shared cache a scheduled job fills, so new USDA data appears here "
+             "only once that job has run.")):
+    fetch_series.clear()
+    load_all.clear()
+    st.rerun()
+
+# BOOKED HERE, FILLED AFTER THE LOAD. The freshness line needs `inv`, which is
+# fetched ~190 lines below this -- script order, not layout order, the rule the
+# crush pages already run on. Without the slot it lands at the bottom of the
+# sidebar under the publication note, away from the button it belongs to.
+_freshness_slot = st.sidebar.empty()
+
+st.sidebar.divider()
 st.sidebar.markdown(
     f'<div style="color:{DM_MUTED};font-size:.68rem;line-height:1.6">'
     f'On-feed inventory, placements, and marketings are published monthly '
@@ -1094,6 +1117,26 @@ place_s  = series_for(place, state)
 sales_s  = series_for(sales, state)
 other_s  = series_for(other, state)
 hpct     = heifer_pct_frame(heifer, steer, inv_full, state)
+
+# WHAT MONTH IS ACTUALLY ON THE PAGE, in the slot booked beside the button.
+# These tabs and the COF Recap run on different clocks -- the Recap reads USDA's
+# released text the moment it posts, while everything else waits on QuickStats
+# and then on the scheduled job that fills the cache. On release day that gap is
+# a day or more, and nothing on the page said so: it simply looked like the
+# dashboard had not noticed. On-feed and the two flow series are named
+# separately because they are a month apart by USDA's own design -- the report
+# carrying the Oct 1 inventory carries SEPTEMBER placements and marketings.
+_inv_latest = inv[inv["state_alpha"] == "US"]["date"].max() if not inv.empty else None
+_flow_latest = place[place["state_alpha"] == "US"]["date"].max() if not place.empty else None
+if _inv_latest is not None and pd.notna(_inv_latest):
+    _bits = [f"on-feed to <b>{_inv_latest:%b %Y}</b>"]
+    if _flow_latest is not None and pd.notna(_flow_latest):
+        _bits.append(f"flows to <b>{_flow_latest:%b %Y}</b>")
+    _freshness_slot.markdown(
+        f'<div style="color:{DM_MUTED};font-size:.68rem;line-height:1.5">'
+        f'Cached NASS data: {" · ".join(_bits)}.</div>',
+        unsafe_allow_html=True,
+    )
 
 inv_kpi   = latest_kpi(inv, state)
 place_kpi = latest_kpi(place, state)
