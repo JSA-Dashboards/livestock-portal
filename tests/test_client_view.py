@@ -344,6 +344,110 @@ def test_the_detector_rejects_the_broken_form_and_accepts_both_fixes():
     )
 
 
+# -- the peer comparison is staff-only ----------------------------------------
+
+def _staff_gated_lines(tree: ast.Module) -> set[int]:
+    """Lines inside an `if portal_view.is_staff():` body."""
+    gated: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        t = node.test
+        if (isinstance(t, ast.Call) and isinstance(t.func, ast.Attribute)
+                and t.func.attr == "is_staff"
+                and isinstance(t.func.value, ast.Name)
+                and t.func.value.id == "portal_view"):
+            for stmt in node.body:
+                gated.update(range(stmt.lineno, (stmt.end_lineno or stmt.lineno) + 1))
+    return gated
+
+
+FCI_PAGE = ROOT / "apps/cme_feeder_cattle/app.py"
+
+
+@pytest.mark.parametrize("needle", [
+    "Versus CIH &amp; Compass",
+    "Pending CME Prints &amp; Forecast Accuracy",
+])
+def test_the_self_scoring_sections_are_staff_only(needle):
+    """
+    Ross, 2026-10-23: "the clients don't need to see the versus CIH & Compass
+    table", then "take out the pending cme prints section too".
+
+    Both are JSA measuring itself -- our call against CME's print, then our
+    call against the desks we compete with. The peer half is also built from
+    THEIR published figures, hand-entered off their daily sheets, so putting
+    it in front of a client is redistribution as well as oversharing: the line
+    letter/sterling.py already draws around the Sterling tracker.
+    """
+    tree = ast.parse(_src(FCI_PAGE))
+    gated = _staff_gated_lines(tree)
+    found = [n.lineno for n in ast.walk(tree)
+             if isinstance(n, ast.Constant) and isinstance(n.value, str)
+             and needle in n.value]
+    assert found, f"{needle!r} is not on the page at all -- did the heading change?"
+    for line in found:
+        assert line in gated, (
+            f"{needle!r} at line {line} is not inside an "
+            f"`if portal_view.is_staff():` body"
+        )
+
+
+def test_no_competitor_is_named_anywhere_a_client_can_see():
+    """
+    THE TABLE WAS NOT THE ONLY MENTION, and that is the point of this test.
+    A caption two hundred lines above it read "how CME names its files and how
+    CIH dates its daily sheet" -- ungated, and it would have gone on reaching
+    clients after the table came out. Removing the thing that was pointed at
+    is not the same as removing the exposure.
+
+    Docstrings are excluded: they are for whoever reads this file.
+    """
+    tree = ast.parse(_src(FCI_PAGE))
+    gated = _staff_gated_lines(tree)
+
+    docstring_lines: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef,
+                             ast.AsyncFunctionDef, ast.ClassDef)):
+            if ast.get_docstring(node, clean=False):
+                first = node.body[0]
+                docstring_lines.update(
+                    range(first.lineno, (first.end_lineno or first.lineno) + 1))
+
+    leaks = [(n.lineno, n.value[:60]) for n in ast.walk(tree)
+             if isinstance(n, ast.Constant) and isinstance(n.value, str)
+             and ("CIH" in n.value or "Compass" in n.value)
+             and n.lineno not in gated and n.lineno not in docstring_lines]
+    assert not leaks, f"competitor named outside a staff gate: {leaks}"
+
+
+def test_the_peer_table_and_the_scorecard_share_one_gate():
+    """
+    `_recon` and `_openings` are loaded by the scorecard and read by the peer
+    table. Gating them separately would leave the table raising NameError the
+    moment somebody un-gated it on its own -- so they must sit under the SAME
+    `if`, not under two.
+    """
+    tree = ast.parse(_src(FCI_PAGE))
+    for name in ("_recon", "_openings"):
+        assigns = [n for n in ast.walk(tree) if isinstance(n, ast.Assign)
+                   and any(isinstance(t, ast.Name) and t.id == name
+                           for t in n.targets)]
+        reads = [n.lineno for n in ast.walk(tree)
+                 if isinstance(n, ast.Name) and n.id == name
+                 and isinstance(n.ctx, ast.Load)]
+        assert assigns and reads, f"{name} should be both written and read"
+        gated = _staff_gated_lines(tree)
+        for n in assigns:
+            assert n.lineno in gated, f"{name} is assigned outside the staff gate"
+        for line in reads:
+            assert line in gated, (
+                f"{name} is read at line {line}, outside the staff gate that "
+                f"defines it -- a client would get NameError"
+            )
+
+
 # -- the two entry points -----------------------------------------------------
 
 def test_client_py_sets_the_view_before_it_runs_the_shell():

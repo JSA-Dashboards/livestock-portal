@@ -42,6 +42,56 @@ descriptions. Ross asked for exactly that.
 2. **Raw `Data` tabs and the download panels under them.**
 3. **Method and audit furniture** — "How this is built" tabs, "Technical
    details" expanders, provenance sidebars, "(JSA internal)" blocks.
+4. **Anything commercial, and anything built from somebody else's product.**
+   Added 2026-10-23 on Ross's "the clients don't need to see the versus CIH &
+   Compass table". That panel scores JSA's call against the two desks it
+   competes with, off THEIR published figures hand-entered from their daily
+   sheets — so showing it to a client is redistribution as well as
+   oversharing, the line `letter/sterling.py` already draws around the
+   Sterling tracker.
+
+   **THE TABLE WAS NOT THE ONLY MENTION.** A caption two hundred lines above
+   it, on Pending CME Prints & Forecast Accuracy, read "how CME names its
+   files and how CIH dates its daily sheet" — ungated, and it would have gone
+   to clients after the table came out. Grep the page for the competitor's
+   name rather than removing the thing that was pointed at; an AST sweep for
+   rendered string constants naming CIH or Compass, minus docstrings and the
+   gated block, now reports zero. Verified in the browser as zero occurrences
+   in the whole DOM, not just the visible text.
+
+   The LOAD is skipped too, not only the render: `_load_peer_estimates()` is
+   a Snowflake query, and a client's page will never draw it.
+   `tests/test_client_view.py` pins the gate on the ASSIGNMENT rather than on
+   the section heading — a heading is a string somebody can reword while the
+   table goes on rendering, and a string match would still pass.
+
+   While you are in there: `index_dates.py` records that the "CIH dates its
+   sheet this way" premise turned out to be FALSE, so the STAFF half of that
+   caption is owed a correction independently of any of this.
+
+   **Pending CME Prints & Forecast Accuracy went the same day**, on Ross's
+   "take out the pending cme prints section too". It is the other half of the
+   same thing -- JSA's call scored against CME's print -- so the client Index
+   tab now ends at Average Basis by Location.
+
+   **THE TWO SHARE ONE GATE AND MUST.** `_recon` and `_openings` are loaded by
+   the scorecard and read by the peer table; the comment at their assignment
+   says so. Gate them separately and the peer table raises `NameError` the
+   moment anybody un-gates it alone -- for clients only, on the deployed app
+   only. A test asserts those two names are written and read inside the same
+   staff block.
+
+   That meant RE-INDENTING 280 LINES, the operation this file records two
+   burns from. Done the way the Mexican tab split was: tokenize for multi-line
+   strings crossing the range first, then compare every string constant in the
+   module before and after, then diff the region's AST against HEAD statement
+   by statement -- 8 of 9 byte-identical, the ninth being the caption that was
+   meant to change.
+
+   **Compare the string constants SORTED.** `ast.walk` is breadth-first, so
+   wrapping a region in an `if` reorders the traversal and a raw order
+   comparison reports a false difference on code that is perfectly fine. That
+   cost one wrong "REFUSED" before the check was right.
 
 It does NOT take out the crush pages' "How this is calculated" explainers.
 Those are not provenance: a margin a reader cannot take apart is one they

@@ -2694,263 +2694,301 @@ with tab_index:
 
         # ── Data Table ────────────────────────────────────────────────────────────────
 
-        # ── Pending CME Prints / Forecast Scorecard ───────────────────────────────────
-        # The headline tile shows the date CME will print NEXT (see index_dates.py).
-        # It used to show the LATEST date, which on a Monday is barely formed -- that
-        # is what this section was originally written to compensate for. It still
-        # earns its place: the headline is deliberately ONE date, and what matters
-        # besides it is (a) every date CME still owes a print for, with our estimate
-        # for each, and (b) how close the last several estimates actually landed. Without this, both required either
-        # hovering the trend chart or reading the raw table and knowing from memory
-        # where CME's published history stops.
+        # ── Staff only ────────────────────────────────────────────────────────────────
+        # Everything to the end of the Versus table is JSA measuring itself:
+        # our call against CME's print, then our call against the two desks we
+        # compete with. Ross asked for both out of the client view (2026-10-23,
+        # the scorecard a day after the peer table).
+        #
+        # ONE GATE OVER BOTH, not two. `_recon` and `_openings` are loaded by
+        # the scorecard and read by the peer table below -- the comment at
+        # their assignment says so -- so gating them separately leaves the
+        # second raising NameError the moment anybody un-gates it alone.
+        if portal_view.is_staff():
+            # ── Pending CME Prints / Forecast Scorecard ───────────────────────────────────
+            # The headline tile shows the date CME will print NEXT (see index_dates.py).
+            # It used to show the LATEST date, which on a Monday is barely formed -- that
+            # is what this section was originally written to compensate for. It still
+            # earns its place: the headline is deliberately ONE date, and what matters
+            # besides it is (a) every date CME still owes a print for, with our estimate
+            # for each, and (b) how close the last several estimates actually landed. Without this, both required either
+            # hovering the trend chart or reading the raw table and knowing from memory
+            # where CME's published history stops.
 
-        st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
-        st.markdown('<div class="sec-header">Pending CME Prints &amp; Forecast Accuracy</div>',
-                    unsafe_allow_html=True)
-        st.caption(
-            "Dated by CME **index** date — the last sale day in the 7-day window, which is "
-            "how CME names its files and how CIH dates its daily sheet. *Prints* is when "
-            "CME releases it: the next business day, which a holiday can push days out."
-        )
-
-        _recon = _load_recon_index()
-        # Frozen morning calls. Loaded here rather than down in the peer table because
-        # BOTH sections now score against the number we actually published, not the
-        # one fci_daily happens to hold today.
-        _openings = _load_opening_calls()
-        _official = (
-            fci_df[fci_df["source"] == "cme_official"][["date", "fci_value"]]
-            .rename(columns={"fci_value": "actual"})
-        )
-
-        if _recon.empty:
-            st.info("No reconstruction available on this backend, so there is nothing to compare.")
-        else:
-            _sc = _recon.merge(_official, on="date", how="left")
-            _last_official = _official["date"].max() if not _official.empty else None
-
-            # Only dates AFTER CME's last print are genuinely pending. An unmatched
-            # date before that is a day CME simply does not publish (weekend/holiday),
-            # not a forecast awaiting a result.
-            _pending = _sc[_sc["actual"].isna()]
-            if _last_official is not None:
-                _pending = _pending[_pending["date"] > _last_official]
-            # Weekdays only. This reconstruction computes a value for every CALENDAR
-            # day, and CME never files one for a Saturday or Sunday, so the weekend
-            # carry-forwards are not prints anyone is waiting for.
-            #
-            # This deliberately does NOT exclude holidays. An earlier version filtered
-            # on a federal-holiday business-day calendar, which hid the 9/7/2026
-            # estimate as a Labor Day -- but CME filed an index on Labor Day in both
-            # 2024 and 2025 (see _load_cme_index_dates), so 9/7 is a print that is
-            # genuinely outstanding, not one CME declined to make. Showing a date CME
-            # later turns out to skip is the cheaper error: it drops out of this table
-            # on its own once CME's frontier moves past it.
-            _pending = _pending[_pending["date"].map(
-                lambda d: pd.Timestamp(d).weekday() < 5)]
-
-            _c1, _c2 = st.columns(2)
-            with _c1:
-                st.caption("**Awaiting CME** — our forecast for each unpublished index date")
-                if _pending.empty:
-                    st.caption("CME has published every date we hold an estimate for.")
-                else:
-                    _p = _pending.sort_values("date", ascending=False).copy()
-                    _p["Index date"] = _p["date"].dt.strftime("%a %m/%d")
-                    _p["Prints"] = _p["date"].map(lambda d: _release_date(d).strftime("%m/%d"))
-                    _p["JSA FCI EST"] = _p["recon"].map(lambda v: f"${v:.2f}")
-                    _p["Head"] = _p["total_head"].map(
-                        lambda v: f"{v:,.0f}" if pd.notna(v) else "—")
-                    with st.container(key="wm-pending"):
-                        st.dataframe(_p[["Index date", "Prints", "JSA FCI EST", "Head"]],
-                                     use_container_width=True, hide_index=True, height=210)
-                    if _last_official is not None:
-                        st.caption(
-                            f"CME's last index date is {_last_official.strftime('%b %d')} "
-                            f"(printed {_release_date(_last_official).strftime('%b %d')}). A low "
-                            "*window head* means few sale days are in the 7-day window yet, so "
-                            "that estimate will move as reports land."
-                        )
-            with _c2:
-                st.caption("**Scorecard** — how the last ten estimates turned out")
-                _s = _sc.dropna(subset=["actual"]).sort_values("date", ascending=False).head(10).copy()
-                if _s.empty:
-                    st.caption("No dates where both a reconstruction and a CME print exist.")
-                else:
-                    # Score the call we PUBLISHED, not the one held now. fci_daily is
-                    # recomputed from mars_sales every run, so a date's row goes on
-                    # absorbing auction reports that arrive after CME's own cutoff:
-                    # 2026-09-14 read 341.61 at 07:44 when it went out and 341.5794 by
-                    # 13:06 that same day, once Tulsa's 51 head landed. Grading the
-                    # revised figure made this panel structurally incapable of showing
-                    # a bad forecast -- it reported $0.00 while the peer table below,
-                    # which has always used the frozen call, showed that same date
-                    # missing by three cents.
-                    #
-                    # The settled-vs-CME agreement is still worth having and moves to
-                    # the caption. It answers a DIFFERENT question -- does the method
-                    # reproduce CME given the same complete data -- and it is what
-                    # would scream if someone reinstated the fancy/thin/fleshy
-                    # exclusion or broke the Saturday/Sunday-as-Monday merge.
-                    _s["opening"] = _s["date"].map(
-                        lambda d: _openings.get(d.strftime("%Y-%m-%d")))
-                    _n_live = int(_s["opening"].isna().sum())
-                    _s["opening"] = _s["opening"].fillna(_s["recon"])
-                    _s["err"] = _s["opening"] - _s["actual"]
-                    _s["Index date"] = _s["date"].dt.strftime("%m/%d")
-                    _s["JSA FCI EST"] = _s["opening"].map(lambda v: f"${v:.2f}")
-                    _s["CME"] = _s["actual"].map(lambda v: f"${v:.2f}")
-                    _s["Miss"] = _s["err"].map(lambda v: f"{v:+.2f}")
-                    with st.container(key="wm-scored"):
-                        st.dataframe(_s[["Index date", "JSA FCI EST", "CME", "Miss"]],
-                                     use_container_width=True, hide_index=True, height=210)
-                    # Dollar signs escaped: st.caption renders markdown, and a $...$
-                    # pair is LaTeX math there -- unescaped, "$0.38" and "$2" render as
-                    # mangled math rather than money.
-                    _recon_err = (_s["recon"] - _s["actual"]).abs().mean()
-                    st.caption(
-                        f"Mean absolute miss over these {len(_s)} dates: "
-                        f"**\\${_s['err'].abs().mean():.2f}** — the frozen morning "
-                        f"call as published, against CME's print"
-                        + (f" (no frozen call exists for {_n_live} of them, so the current "
-                           f"value stands in there)" if _n_live else "")
-                        + f". Our *settled* reconstruction, which goes on absorbing reports "
-                        f"that land after CME's cutoff, agrees to **\\${_recon_err:.2f}** — "
-                        f"that one measures whether the method reproduces CME, not whether "
-                        f"the morning call was right. Dates before the direct-trade "
-                        f"component began (2026-08-28) ran about \\$2 high because that "
-                        f"input was missing entirely -- they are not representative of "
-                        f"current accuracy."
-                    )
-
-
-        # ── Versus the competition ────────────────────────────────────────────────────
-        # The scorecard above answers "are we close to CME". This answers "are we
-        # closer than the desks we compete with", which is a different question and the
-        # one that actually matters commercially. Their figures are hand-entered from
-        # their daily sheets, so this table is only as complete as what has been typed
-        # in -- dates with no peer figure are simply absent rather than shown as zero.
-
-        _peers = _load_peer_estimates()
-        if not _peers.empty:
             st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
-            st.markdown('<div class="sec-header">Versus CIH &amp; Compass</div>',
+            st.markdown('<div class="sec-header">Pending CME Prints &amp; Forecast Accuracy</div>',
                         unsafe_allow_html=True)
-            # SAYS WHOSE NUMBER OURS IS, and it has to be here rather than only in
-            # the accuracy line below, because that one renders for SCORED dates --
-            # dates CME has printed -- and the rows a reader actually compares
-            # against the tile at the top of the page are the unscored ones at the
-            # top of this table.
+            # The competitor clause is staff-only for the same reason the Versus
+            # table below is: Ross asked that clients not be shown who JSA measures
+            # itself against, and this caption names one of them. The sentence is
+            # built rather than duplicated so the two versions cannot drift into
+            # saying different things about the date convention.
             #
-            # Measured 2026-10-22: the tile read 342.78 for index date 10/20 and this
-            # table read 342.77, because reports landed after the 07:45 freeze on
-            # 10/21. A cent is the usual size and not the limit -- 23 of the 47 dates
-            # holding both figures show different cents, and 2026-10-02 differs by
-            # 1.79. It was reported as a rounding bug; it is not. Both paths round
-            # identically, and the values going into them are different on purpose.
+            # Worth knowing before anyone restores it wholesale: index_dates.py
+            # records that the "CIH dates its sheet this way" premise turned out to
+            # be FALSE -- CIH's sheet on 2026-10-21 was dated otherwise -- so the
+            # staff half of this sentence is owed a correction independently of the
+            # client view.
             st.caption(
-                "Their published estimate against ours for the same CME index date. "
-                "**Ours is the frozen morning call** wherever we have one — not the "
-                "revised figure in the tile at the top of this page. CIH and Compass "
-                "publish in the morning, so scoring our later number against their "
-                "earlier one would flatter us with data their sheets had not seen. "
-                "Where late reports have moved the index since 07:45 the two will "
-                "differ, sometimes by more than a dollar. "
-                "*Miss* columns appear once CME prints that date; before then all three "
-                "are open forecasts."
+                "Dated by CME **index** date — the last sale day in the 7-day window, which is "
+                "how CME names its files"
+                + (" and how CIH dates its daily sheet" if portal_view.is_staff() else "")
+                + ". *Prints* is when "
+                "CME releases it: the next business day, which a holiday can push days out."
             )
 
-            _piv = _peers.pivot_table(index="date", columns="source", values="value",
-                                      aggfunc="last")
-            _srcs = [c for c in sorted(_piv.columns)]
-            # Our column is the FROZEN opening call wherever we have one (loaded above,
-            # shared with the scorecard), so this table compares same-morning against
-            # same-morning. Dates predating fci_snapshots fall back to the live value
-            # and are marked in the caption, because a silent mix of frozen and revised
-            # numbers would be worse than either.
-            _live_s = (_recon.set_index("date")["recon"] if not _recon.empty
-                       else pd.Series(dtype=float))
-            _ours_s = _live_s.copy()
-            _frozen_dates = set()
-            for _d in list(_ours_s.index):
-                _k = _d.strftime("%Y-%m-%d")
-                if _k in _openings:
-                    _ours_s.loc[_d] = _openings[_k]
-                    _frozen_dates.add(_d)
-            for _k, _v in _openings.items():          # frozen dates absent from _recon
-                _ts = pd.Timestamp(_k)
-                if _ts not in _ours_s.index:
-                    _ours_s.loc[_ts] = _v
-                    _frozen_dates.add(_ts)
-            _cme_s = (official_rows.set_index("date")["fci_value"] if len(official_rows)
-                      else pd.Series(dtype=float))
+            _recon = _load_recon_index()
+            # Frozen morning calls. Loaded here rather than down in the peer table because
+            # BOTH sections now score against the number we actually published, not the
+            # one fci_daily happens to hold today.
+            _openings = _load_opening_calls()
+            _official = (
+                fci_df[fci_df["source"] == "cme_official"][["date", "fci_value"]]
+                .rename(columns={"fci_value": "actual"})
+            )
 
-            _t = _piv.copy()
-            _t["__ours"] = _ours_s
-            _t["__cme"] = _cme_s
-            _t = _t.sort_index(ascending=False)
-
-            # Three labels per source, because the value column, the miss column and
-            # the summary caption each want a different length -- and because "CIH"
-            # must never go through .title(), which renders it "Cih".
-            _SRC_LABELS = {
-                "CIH":     ("CIH FCI EST",     "CIH FCI EST Miss",     "CIH"),
-                "COMPASS": ("Compass FCI EST", "Compass FCI EST Miss", "Compass"),
-            }
-            _labels = lambda src: _SRC_LABELS.get(
-                src, (f"{src.title()} FCI EST", f"{src.title()} FCI EST Miss", src.title()))
-            _lbl = lambda src: _labels(src)[0]        # value column
-            _miss_lbl = lambda src: _labels(src)[1]   # miss column
-            _short = lambda src: _labels(src)[2]      # caption, where a full header is noise
-            _money = lambda v: f"${v:.2f}" if pd.notna(v) else "—"
-            _delta = lambda v: f"{v:+.2f}" if pd.notna(v) else "—"
-            # Everyone in this table publishes to the cent, CME included. The unrounded
-            # values are ours and -- since the 2026-09-14 layout dropped the printed
-            # REPORTED INDEX label -- CME's derived seven-day average, which cme_ftp.py
-            # computes as 342.7373 where CME printed 342.74. Differencing unrounded
-            # values charged CIH and Compass up to half a cent of pure rounding on every
-            # post-09-14 date while scoring our own column full-precision against
-            # full-precision, which quietly flattered us. Compare what each desk
-            # actually published, at the precision it published it.
-            _cents = lambda s: s.round(2)
-
-            _disp = pd.DataFrame(index=_t.index)
-            _disp["Index date"] = _t.index.strftime("%a %m/%d")
-            _disp["JSA FCI EST"] = _t["__ours"].map(_money)
-            for _s in _srcs:
-                _disp[_lbl(_s)] = _t[_s].map(_money)
-            _disp["CME"] = _t["__cme"].map(_money)
-            _disp["JSA FCI EST Miss"] = (_cents(_t["__ours"]) - _cents(_t["__cme"])).map(_delta)
-            for _s in _srcs:
-                _disp[_miss_lbl(_s)] = (_cents(_t[_s]) - _cents(_t["__cme"])).map(_delta)
-
-            with st.container(key="wm-peers"):
-                st.dataframe(_disp, use_container_width=True, hide_index=True,
-                             height=min(320, 60 + 35 * len(_disp)))
-
-            # Running accuracy, over scored dates only. Each source is averaged over
-            # the dates IT has a figure for, so the counts can differ -- shown, because
-            # "0.01 over 7 dates" and "0.01 over 1 date" are not the same claim.
-            _scored = _t[_t["__cme"].notna()]
-            if len(_scored):
-                _bits = []
-                _o = (_cents(_scored["__ours"]) - _cents(_scored["__cme"])).abs().dropna()
-                if len(_o):
-                    _bits.append(f"JSA {_o.mean():.3f} ({len(_o)})")
-                for _s in _srcs:
-                    _e = (_cents(_scored[_s]) - _cents(_scored["__cme"])).abs().dropna()
-                    if len(_e):
-                        _bits.append(f"{_short(_s)} {_e.mean():.3f} ({len(_e)})")
-                _n_frozen = len([d for d in _scored.index if d in _frozen_dates])
-                _prov = (f" Our figure is the frozen morning call on {_n_frozen} of "
-                         f"{len(_scored)} scored date(s)"
-                         + (", and the current revised value on the rest — those flatter us, "
-                            "since they have seen data the competitors' morning sheets had not."
-                            if _n_frozen < len(_scored) else ", so this is like-for-like."))
-                st.caption("Mean absolute miss, dates scored in brackets: "
-                           + " · ".join(_bits) + "." + _prov)
+            if _recon.empty:
+                st.info("No reconstruction available on this backend, so there is nothing to compare.")
             else:
-                st.caption("No date here has been printed by CME yet, so nobody is scored.")
+                _sc = _recon.merge(_official, on="date", how="left")
+                _last_official = _official["date"].max() if not _official.empty else None
+
+                # Only dates AFTER CME's last print are genuinely pending. An unmatched
+                # date before that is a day CME simply does not publish (weekend/holiday),
+                # not a forecast awaiting a result.
+                _pending = _sc[_sc["actual"].isna()]
+                if _last_official is not None:
+                    _pending = _pending[_pending["date"] > _last_official]
+                # Weekdays only. This reconstruction computes a value for every CALENDAR
+                # day, and CME never files one for a Saturday or Sunday, so the weekend
+                # carry-forwards are not prints anyone is waiting for.
+                #
+                # This deliberately does NOT exclude holidays. An earlier version filtered
+                # on a federal-holiday business-day calendar, which hid the 9/7/2026
+                # estimate as a Labor Day -- but CME filed an index on Labor Day in both
+                # 2024 and 2025 (see _load_cme_index_dates), so 9/7 is a print that is
+                # genuinely outstanding, not one CME declined to make. Showing a date CME
+                # later turns out to skip is the cheaper error: it drops out of this table
+                # on its own once CME's frontier moves past it.
+                _pending = _pending[_pending["date"].map(
+                    lambda d: pd.Timestamp(d).weekday() < 5)]
+
+                _c1, _c2 = st.columns(2)
+                with _c1:
+                    st.caption("**Awaiting CME** — our forecast for each unpublished index date")
+                    if _pending.empty:
+                        st.caption("CME has published every date we hold an estimate for.")
+                    else:
+                        _p = _pending.sort_values("date", ascending=False).copy()
+                        _p["Index date"] = _p["date"].dt.strftime("%a %m/%d")
+                        _p["Prints"] = _p["date"].map(lambda d: _release_date(d).strftime("%m/%d"))
+                        _p["JSA FCI EST"] = _p["recon"].map(lambda v: f"${v:.2f}")
+                        _p["Head"] = _p["total_head"].map(
+                            lambda v: f"{v:,.0f}" if pd.notna(v) else "—")
+                        with st.container(key="wm-pending"):
+                            st.dataframe(_p[["Index date", "Prints", "JSA FCI EST", "Head"]],
+                                         use_container_width=True, hide_index=True, height=210)
+                        if _last_official is not None:
+                            st.caption(
+                                f"CME's last index date is {_last_official.strftime('%b %d')} "
+                                f"(printed {_release_date(_last_official).strftime('%b %d')}). A low "
+                                "*window head* means few sale days are in the 7-day window yet, so "
+                                "that estimate will move as reports land."
+                            )
+                with _c2:
+                    st.caption("**Scorecard** — how the last ten estimates turned out")
+                    _s = _sc.dropna(subset=["actual"]).sort_values("date", ascending=False).head(10).copy()
+                    if _s.empty:
+                        st.caption("No dates where both a reconstruction and a CME print exist.")
+                    else:
+                        # Score the call we PUBLISHED, not the one held now. fci_daily is
+                        # recomputed from mars_sales every run, so a date's row goes on
+                        # absorbing auction reports that arrive after CME's own cutoff:
+                        # 2026-09-14 read 341.61 at 07:44 when it went out and 341.5794 by
+                        # 13:06 that same day, once Tulsa's 51 head landed. Grading the
+                        # revised figure made this panel structurally incapable of showing
+                        # a bad forecast -- it reported $0.00 while the peer table below,
+                        # which has always used the frozen call, showed that same date
+                        # missing by three cents.
+                        #
+                        # The settled-vs-CME agreement is still worth having and moves to
+                        # the caption. It answers a DIFFERENT question -- does the method
+                        # reproduce CME given the same complete data -- and it is what
+                        # would scream if someone reinstated the fancy/thin/fleshy
+                        # exclusion or broke the Saturday/Sunday-as-Monday merge.
+                        _s["opening"] = _s["date"].map(
+                            lambda d: _openings.get(d.strftime("%Y-%m-%d")))
+                        _n_live = int(_s["opening"].isna().sum())
+                        _s["opening"] = _s["opening"].fillna(_s["recon"])
+                        _s["err"] = _s["opening"] - _s["actual"]
+                        _s["Index date"] = _s["date"].dt.strftime("%m/%d")
+                        _s["JSA FCI EST"] = _s["opening"].map(lambda v: f"${v:.2f}")
+                        _s["CME"] = _s["actual"].map(lambda v: f"${v:.2f}")
+                        _s["Miss"] = _s["err"].map(lambda v: f"{v:+.2f}")
+                        with st.container(key="wm-scored"):
+                            st.dataframe(_s[["Index date", "JSA FCI EST", "CME", "Miss"]],
+                                         use_container_width=True, hide_index=True, height=210)
+                        # Dollar signs escaped: st.caption renders markdown, and a $...$
+                        # pair is LaTeX math there -- unescaped, "$0.38" and "$2" render as
+                        # mangled math rather than money.
+                        _recon_err = (_s["recon"] - _s["actual"]).abs().mean()
+                        st.caption(
+                            f"Mean absolute miss over these {len(_s)} dates: "
+                            f"**\\${_s['err'].abs().mean():.2f}** — the frozen morning "
+                            f"call as published, against CME's print"
+                            + (f" (no frozen call exists for {_n_live} of them, so the current "
+                               f"value stands in there)" if _n_live else "")
+                            + f". Our *settled* reconstruction, which goes on absorbing reports "
+                            f"that land after CME's cutoff, agrees to **\\${_recon_err:.2f}** — "
+                            f"that one measures whether the method reproduces CME, not whether "
+                            f"the morning call was right. Dates before the direct-trade "
+                            f"component began (2026-08-28) ran about \\$2 high because that "
+                            f"input was missing entirely -- they are not representative of "
+                            f"current accuracy."
+                        )
+
+
+            # ── Versus the competition ────────────────────────────────────────────────────
+            # The scorecard above answers "are we close to CME". This answers "are we
+            # closer than the desks we compete with", which is a different question and the
+            # one that actually matters commercially. Their figures are hand-entered from
+            # their daily sheets, so this table is only as complete as what has been typed
+            # in -- dates with no peer figure are simply absent rather than shown as zero.
+
+            # STAFF-ONLY, asked for directly by Ross on 2026-10-23. This is a
+            # COMMERCIAL scorecard -- how JSA's call stacks up against the two desks
+            # it competes with -- and it answers a question a client never asked.
+            # It is also the one block on this page built from somebody else's
+            # product: CIH's and Compass's published figures, hand-entered from
+            # their daily sheets. Redistributing those to a client is a different
+            # act from showing them to the desk that subscribes, which is the same
+            # line letter/sterling.py draws around the Sterling tracker.
+            #
+            # The gate is the one on the whole staff-only region above, not a
+            # second one here: `_openings` and `_recon` are loaded by the Pending
+            # CME Prints section and read by this table, so gating the two
+            # separately would leave this one raising NameError the moment anybody
+            # un-gated it alone.
+            _peers = _load_peer_estimates()
+            if not _peers.empty:
+                st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+                st.markdown('<div class="sec-header">Versus CIH &amp; Compass</div>',
+                            unsafe_allow_html=True)
+                # SAYS WHOSE NUMBER OURS IS, and it has to be here rather than only in
+                # the accuracy line below, because that one renders for SCORED dates --
+                # dates CME has printed -- and the rows a reader actually compares
+                # against the tile at the top of the page are the unscored ones at the
+                # top of this table.
+                #
+                # Measured 2026-10-22: the tile read 342.78 for index date 10/20 and this
+                # table read 342.77, because reports landed after the 07:45 freeze on
+                # 10/21. A cent is the usual size and not the limit -- 23 of the 47 dates
+                # holding both figures show different cents, and 2026-10-02 differs by
+                # 1.79. It was reported as a rounding bug; it is not. Both paths round
+                # identically, and the values going into them are different on purpose.
+                st.caption(
+                    "Their published estimate against ours for the same CME index date. "
+                    "**Ours is the frozen morning call** wherever we have one — not the "
+                    "revised figure in the tile at the top of this page. CIH and Compass "
+                    "publish in the morning, so scoring our later number against their "
+                    "earlier one would flatter us with data their sheets had not seen. "
+                    "Where late reports have moved the index since 07:45 the two will "
+                    "differ, sometimes by more than a dollar. "
+                    "*Miss* columns appear once CME prints that date; before then all three "
+                    "are open forecasts."
+                )
+
+                _piv = _peers.pivot_table(index="date", columns="source", values="value",
+                                          aggfunc="last")
+                _srcs = [c for c in sorted(_piv.columns)]
+                # Our column is the FROZEN opening call wherever we have one (loaded above,
+                # shared with the scorecard), so this table compares same-morning against
+                # same-morning. Dates predating fci_snapshots fall back to the live value
+                # and are marked in the caption, because a silent mix of frozen and revised
+                # numbers would be worse than either.
+                _live_s = (_recon.set_index("date")["recon"] if not _recon.empty
+                           else pd.Series(dtype=float))
+                _ours_s = _live_s.copy()
+                _frozen_dates = set()
+                for _d in list(_ours_s.index):
+                    _k = _d.strftime("%Y-%m-%d")
+                    if _k in _openings:
+                        _ours_s.loc[_d] = _openings[_k]
+                        _frozen_dates.add(_d)
+                for _k, _v in _openings.items():          # frozen dates absent from _recon
+                    _ts = pd.Timestamp(_k)
+                    if _ts not in _ours_s.index:
+                        _ours_s.loc[_ts] = _v
+                        _frozen_dates.add(_ts)
+                _cme_s = (official_rows.set_index("date")["fci_value"] if len(official_rows)
+                          else pd.Series(dtype=float))
+
+                _t = _piv.copy()
+                _t["__ours"] = _ours_s
+                _t["__cme"] = _cme_s
+                _t = _t.sort_index(ascending=False)
+
+                # Three labels per source, because the value column, the miss column and
+                # the summary caption each want a different length -- and because "CIH"
+                # must never go through .title(), which renders it "Cih".
+                _SRC_LABELS = {
+                    "CIH":     ("CIH FCI EST",     "CIH FCI EST Miss",     "CIH"),
+                    "COMPASS": ("Compass FCI EST", "Compass FCI EST Miss", "Compass"),
+                }
+                _labels = lambda src: _SRC_LABELS.get(
+                    src, (f"{src.title()} FCI EST", f"{src.title()} FCI EST Miss", src.title()))
+                _lbl = lambda src: _labels(src)[0]        # value column
+                _miss_lbl = lambda src: _labels(src)[1]   # miss column
+                _short = lambda src: _labels(src)[2]      # caption, where a full header is noise
+                _money = lambda v: f"${v:.2f}" if pd.notna(v) else "—"
+                _delta = lambda v: f"{v:+.2f}" if pd.notna(v) else "—"
+                # Everyone in this table publishes to the cent, CME included. The unrounded
+                # values are ours and -- since the 2026-09-14 layout dropped the printed
+                # REPORTED INDEX label -- CME's derived seven-day average, which cme_ftp.py
+                # computes as 342.7373 where CME printed 342.74. Differencing unrounded
+                # values charged CIH and Compass up to half a cent of pure rounding on every
+                # post-09-14 date while scoring our own column full-precision against
+                # full-precision, which quietly flattered us. Compare what each desk
+                # actually published, at the precision it published it.
+                _cents = lambda s: s.round(2)
+
+                _disp = pd.DataFrame(index=_t.index)
+                _disp["Index date"] = _t.index.strftime("%a %m/%d")
+                _disp["JSA FCI EST"] = _t["__ours"].map(_money)
+                for _s in _srcs:
+                    _disp[_lbl(_s)] = _t[_s].map(_money)
+                _disp["CME"] = _t["__cme"].map(_money)
+                _disp["JSA FCI EST Miss"] = (_cents(_t["__ours"]) - _cents(_t["__cme"])).map(_delta)
+                for _s in _srcs:
+                    _disp[_miss_lbl(_s)] = (_cents(_t[_s]) - _cents(_t["__cme"])).map(_delta)
+
+                with st.container(key="wm-peers"):
+                    st.dataframe(_disp, use_container_width=True, hide_index=True,
+                                 height=min(320, 60 + 35 * len(_disp)))
+
+                # Running accuracy, over scored dates only. Each source is averaged over
+                # the dates IT has a figure for, so the counts can differ -- shown, because
+                # "0.01 over 7 dates" and "0.01 over 1 date" are not the same claim.
+                _scored = _t[_t["__cme"].notna()]
+                if len(_scored):
+                    _bits = []
+                    _o = (_cents(_scored["__ours"]) - _cents(_scored["__cme"])).abs().dropna()
+                    if len(_o):
+                        _bits.append(f"JSA {_o.mean():.3f} ({len(_o)})")
+                    for _s in _srcs:
+                        _e = (_cents(_scored[_s]) - _cents(_scored["__cme"])).abs().dropna()
+                        if len(_e):
+                            _bits.append(f"{_short(_s)} {_e.mean():.3f} ({len(_e)})")
+                    _n_frozen = len([d for d in _scored.index if d in _frozen_dates])
+                    _prov = (f" Our figure is the frozen morning call on {_n_frozen} of "
+                             f"{len(_scored)} scored date(s)"
+                             + (", and the current revised value on the rest — those flatter us, "
+                                "since they have seen data the competitors' morning sheets had not."
+                                if _n_frozen < len(_scored) else ", so this is like-for-like."))
+                    st.caption("Mean absolute miss, dates scored in brackets: "
+                               + " · ".join(_bits) + "." + _prov)
+                else:
+                    st.caption("No date here has been printed by CME yet, so nobody is scored.")
 
 
         for _ in portal_view.staff_expander("📋  Raw Data Table"):
