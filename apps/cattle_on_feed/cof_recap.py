@@ -18,8 +18,11 @@ The Year-Ago column is the same three ratios recomputed from LAST year's file fo
 the same month — what this report looked like a year ago, not the year-ago head
 count.
 """
+import base64
+import functools
 import re
 from datetime import date
+from pathlib import Path
 
 import requests
 
@@ -247,6 +250,118 @@ DATA = "#963634"   # the maroon the client page has always used
 MUTED = "#9a9a9a"
 FONT = "Calibri, Carlito, Arial, sans-serif"
 
+# ── Letterhead ───────────────────────────────────────────────────────────────
+# The daily emails carry a wordmark top-right, the 50-years roundel faint behind
+# the text, and a hairline sage frame. This page is the same company writing and
+# Ross sends it to the same clients, so it carries the same three.
+#
+# letter/render.py IS THE AUTHORITY, and these numbers are its CSS restated
+# rather than imported — that module builds an 8.5x11in HTML document and this
+# is a 520x690 Plotly figure, so there is nothing to share but the geometry.
+# Each value below is a FRACTION OF THE PAGE, multiplied back out at draw time,
+# which is what makes the two look alike at different sizes:
+#
+#   .wm            width 4.4in of an 8.5in page = 0.52; top 46%; opacity 0.07
+#   .masthead img  height 0.34in of an 11in page = 0.031, right-aligned
+#   .frame         config.FRAME #5e7164 at config.FRAME_WIDTH 0.75pt
+#
+# FRAME_INSET IS NOT THE LETTER'S 0.52in, and copying that literally is the
+# mistake to avoid. There the frame sits 0.33in OUTSIDE a text block beginning
+# at 0.85in; here the text begins at 34px, which is 6.5% of 520 and already
+# tighter than 0.52in would be — so the frame is placed the equivalent 0.33in
+# outside THIS page's text instead. Taken literally it lands 2px off the first
+# column and reads as a box drawn round the table.
+BRAND_SAGE    = "#5e7164"   # letter/config.FRAME
+FRAME_PT      = 0.75        # letter/config.FRAME_WIDTH
+FRAME_INSET   = 14          # figure px from the paper edge, every side
+WM_WIDTH_FRAC = 0.52        # .wm width, as a fraction of page width
+WM_CENTRE_Y   = 0.46        # .wm top
+WM_OPACITY    = 0.07        # .wm opacity
+LOGO_H_FRAC   = 0.031       # .masthead img height, as a fraction of page height
+
+
+def _png_size(data: bytes) -> tuple:
+    """(width, height) from a PNG's IHDR, which is always the first chunk.
+
+    Read from the FILE rather than written down here on purpose: the aspect
+    ratio is the one number that must track the asset, and a constant that
+    silently stops matching stretches the wordmark instead of failing. Doing it
+    from the header costs eight bytes of slicing and adds no dependency —
+    Pillow is not in requirements.txt and this module must not be the thing
+    that puts it there.
+    """
+    return (int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big"))
+
+
+@functools.lru_cache(maxsize=4)
+def _asset(name: str):
+    """(data-uri, aspect) for assets/<name>, or ("", 0) when it is missing.
+
+    EMBEDDED, NOT LINKED, for the reason letter/render._asset_uri gives: the
+    figure is serialised to JSON, cached, and handed to kaleido in a separate
+    process, so a relative path would resolve against whatever directory that
+    process happens to be in. A data URI is part of the figure.
+
+    Missing returns empty and the page draws unbranded rather than raising —
+    letterhead is presentation, and losing it must not cost the numbers.
+    """
+    path = Path(__file__).resolve().parents[2] / "assets" / name
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return "", 0.0
+    w, h = _png_size(raw)
+    if not h:
+        return "", 0.0
+    return ("data:image/png;base64," + base64.b64encode(raw).decode("ascii"), w / h)
+
+
+def _box(px_w: float, aspect: float) -> tuple:
+    """(sizex, sizey) in PAPER units for an image px_w figure-pixels wide.
+
+    Paper units are fractions of the figure's own width and height, which are
+    different lengths — so passing one fraction for both is what stretches an
+    image, and the asset's aspect has to be divided back out through FIG_W/FIG_H.
+    """
+    return px_w / FIG_W, (px_w / aspect) / FIG_H
+
+
+def _letterhead() -> tuple:
+    """(images, shapes) for the wordmark, the watermark and the frame."""
+    images, shapes = [], []
+
+    mark, mark_aspect = _asset("jsa-50-years.png")
+    if mark:
+        sx, sy = _box(WM_WIDTH_FRAC * FIG_W, mark_aspect)
+        images.append(dict(
+            source=mark, xref="paper", yref="paper",
+            x=0.5, y=1 - WM_CENTRE_Y, sizex=sx, sizey=sy,
+            xanchor="center", yanchor="middle",
+            opacity=WM_OPACITY, layer="below",
+        ))
+
+    logo, logo_aspect = _asset("logo-full.png")
+    if logo:
+        sx, sy = _box(LOGO_H_FRAC * FIG_H * logo_aspect, logo_aspect)
+        images.append(dict(
+            source=logo, xref="paper", yref="paper",
+            # Right edge on the last column rule, baseline-centred on the title
+            # row — the masthead's flex row, which puts the title left and the
+            # wordmark right, expressed in the only terms a figure has.
+            x=C3 / FIG_W, y=1 - 30 / FIG_H, sizex=sx, sizey=sy,
+            xanchor="right", yanchor="middle",
+            opacity=1, layer="above",
+        ))
+
+    shapes.append(dict(
+        type="rect", xref="paper", yref="paper",
+        x0=FRAME_INSET / FIG_W, x1=1 - FRAME_INSET / FIG_W,
+        y0=FRAME_INSET / FIG_H, y1=1 - FRAME_INSET / FIG_H,
+        line=dict(color=BRAND_SAGE, width=FRAME_PT), fillcolor="rgba(0,0,0,0)",
+        layer="below",
+    ))
+    return images, shapes
+
 # Column rules, in figure pixels. Labels right-align into LBL; the three value
 # columns right-align on their own rule so the decimal points line up.
 LBL, C1, C2, C3 = 150, 252, 354, 464
@@ -287,6 +402,20 @@ def build_figure(recap: dict, guesses: dict = None, footer: bool = True,
         ann.append(_ann(C3, y, _num(year_ago.get(key)), color=DATA))
         y += 26
 
+    # AN EMPTY YEAR-AGO COLUMN IS AN ANSWER, NOT A HOLE, and three bare em-dashes
+    # on a client page read as a broken fetch. It happens when USDA published no
+    # report that month: October 2025 is absent from BOTH the Todays_Reports
+    # archive (cofd1025.txt 404s while cofd0925 and cofd1125 serve) and from
+    # ESMIS, whose own date filter steps straight from Sep 2025 to Nov 2025.
+    # The line says what is missing and does NOT say why -- a cause nobody
+    # verified is worth less than none.
+    if not any(year_ago.get(k) is not None
+               for k in ("on_feed", "placed", "marketed")):
+        ann.append(_ann(C3, y - 8,
+                        f"no {MONTH_ABBR[recap['month'] - 1]} {recap['year'] - 1} "
+                        "report published",
+                        color=MUTED, size=8))
+
     ann.append(_ann(34, 222, "Percent of Last Year", align="left"))
     for x, lab in ((C1, "On-Feed"), (C2, "Placed")):
         ann.append(_ann(x, 258, lab, size=11))
@@ -316,12 +445,18 @@ def build_figure(recap: dict, guesses: dict = None, footer: bool = True,
             bits.append(f"released {released:%b %d, %Y}")
         if guess_source:
             bits.append(f"guesses: {guess_source}")
-        ann.append(_ann(34, FIG_H - 20, "  ·  ".join(bits), color=MUTED,
+        # Clear of the frame: at FIG_H-20 the baseline sat 6px inside a
+        # line drawn FRAME_INSET from the paper edge, and read as struck
+        # through at export scale.
+        ann.append(_ann(34, FIG_H - 34, "  ·  ".join(bits), color=MUTED,
                         size=8, align="left"))
+
+    brand_images, brand_shapes = _letterhead()
 
     fig = go.Figure()
     fig.update_layout(
         width=FIG_W, height=FIG_H, annotations=ann,
+        images=brand_images, shapes=brand_shapes,
         margin=dict(l=0, r=0, t=0, b=0),
         paper_bgcolor="white", plot_bgcolor="white",
         xaxis=dict(visible=False, range=[0, 1], fixedrange=True),

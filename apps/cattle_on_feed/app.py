@@ -928,7 +928,13 @@ tab_summary, tab_recap, tab_flows, tab_season, tab_heifer, tab_state, tab_data =
 # weight-class breakdown (absent from the series above) comes along with them.
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+# FIVE MINUTES, NOT AN HOUR. This is the one page whose whole job is to show a
+# USDA report the moment it lands, and on 2026-10-23 it sat on the September
+# recap while October was live on nass.usda.gov -- a cache entry created before
+# the 2pm CT release, held for the full hour. The fetch is two small text GETs
+# behind `if tab_recap.open:`, so the hour was buying almost nothing and cost
+# exactly the morning it mattered. The button below clears it outright.
+@st.cache_data(ttl=300, show_spinner=False)
 def _latest_recap():
     """(recap dict, error string). Cached so the tab does not refetch per rerun."""
     year, month, text = cof_recap.latest_report()
@@ -1028,23 +1034,42 @@ with tab_recap:
                 # Gated behind a button, like livestock_seasonal's export_row: a
                 # hidden tab still runs every rerun, and to_image spins up Chromium,
                 # so rendering eagerly would tax every widget on the whole page.
-                if st.button("Prepare download", width="stretch",
-                             help="Renders the page above as PNG and PDF."):
+                if st.button("Prepare client page", width="stretch",
+                             help="Renders the page above as one image and as a PDF."):
                     st.session_state["recap_export_ready"] = True
                 if st.session_state.get("recap_export_ready"):
                     fig_json = fig.to_json()
                     with st.spinner("Rendering…"):
                         png, pdf = _recap_image(fig_json, "png"), _recap_image(fig_json, "pdf")
+                    # Named for the job, in the daily letter's own words: HubSpot's
+                    # editor takes ONE asset, so "one image" is the thing to promise.
+                    # Unlike the letter there is no paged/texting twin to confuse it
+                    # with -- the figure is a single page by construction, so there
+                    # is nothing here to split and no capture height to get wrong.
                     if png:
-                        st.download_button("Download PNG", png, file_name=f"{stem}.png",
-                                           mime="image/png", width="stretch")
+                        st.download_button("Save one image (HubSpot)", png,
+                                           file_name=f"{stem}.png", mime="image/png",
+                                           width="stretch")
                     if pdf:
-                        st.download_button("Download PDF", pdf, file_name=f"{stem}.pdf",
+                        st.download_button("Download PDF (print)", pdf,
+                                           file_name=f"{stem}.pdf",
                                            mime="application/pdf", width="stretch")
+                    if png or pdf:
+                        st.caption("The image is the whole page — letterhead, watermark "
+                                   "and frame — ready to drop into a HubSpot email.")
                     if not png and not pdf:
                         st.warning("Image export failed on the host. The table above still "
                                    "renders — use the camera icon on its toolbar.")
                 st.caption(f"Source: {cof_recap.report_url(recap['year'], recap['month'])}")
+                # RELEASE DAY NEEDS A WAY THROUGH THE CACHE. _latest_recap is cached
+                # so the tab does not refetch per rerun, and on release afternoon that
+                # is exactly the wrong behaviour: the entry predates the 2pm CT post
+                # and the page shows last month until it expires. Shortening the TTL
+                # narrows the window; this closes it.
+                if st.button("Check for a new release", width="stretch",
+                             help="Clears the cached recap and refetches from USDA."):
+                    _latest_recap.clear()
+                    st.rerun()
 
 
 # ── Load data ────────────────────────────────────────────────────────────────
