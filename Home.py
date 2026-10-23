@@ -43,10 +43,23 @@ st.set_page_config(
     layout="wide",
 )
 
-# ── The client portal is passphrase-gated ────────────────────────────────────
-# Asked for 2026-10-23. THE CLIENT DEPLOYMENT ONLY: Ross's own app is reached
-# a hundred times a week and gating it would put a box in front of the letter
-# every morning for no gain, since that URL is not the one handed out.
+# ── Both portals are passphrase-gated ────────────────────────────────────────
+# Asked for 2026-10-23, the client app first and Ross's own an hour later:
+# "i want the main page password protected for anyone trying to access it".
+#
+# UNCONDITIONAL, AND THE TWO APPS STILL HAVE DIFFERENT PASSWORDS. Each
+# deployment reads PORTAL_PASSPHRASE from its OWN secrets console, so one line
+# of code gives two values with nothing here to keep in step. That matters
+# rather than being tidy: the client passphrase is handed out, and this app is
+# the one carrying the letter tool, the market board, COF Recap and the peer
+# scorecard. Setting them the same would hand every client the key to all of
+# it, undoing the whole point of the two views.
+#
+# TWO LAYERS ON THIS APP, NOT ONE. This gate decides who gets in at all;
+# portal_auth.admin_sign_in() at the foot of the home page still decides who
+# sees TOOLS, against ADMIN_PASSPHRASE. Ross asked to keep that, and it is
+# worth keeping -- a portal password that is also the admin password collapses
+# the two questions into one.
 #
 # HERE, NOT IN Client.py, and not lower down. It has to be after
 # set_page_config -- which this file makes, and which must be the first
@@ -56,24 +69,23 @@ st.set_page_config(
 # a gate below the navigation leaves every deep link open. portal_auth's own
 # docstring says both of these; this is the first caller to take it up.
 #
-# IT FAILS CLOSED, which is the whole reason the secret goes in FIRST. With no
-# PORTAL_PASSPHRASE set, the client app shows "not configured" and nothing
+# IT FAILS CLOSED, which is the whole reason each secret goes in FIRST. With no
+# PORTAL_PASSPHRASE set, that deployment shows "not configured" and nothing
 # else -- and per CLAUDE.md the fix for a missing secret is a manual reboot
-# rather than a push, so shipping this before the secret exists takes the
-# client portal down until somebody notices.
+# rather than a push. Now that this is unconditional, shipping it before the
+# secret exists on BOTH apps takes down the one Ross writes the letter on.
 #
 # The VALUE is never in this repo. It is public, and two API keys were already
 # removed from it in September for being committed as literals.
 #
-# PORTAL_PASSPHRASE is deliberately a different secret from ADMIN_PASSPHRASE
-# and CHAT_PASSPHRASE -- portal_auth says to give every gate its own value,
-# because this one is handed to clients and those two are not. The client app
-# carries neither of the others anyway.
-if portal_view.is_client():
-    portal_auth.require_passphrase(
-        title="JSA Livestock Portal",
-        subtitle="Enter the access passphrase to continue.",
-    )
+# PORTAL_PASSPHRASE is deliberately a different secret NAME from
+# ADMIN_PASSPHRASE and CHAT_PASSPHRASE -- portal_auth says to give every gate
+# its own, and here they answer different questions: this one is "may you see
+# the dashboards", ADMIN_PASSPHRASE is "may you see the tools".
+portal_auth.require_passphrase(
+    title="JSA Livestock Portal",
+    subtitle="Enter the access passphrase to continue.",
+)
 
 # Hide Streamlit's own chrome WITHOUT hiding the portal's top navigation.
 #

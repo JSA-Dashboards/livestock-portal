@@ -480,26 +480,47 @@ def test_the_gate_sits_above_st_navigation():
     assert gate < nav, "the gate must precede st.navigation or deep links bypass it"
 
 
-def test_the_gate_is_client_only():
+def test_the_gate_is_unconditional():
     """
-    Ross's own app is opened many times a day and is not the URL handed out.
-    Gating it would put a box in front of the letter every morning for nothing.
+    BOTH deployments are gated now. Ross asked for the client app first and his
+    own an hour later: "i want the main page password protected for anyone
+    trying to access it."
+
+    The two still have different passwords, and nothing in the repo arranges
+    that -- each deployment reads PORTAL_PASSPHRASE from its own secrets
+    console. That is the point rather than a convenience: the client value is
+    handed out, and the staff app is the one carrying the letter tool, the
+    market board, COF Recap and the peer scorecard.
+
+    So the gate must NOT be behind `if portal_view.is_client():` any more. A
+    reader who finds that `if` has reintroduced a staff app anyone can open.
     """
     tree = _home_tree()
     for node in ast.walk(tree):
-        if not isinstance(node, ast.If):
-            continue
-        if _call_line(node, "require_passphrase", "portal_auth") is None:
-            continue
-        t = node.test
-        assert (isinstance(t, ast.Call) and isinstance(t.func, ast.Attribute)
-                and t.func.attr == "is_client"
-                and isinstance(t.func.value, ast.Name)
-                and t.func.value.id == "portal_view"), (
-            "the gate must be behind `if portal_view.is_client():`"
-        )
-        return
-    raise AssertionError("require_passphrase is not inside an `if` at all")
+        if isinstance(node, ast.If) and _call_line(node, "require_passphrase",
+                                                   "portal_auth") is not None:
+            raise AssertionError(
+                "require_passphrase is inside an `if` -- both deployments are "
+                "meant to be gated, each with its own PORTAL_PASSPHRASE")
+    assert _call_line(tree, "require_passphrase", "portal_auth"), \
+        "Home.py no longer gates at all"
+
+
+def test_the_admin_gate_survives_the_portal_gate():
+    """
+    TWO LAYERS, NOT ONE. The portal passphrase decides who gets in; the staff
+    sign-in still decides who sees TOOLS, against a different secret. Ross
+    asked to keep it. Collapsing them would mean anyone who can open the
+    portal can open the letter tool.
+    """
+    tree = _home_tree()
+    assert _call_line(tree, "staff_only", "portal_view"), \
+        "the staff sign-in should still be rendered via portal_view.staff_only"
+    src = (ROOT / "Home.py").read_text(encoding="utf-8")
+    assert "admin_sign_in" in src
+    import portal_auth
+    assert portal_auth.DEFAULT_SECRET not in portal_auth.ADMIN_SECRETS, (
+        "the portal gate and the admin gate must read different secrets")
 
 
 def test_no_passphrase_is_assigned_as_a_literal_anywhere():
