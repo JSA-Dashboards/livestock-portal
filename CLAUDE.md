@@ -1747,6 +1747,70 @@ checked before shipping. Poll for the file and retry: headless Edge exits 0
 before the screenshot is flushed, the trap `letter/topdf._wrote` already
 documents for PDFs.
 
+## The Placements by Weight tab
+
+Added 2026-10-23, asked for in these words: *"a toggle or tab that shows the
+weights classes placed, total head, and the marketing window for the cof
+reports"*. Fourth tab on Cattle on Feed, after On-Feed & Flows.
+
+**EVERY FIGURE ON IT ALREADY EXISTED AND NONE OF IT IS RECOMPUTED.**
+`cof_recap.build_recap` has always returned `weight_classes` as
+`(label, head, window)` and `placed_total`; until now both went only into the
+PNG one-pager Ross emails. The tab renders that object. It does not call
+`parse_weight_classes`, it does not call `marketing_window`, and it holds no
+copy of `WEIGHT_CLASSES` — so the tab and the sheet a client is holding cannot
+disagree, which on this portal is the failure recorded five times over.
+`tests/test_cof_weight_tab.py` asserts all three by AST.
+
+**IT IS IN BOTH VIEWS, and COF Recap directly above it is not.** That looks
+inconsistent and is the point: the one-pager is the artefact Ross authors and
+sends, while which weights went on feed and when they market is a market
+reading. The test pins the asymmetry in both directions so it stays a decision.
+
+On the client app, where the Recap tab is hidden, **this tab is the only thing
+that calls `_latest_recap()`** — so it costs that deployment one cached fetch
+rather than an extra one.
+
+### The six classes sum to the published total, exactly
+
+USDA prints the weight-class breakdown in the narrative paragraph and the
+placement total in its own table, independently. They agree to the head —
+**1,777,000 both ways on the October 2026 report** (Sep placements). The tab
+checks it on every load and says so; a mismatch prints a warning naming both
+figures instead.
+
+That audit is the only thing standing between a shifted or missed class and a
+table of entirely plausible head counts. A class read wrongly does not look
+wrong.
+
+### The marketing window is JSA's, not USDA's, and the page says so
+
+USDA publishes the head in each class and **nothing at all** about when those
+cattle market. The months are a fixed per-class offset in
+`cof_recap.WEIGHT_CLASSES` — ten to eleven months out under 600 lb, down to
+four to five at 1,000 lb and over — derived from one example sheet. The caption
+names it as JSA's and calls it a planning guide rather than a forecast.
+
+Dropping that sentence would be the worst available outcome: a reader takes a
+JSA convention for a USDA number, and nothing on the page corrects them.
+
+`test_the_offsets_run_monotonically_heavier_markets_sooner` is the cheap guard
+if anyone edits those offsets — a heavier calf is closer to finished, so the
+months out must fall as weight rises. The months themselves are a judgement no
+test can check.
+
+### Above the QuickStats guard
+
+Same four-line shape as COF Recap and the Saturday Slaughter view: it reads
+USDA's released report text over plain HTTP and needs neither the QuickStats
+API nor a key, so it renders **before** the `st.stop()` that guards that load.
+Verified locally with no `NASS_API_KEY` at all — the tab draws in full.
+A test compares the body's end line against the last `st.stop()`.
+
+**No SCHEMA bump.** `build_recap` is unchanged, so the cached dict has the same
+shape and `weight_classes` was already in it. This is a render, not a reshape —
+bumping reflexively would have refetched every page for nothing.
+
 ## The Data tab's "% of year ago"
 
 Added 2026-10-19 at Ross's request — a third column on the on-feed inventory,
