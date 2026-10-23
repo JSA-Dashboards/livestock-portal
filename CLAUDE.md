@@ -36,6 +36,56 @@ up blank — which reads as a crashed app, not a wiring choice. A test pins it.
 **The landing grid is identical.** Same fifteen tiles, same order, same
 descriptions. Ross asked for exactly that.
 
+### BOTH portals are passphrase-gated, on DIFFERENT values
+
+Added 2026-10-23, the client app first and Ross's own an hour later: *"i want
+the main page password protected for anyone trying to access it"*. The gate is
+`portal_auth.require_passphrase()` in `Home.py`, unconditional — this is its
+first caller since it was written and left unwired on 2026-09-22.
+
+**NOTHING IN THIS REPO ARRANGES THE TWO VALUES, AND THAT IS THE DESIGN.** Each
+deployment reads `PORTAL_PASSPHRASE` from its OWN secrets console, so one
+unconditional line yields two passwords with nothing to keep in step. It
+matters rather than being tidy: the client value is handed out, and the staff
+app carries the letter tool, the market board, COF Recap and the peer
+scorecard. One shared value hands every client the key to all of it.
+
+Three gates, three jobs, three secrets — **never collapse any two**:
+
+| secret | app | opens |
+|---|---|---|
+| `PORTAL_PASSPHRASE` | client | the dashboards, client view |
+| `PORTAL_PASSPHRASE` | staff *(different value)* | the dashboards, full view |
+| `ADMIN_PASSPHRASE` | staff | TOOLS — letter, market board, cycles |
+
+**IT MUST STAY ABOVE `st.navigation`, and that is the whole correctness.**
+Streamlit executes `Home.py` on every request including a deep link straight to
+`/beef-cutout`, then dispatches. Below the navigation call every deep link
+stays open while the home page looks locked — worse than no gate, because it
+looks like one. Verified by testing deep links rather than the home page:
+`/weekly-cattle-reports` on the staff app and `/cattle-on-feed` on the client
+one, both locked with nothing leaking. It must also FOLLOW `set_page_config`,
+which `Home.py` makes, so `Client.py` cannot do it before handing over.
+
+**IT FAILS CLOSED ON BOTH APPS NOW.** Ship it before the secret exists and that
+deployment renders "not configured" and nothing else — and a missing secret is
+recovered by a manual reboot, not a push. Set the secret FIRST, both times.
+After a reboot, `not configured` absent from the gate page is the cheap check
+that the secret was actually found.
+
+**The VALUES are not in this repo and must never be.** It is public. A first
+draft of the guard test searched for the literal passphrase, which meant
+writing it into a test file — leaking it in the course of testing that it is
+not leaked. The shipped test matches the PATTERN (`*PASSPHRASE = "..."`) and
+contains no secret. Note `letter/config.py` holds `712-373-3276`, the office
+number: a substring match for a four-digit passphrase and not a leak, which is
+why the test does not grep for values.
+
+**Claude cannot verify the login itself** — typing a passphrase into a form is
+out, including Ross's own. What is checkable is that the gate renders and the
+secret is found; whether the value is the one he meant is his to confirm, and
+worth asking for rather than assuming.
+
 ### What comes out, as a standing rule rather than a list
 
 1. **Tabs that are a working tool rather than a market reading.**
