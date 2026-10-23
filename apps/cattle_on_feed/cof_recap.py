@@ -246,7 +246,8 @@ def build_recap(year: int, month: int, text: str, prior_text: str = None,
 
 FIG_W, FIG_H = 520, 690
 INK = "#000000"    # title, column headers
-DATA = "#963634"   # the maroon the client page has always used
+DATA = "#000000"   # Ross, 2026-10-23: black. Was #963634, the maroon this
+                   # page carried from the hand-built Excel original.
 MUTED = "#9a9a9a"
 FONT = "Calibri, Carlito, Arial, sans-serif"
 
