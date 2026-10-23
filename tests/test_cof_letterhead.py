@@ -164,7 +164,7 @@ def _notes(fig):
 def test_an_empty_year_ago_column_says_why():
     """Three bare em-dashes on a client page read as a broken fetch."""
     notes = _notes(_fig(year_ago={}))
-    assert notes == ["no Oct 2025 report published"], notes
+    assert notes == ["No Oct 2025 report published"], notes
 
 
 def test_a_populated_year_ago_column_says_nothing():
@@ -174,4 +174,4 @@ def test_a_populated_year_ago_column_says_nothing():
 def test_the_note_names_the_year_before_the_report():
     """Not 'last year' and not this year — the month that is missing."""
     assert _notes(_fig(year_ago={}, month=1, year=2027)) == \
-        ["no Jan 2026 report published"]
+        ["No Jan 2026 report published"]

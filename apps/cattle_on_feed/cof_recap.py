@@ -244,7 +244,13 @@ def build_recap(year: int, month: int, text: str, prior_text: str = None,
 # what the tab shows and what the PNG/PDF button hands over are the same object.
 # kaleido is already pinned at 0.2.1 in requirements.txt for exactly this.
 
-FIG_W, FIG_H = 520, 690
+# 740, not 690: at 690 the page had no bottom margin at all. The weight-class
+# block ends on its Total row around y=644 and the source line sat 12px under
+# it, reading as a fourth column entry rather than a footer -- Ross, 2026-10-23,
+# looking at the HubSpot image: "should sit further down in the left hand corner
+# so it's not right next to the numbers". The extra 50px is bottom margin only;
+# every annotation is positioned in pixels FROM THE TOP, so nothing above moves.
+FIG_W, FIG_H = 520, 740
 INK = "#000000"    # title, column headers
 DATA = "#000000"   # Ross, 2026-10-23: black. Was #963634, the maroon this
                    # page carried from the hand-built Excel original.
@@ -413,7 +419,7 @@ def build_figure(recap: dict, guesses: dict = None, footer: bool = True,
     if not any(year_ago.get(k) is not None
                for k in ("on_feed", "placed", "marketed")):
         ann.append(_ann(C3, y - 8,
-                        f"no {MONTH_ABBR[recap['month'] - 1]} {recap['year'] - 1} "
+                        f"No {MONTH_ABBR[recap['month'] - 1]} {recap['year'] - 1} "
                         "report published",
                         color=MUTED, size=8))
 
@@ -446,10 +452,10 @@ def build_figure(recap: dict, guesses: dict = None, footer: bool = True,
             bits.append(f"released {released:%b %d, %Y}")
         if guess_source:
             bits.append(f"guesses: {guess_source}")
-        # Clear of the frame: at FIG_H-20 the baseline sat 6px inside a
-        # line drawn FRAME_INSET from the paper edge, and read as struck
-        # through at export scale.
-        ann.append(_ann(34, FIG_H - 34, "  ·  ".join(bits), color=MUTED,
+        # Bottom-left corner: 14px above the frame line and ~68px below the
+        # Total row, so it reads as provenance on stationery rather than as
+        # another figure in the table. At FIG_H-20 it sat INSIDE the frame.
+        ann.append(_ann(34, FIG_H - 28, "  ·  ".join(bits), color=MUTED,
                         size=8, align="left"))
 
     brand_images, brand_shapes = _letterhead()
