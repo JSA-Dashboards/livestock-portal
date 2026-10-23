@@ -262,6 +262,60 @@ def series_for(df: pd.DataFrame, state: str) -> pd.DataFrame:
     return df[df["state_alpha"] == state].sort_values("date").reset_index(drop=True)
 
 
+# The released report text, by full state name as USDA prints it.
+_STATE_BY_NAME = {v.lower(): k for k, v in STATE_NAMES.items()}
+
+
+def overlay_released(df: pd.DataFrame, series: str, rows: list) -> pd.DataFrame:
+    """`df` with USDA's just-released figures written over it.
+
+    WHY THE PAGE NEEDS THIS AT ALL. Everything here reads QuickStats through a
+    cache a scheduled job fills, so on release day it sat on last month while
+    the COF Recap tab — which parses USDA's released text directly — already had
+    the new one. Two halves of one page a month apart. This closes that: the
+    history still comes from the cache, and the one or two months the release
+    covers are written over the top of it.
+
+    **THE RELEASE WINS WHERE THE TWO OVERLAP, and that is not arbitrary.**
+    Checked against the cache on 2026-10-23: of 104 observations both sources
+    held, 98 agreed exactly and 6 differed — South Dakota and the US total, in
+    all three monthly series, for the PRIOR month. They are USDA's restatement,
+    which every release makes, and the US delta equalled South Dakota's to the
+    head in each one (+5,000 / +3,000 / -2,000). So the disagreements were the
+    release being newer, not this being wrong. The same rule the feeder index
+    runs on: the published value wins for any period it covers.
+
+    **IT IS APPLIED OUTSIDE load_all's CACHE ON PURPOSE.** load_all holds for an
+    hour because it is a Snowflake read over full series; this is a dict merge
+    over ~150 rows. Keeping it out here lets the new month appear on the release
+    text's own five-minute clock without making the history refetch hourly.
+    """
+    if df.empty or not rows:
+        return df
+    recs = []
+    for r in rows:
+        if r["series"] != series:
+            continue
+        st = _STATE_BY_NAME.get(r["state_name"].lower())
+        if not st:
+            continue
+        recs.append({"year": r["year"], "month": r["month"],
+                     "date": pd.Timestamp(year=r["year"], month=r["month"], day=1),
+                     "agg_level_desc": "NATIONAL" if st == "US" else "STATE",
+                     "state_alpha": st, "Value": float(r["value"])})
+    if not recs:
+        return df
+    add = pd.DataFrame(recs)
+    # Replace, never append: the prior month is usually already in the cache and
+    # concatenating would leave TWO rows for it, which every downstream .max()
+    # and groupby would silently pick between.
+    marked = df.merge(add[["state_alpha", "year", "month"]].assign(_new=1),
+                      on=["state_alpha", "year", "month"], how="left")
+    kept = df[marked["_new"].isna().values]
+    return (pd.concat([kept, add], ignore_index=True)
+              .sort_values("date").reset_index(drop=True))
+
+
 def latest_kpi(df: pd.DataFrame, state: str) -> dict:
     nan = dict(current=float("nan"), mom=float("nan"), mom_pct=float("nan"),
                yoy=float("nan"), yoy_pct=float("nan"), date=None)
@@ -959,12 +1013,20 @@ tab_summary, tab_recap, tab_flows, tab_season, tab_heifer, tab_state, tab_data =
 # exactly the morning it mattered. The button below clears it outright.
 @st.cache_data(ttl=300, show_spinner=False)
 def _latest_recap():
-    """(recap dict, error string). Cached so the tab does not refetch per rerun."""
+    """(recap dict, overlay rows, error string) from ONE fetch of the release.
+
+    The recap and the overlay must describe the SAME report, so they are built
+    together rather than from two cached fetches. Two entries expiring
+    independently is how the Recap tab and the Summary tiles come to show
+    different months — which is the exact complaint this whole change answers,
+    reintroduced one level down.
+    """
     year, month, text = cof_recap.latest_report()
     if not text:
-        return None, "Could not reach the USDA report file at nass.usda.gov."
+        return None, [], "Could not reach the USDA report file at nass.usda.gov."
     prior = cof_recap.fetch_report(year - 1, month)
-    return cof_recap.build_recap(year, month, text, prior), ""
+    return (cof_recap.build_recap(year, month, text, prior),
+            cof_recap.released_rows(text, year, month), "")
 
 
 # The guesses are the one thing on the recap that cannot be re-derived, so they
@@ -1003,7 +1065,7 @@ def _recap_image(fig_json: str, fmt: str) -> bytes | None:
 
 with tab_recap:
     if tab_recap.open:
-        recap, err = _latest_recap()
+        recap, _release_rows, err = _latest_recap()
         if err:
             st.error(err)
         else:
@@ -1103,6 +1165,23 @@ with tab_recap:
 with header_slot:
     with st.spinner("Loading USDA NASS data…"):
         inv, place, sales, other, heifer, steer, inv_full, place_full, sales_full = load_all(LOAD_YEARS, Q_YEARS)
+
+    # USDA's released text written over the cached history -- see
+    # overlay_released. Outside load_all's hour-long cache on purpose, and
+    # wrapped because letterhead-grade presentation must never cost the
+    # numbers: if the release is unreachable the page is exactly what it was.
+    try:
+        _rows = _latest_recap()[1]
+    except Exception:
+        _rows = []
+    if _rows:
+        inv        = overlay_released(inv,        "inventory",  _rows)
+        place      = overlay_released(place,      "placements", _rows)
+        sales      = overlay_released(sales,      "marketings", _rows)
+        other      = overlay_released(other,      "other",      _rows)
+        inv_full   = overlay_released(inv_full,   "inventory",  _rows)
+        place_full = overlay_released(place_full, "placements", _rows)
+        sales_full = overlay_released(sales_full, "marketings", _rows)
 
 if inv.empty:
     with header_slot:

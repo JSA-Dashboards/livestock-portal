@@ -65,7 +65,26 @@ _US_ROW = re.compile(r"^(.+?)\s*\.{2,}:\s*" + _NUM + r"\s+" + _NUM + r"\s+(\d+)\
 
 _ONFEED_TABLE = "Cattle on Feed Inventory on 1,000+ Capacity Feedlots by Month"
 _PLACED_TABLE = "Cattle Placed on Feed on 1,000+ Capacity Feedlots by Month"
+_MKT_TABLE    = "Cattle Marketed on 1,000+ Capacity Feedlots by Month"
+_OTHER_TABLE  = "Cattle Other Disappearance on 1,000+ Capacity Feedlots by Month"
 _US_TABLE = "1,000+ Capacity Feedlots - United States:"
+
+# series -> (table marker, month offset of the table's CURRENT column from the
+# report month). THE OFFSET IS THE WHOLE CORRECTNESS OF THIS. The October report
+# carries the OCTOBER 1 inventory but SEPTEMBER placements, marketings and other
+# disappearance, and the tables say so in their own headers:
+#
+#   Inventory : October 1, 2025 | September 1, 2026 | October 1, 2026
+#   Marketed  : During September 2025 | During August 2026 | During September 2026
+#
+# Give the flows offset 0 and every figure lands a month late, on a page where
+# a month-late placement number is entirely plausible.
+RELEASED_TABLES = {
+    "inventory":  (_ONFEED_TABLE,  0),
+    "placements": (_PLACED_TABLE, -1),
+    "marketings": (_MKT_TABLE,    -1),
+    "other":      (_OTHER_TABLE,  -1),
+}
 
 
 def _int(s):
@@ -152,6 +171,50 @@ def parse_us(text: str) -> dict:
             out["marketed"] = (prev, curr)
     if on_feed:
         out["on_feed"] = on_feed
+    return out
+
+
+def _shift(year: int, month: int, delta: int) -> tuple:
+    """(year, month) `delta` months from (year, month)."""
+    i = year * 12 + (month - 1) + delta
+    return i // 12, i % 12 + 1
+
+
+def released_rows(text: str, year: int, month: int) -> list:
+    """[{series, state_name, year, month, value}] of HEAD, from the release text.
+
+    This is what lets the dashboard move at the release rather than waiting on
+    QuickStats and then on the cache job behind it. Each state row carries three
+    periods — a year before the current one, the month before it, and the
+    current one — so one parse covers the new month AND the restatement of the
+    month before it, which USDA makes in every release.
+
+    **STATE NAMES ARE RETURNED AS PRINTED, not as abbreviations.** app.py owns
+    STATE_NAMES and maps them; a second copy of that map here is the
+    snowflake_db-times-five problem in miniature, and this module already
+    carries a PARTIAL one in DEFAULT_STATES that covers five states of thirteen.
+
+    **Values are multiplied to HEAD.** The tables print "1,000 head" and
+    QuickStats serves head, so an un-multiplied overlay is out by a factor of a
+    thousand — on a page where every figure is already in the millions, that
+    renders as a collapse rather than as an obvious unit error.
+
+    A row USDA suppressed as "(D)" simply fails _STATE_ROW and is skipped, which
+    leaves the cached figure in place rather than blanking it.
+    """
+    out = []
+    for series, (marker, offset) in RELEASED_TABLES.items():
+        cy, cm = _shift(year, month, offset)
+        periods = [(_shift(cy, cm, -12), 0), (_shift(cy, cm, -1), 1), ((cy, cm), 2)]
+        for ln in _table_block(text, marker):
+            m = _STATE_ROW.match(ln)
+            if not m:
+                continue
+            name = m.group(1).strip()
+            for (py, pm), col in periods:
+                out.append({"series": series, "state_name": name,
+                            "year": py, "month": pm,
+                            "value": _int(m.group(2 + col)) * 1000})
     return out
 
 
