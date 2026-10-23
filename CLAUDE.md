@@ -1811,6 +1811,113 @@ syntax error in the page rather than a codec choice in the reader. It is
 itself is recorded further up this file; what was new is that the helper every
 future page test will reach for was excluded from two pages by it.
 
+## The release overlay — the page moves at 2pm, not the next morning
+
+Added 2026-10-23 at Ross's ask: *"can we just change the cattle on feed
+dashboard to automatically update all of the numbers once the report is
+released each month? update everything else just like the COF recap updated"*.
+
+**THE PAGE HAD TWO HALVES ON TWO CLOCKS.** The COF Recap parses USDA's released
+report text and has the new month within minutes. Every other tab reads
+QuickStats through `JSA.NASS_CACHE`, which a scheduled job fills — so it needs
+QuickStats to load the data AND the ETL to run after that. On release day
+2026-10-23 the Recap showed October while the Summary, Data and every chart
+showed September, and Ross reasonably read that as a broken dashboard.
+
+`cof_recap.released_rows()` parses the release into head counts and
+`app.overlay_released()` writes them over the cached frames.
+
+**THE RELEASED TEXT CARRIES HEAD COUNTS, not just the percentages the Recap
+shows** — this is the fact the whole feature rests on, and it is not obvious
+from the Recap, which only ever prints ratios. For the US and all thirteen
+states, across inventory, placements, marketings and other disappearance, with
+three periods each. What it does NOT carry is history, which is exactly why
+this is an OVERLAY and not a replacement: the cache still supplies every month
+before the release.
+
+### THE MONTH OFFSET IS THE WHOLE CORRECTNESS
+
+The October report carries the **October 1 inventory** but **September**
+placements, marketings and other disappearance. Each table says so in its own
+header, and they are not the same:
+
+    Inventory : October 1, 2025 | September 1, 2026 | October 1, 2026
+    Marketed  : During September 2025 | During August 2026 | During September 2026
+
+`RELEASED_TABLES` holds the offset per table — 0 for inventory, −1 for the three
+flows. Give the flows the inventory's offset and every flow figure lands a month
+late, on a page where a month-late placement number is entirely plausible and
+nothing raises. A test asserts the two kinds differ rather than just checking
+each value.
+
+### The release wins on overlap, and that was MEASURED
+
+Of 104 observations both sources held on 2026-10-23: **98 agreed exactly, 6
+differed.** The six were South Dakota and the US total, in all three monthly
+series, for the PRIOR month — USDA's restatement, which every release makes.
+
+**The US delta equalled South Dakota's to the head in each one** (+5,000 /
++3,000 / −2,000), which is what established these were the release being newer
+rather than the parser being wrong. A parse error does not reconcile.
+
+So September on-feed moved 11,163,000 → 11,168,000 when October landed. **A
+figure already on the page can change, and that is correct** — the same thing
+Cold Storage documents for its own restatements. Same rule the feeder index
+runs on: the published value wins for any period it covers.
+
+### Four things in it that look wrong and are not
+
+- **One fetch, not two.** `_latest_recap()` returns the recap AND the overlay
+  rows from a single `latest_report()` call. Two cached fetches expiring
+  independently is how the Recap tab and the Summary tiles come to show
+  different months — **the original bug, reintroduced one level down**. A test
+  asserts `cof_recap.latest_report()` appears exactly once in the file.
+- **Replace, never append.** The prior month is usually already cached, so
+  concatenating leaves TWO rows for it and every downstream `.max()` and
+  `groupby` picks between them silently.
+- **Values are multiplied to HEAD.** The tables print "1,000 head"; QuickStats
+  serves head. An un-multiplied overlay is out by a factor of a thousand, on a
+  page where every figure is already in the millions — so it renders as a
+  collapse rather than as an obvious unit error.
+- **State names come back as USDA prints them**, and `app.py` maps them, because
+  it owns `STATE_NAMES`. A second copy in `cof_recap.py` is the
+  `snowflake_db`-times-five problem in miniature — and that module already
+  carries a PARTIAL one in `DEFAULT_STATES`, five states of thirteen, which is
+  exactly how such a copy goes wrong.
+
+### It is applied OUTSIDE `load_all`'s cache, which is the useful bit
+
+`load_all` holds for an hour because it is a Snowflake read over full series.
+The overlay is a merge over ~150 rows. Keeping it outside means **the new month
+appears on the release text's own five-minute clock while the history stays on
+the hour** — two clocks again, but deliberately, and the fast one is the one
+that matters on release day. It is wrapped in `try/except`: if the release is
+unreachable the page is exactly what it was.
+
+### The sidebar button and the freshness line
+
+`Check for new data` clears the cache and reruns; the line under it reads
+*"Cached NASS data: on-feed to Oct 2026 · flows to Sep 2026"*.
+
+**Clearing `load_all` alone does nothing** — it is cached AND its body calls
+`fetch_series`, which is cached too, so clearing the outer one re-runs it
+straight back into the inner cache and returns identical frames. Both, or
+neither.
+
+On-feed and the flows are named separately in that line because USDA publishes
+them a month apart by design, so one combined date would be wrong for one of
+them every month. It renders through an `st.empty()` slot booked beside the
+button and filled after the load — script order, not layout order.
+
+### Verified end to end, 2026-10-23
+
+Against the live cache and release: on-feed Sep → **Oct 11,372,000**,
+placements Aug → **Sep 1,777,000**, marketings Aug → **Sep 1,524,000**, no
+duplicate keys. The clincher is that the Summary tiles' year-on-year now
+reproduces the Recap's published percentages exactly — **−0.4% / −12.1% /
+−6.6% against USDA's 99.6 / 87.9 / 93.4** — so the two halves of the page agree
+by construction rather than by luck.
+
 ## The Cold Storage view
 
 Added 2026-09-25. The Cattle on Feed page carries a **second USDA report**
