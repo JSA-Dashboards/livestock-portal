@@ -43,6 +43,42 @@ st.set_page_config(
     layout="wide",
 )
 
+# ── TEMPORARY: ?probe=1 ──────────────────────────────────────────────────────
+# Added 2026-10-26 to diagnose why the remembered unlock is not working on the
+# deployed app when it works locally. REMOVE THIS once that is settled.
+#
+# It answers, from the real deployment and WITHOUT anyone typing a passphrase:
+# which Streamlit is actually installed, whether st.html still takes the
+# javascript flag, which cookies the server can see, and whether a cookie
+# written by the real helper survives a reload. Cookie NAMES only -- no values,
+# no secrets.
+#
+# Behind a query param so a client never meets it, the ?tools=1 shape.
+if str(st.query_params.get("probe") or "").strip() == "1":
+    import streamlit as _st_mod
+    import inspect as _inspect
+    _seen = []
+    try:
+        _seen = sorted(st.context.cookies.keys())
+    except Exception as _e:
+        _seen = [f"<unreadable: {type(_e).__name__}>"]
+    _flag = "unsafe_allow_javascript" in _inspect.signature(st.html).parameters
+    st.write({
+        "streamlit": _st_mod.__version__,
+        "st.html takes unsafe_allow_javascript": _flag,
+        "cookie names the server can see": _seen,
+        "portal cookie present": portal_auth._cookie_name(portal_auth.DEFAULT_SECRET) in _seen,
+        "REMEMBER_DAYS": portal_auth.REMEMBER_DAYS,
+    })
+    # Write a probe cookie through the REAL helper, so this tests the shipped
+    # path rather than a reimplementation of it. Reload with ?probe=1 again:
+    # if "jsa_probe" appears above, writing and reading both work.
+    portal_auth._remember_in_browser("probe", "ok")
+    st.caption("Reload this URL. If a jsa_portal_probe cookie appears above, "
+               "the write and the read both work on this deployment.")
+    st.stop()
+
+
 # ── Both portals are passphrase-gated ────────────────────────────────────────
 # Asked for 2026-10-23, the client app first and Ross's own an hour later:
 # "i want the main page password protected for anyone trying to access it".
