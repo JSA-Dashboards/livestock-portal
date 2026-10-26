@@ -54,6 +54,7 @@ import portal_view  # noqa: E402
 
 import snowflake_db as db
 import border as bd
+import corn_demand as cdm
 import mx_prices as mxp
 
 # ── JSA Brand Colors (shared with the rest of the portal shell) ─────────────
@@ -375,8 +376,18 @@ can answer what a feeder calf is worth this week.
 # the Saturday Slaughter view takes for its MARS fetch.
 this_yr = date.today().year
 
-tab_crossings, tab_prices = st.tabs(
-    ["Mexican Feeder Crossings", "Mexican Feeder Prices"])
+# CORN DEMAND IS STAFF-ONLY, on Ross's instruction 2026-10-26. It is an
+# internal read rather than a client one: every figure on it rests on feeding
+# assumptions a client would take for measurement, and the interesting number
+# is about US corn demand rather than about their cattle.
+#
+# HIDING THE LABEL DOES NOT STOP THE BODY -- portal_view.Hidden is a no-op
+# context manager, so an unguarded `with tab_corn:` would run the PSD fetch on
+# a client load and render the panel UNFRAMED into their page. The body is
+# behind portal_view.shown(), which tests/test_client_view.py pins.
+tab_crossings, tab_prices, tab_corn = portal_view.tabs(
+    ["Mexican Feeder Crossings", "Mexican Feeder Prices", "Corn Demand"],
+    hide=["Corn Demand"])
 
 with tab_crossings:
     # ── Status banner ───────────────────────────────────────────────────────────
@@ -2008,4 +2019,253 @@ with tab_prices:
             f'({C["auction"].title()}) · Border quotes USDA AMS 3486 · '
             f'FX European Central Bank &nbsp;·&nbsp; sale '
             f'{fmt_date(C["sale_date"])}</div>',
+            unsafe_allow_html=True)
+
+
+# ── Corn demand ─────────────────────────────────────────────────────────────
+# STAFF ONLY. See the note at the tab construction above.
+if portal_view.shown(tab_corn):
+    with tab_corn:
+
+        @st.cache_data(ttl=21600, show_spinner=False)
+        def load_corn(schema=cdm.SCHEMA):
+            """Two keyless PSD bulk files, about 4 seconds. No secret, no
+            host, no cron -- which is why this is a page fetch rather than a
+            droplet job."""
+            try:
+                return cdm.load()
+            except Exception as e:                    # noqa: BLE001
+                st.session_state["_corn_err"] = f"{type(e).__name__}: {e}"
+                return None
+
+        # PASSED, never left to the default: st.cache_data hashes the
+        # arguments it is CALLED with, so a parameter sitting at its default
+        # contributes nothing to the key.
+        CD = load_corn(cdm.SCHEMA)
+
+        st.markdown('<div class="sec-header">Corn Demand That Moves With '
+                    'These Cattle</div>', unsafe_allow_html=True)
+
+        if not CD:
+            st.warning(
+                f"USDA PSD is not answering — {st.session_state.get('_corn_err', 'no detail')}"
+            )
+        else:
+            _sf, _base, _ly, _lh = cdm.crossing_shortfall(CD["cattle"])
+
+            st.caption(
+                f"While the border was shut, cattle that would have crossed "
+                f"were kept and fed in **Mexico**, on corn Mexico buys from "
+                f"the **United States**. Mexican exports ran **{_base:,.0f} "
+                f"head** a year over 2022–24 and **{_lh:,.0f}** in MY{_ly}, a "
+                f"shortfall of **{_sf:,.0f} head**. What that is worth in "
+                f"corn, and where the demand goes when they cross again, is "
+                f"below — every figure rests on the feeding assumptions in "
+                f"the controls, which are **assumptions and not measurements**."
+            )
+
+            # THE FULL SHORTFALL IS A SCENARIO, NOT WHAT IS HAPPENING.
+            # Reopening is phased -- Douglas 2026-08-24, Santa Teresa 09-24
+            # capped at 750 head a day, Columbus 10-26, Nogales planned for
+            # 11-30 -- and the flow is running near a third of normal. USDA's
+            # own MY2027 forecast is 625,000 head, half of 2024. Headlining
+            # the full return without a control would size something nobody
+            # expects soon.
+            _psd_next = (CD["cattle"].get(_ly + 1, {}).get("Exports", 0.0)
+                         * 1000)
+            _head = st.number_input(
+                "Head a year that stop being fed in Mexico", 0,
+                int(_base), int(_sf), 25_000, key="cd_head", format="%d",
+                help=f"Defaults to the full shortfall against a normal year "
+                     f"({_sf:,.0f} head). USDA's MY{_ly+1} forecast implies "
+                     f"about {max(0.0, _base - _psd_next):,.0f}; the crossing "
+                     f"pace so far since August is nearer a third of normal "
+                     f"again. The Crossings tab has the live count.")
+
+            # THESE ARE YARD WEIGHTS, NOT BORDER WEIGHTS. The pounds between
+            # the crossing and the bunk are grass on both sides -- in Mexico
+            # the first 100-150 kg carries no grain at all -- and charging
+            # them as corn inflates every figure below by about 40%.
+            st.caption(
+                "Feedlot **entry** weight, not crossing weight: the pounds "
+                "between the border and the bunk are put on at grass on both "
+                "sides, and cost no corn."
+            )
+            c2, c3 = st.columns(2)
+            with c2:
+                st.markdown("**Fed in Mexico**")
+                _mxi = st.number_input("On feed at, lb", 400.0, 1000.0,
+                                       float(cdm.MX_FEEDLOT_IN_LB), 25.0,
+                                       key="cd_mxi")
+                _mxf = st.number_input("Finish weight, lb", 800.0, 1500.0,
+                                       float(cdm.MX_FINISH_LB), 25.0,
+                                       key="cd_mxf")
+                _mxc = st.number_input("Feed conversion, lb feed per lb gain",
+                                       4.0, 12.0, float(cdm.MX_CONVERSION),
+                                       0.1, key="cd_mxc")
+                # WHOLE PERCENTS. On a 0-1 slider Streamlit applies
+                # `format` to the raw value, so 0.65 printed as "1%" while
+                # the arithmetic below was correct -- a label that lies
+                # about a control nobody would doubt.
+                _mxs = st.slider("Corn share of ration", 0, 100,
+                                 int(round(cdm.MX_CORN_SHARE * 100)), 1,
+                                 key="cd_mxs", format="%d%%",
+                                 help="Mexican yards lean on sorghum and "
+                                      "byproduct, so this sits below the US "
+                                      "figure rather than equal to it.")
+            with c3:
+                st.markdown("**Fed in the US**")
+                _usi = st.number_input("On feed at, lb ", 500.0, 1100.0,
+                                       float(cdm.US_FEEDLOT_IN_LB), 25.0,
+                                       key="cd_usi")
+                _usf = st.number_input("Finish weight, lb ", 1000.0, 1700.0,
+                                       float(cdm.US_FINISH_LB), 25.0,
+                                       key="cd_usf")
+                _usc = st.number_input("Feed conversion, lb feed per lb gain ",
+                                       4.0, 12.0, float(cdm.US_CONVERSION),
+                                       0.1, key="cd_usc")
+                _uss = st.slider("Corn share of ration ", 0, 100,
+                                 int(round(cdm.US_CORN_SHARE * 100)), 1,
+                                 key="cd_uss", format="%d%%",
+                                 help="corn_cost.py on this portal states an "
+                                      "80% corn ration and 6.5:1, and "
+                                      "reproduces its own worked example at "
+                                      "those numbers.")
+
+            # /100 HERE, not in the widget: the sliders carry whole
+            # percents so their labels read correctly.
+            R = cdm.displaced(_head, mx_in=_mxi, mx_finish=_mxf, mx_conv=_mxc,
+                              mx_share=_mxs / 100.0, us_in=_usi,
+                              us_finish=_usf, us_conv=_usc,
+                              us_share_corn=_uss / 100.0)
+
+            st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+            t = st.columns(3)
+            with t[0]:
+                st.markdown(tile(
+                    "US corn EXPORT demand lost",
+                    f"{R['export_bu']/1e6:,.0f} mil bu",
+                    sub(f"corn Mexico stops feeding · "
+                        f"{R['per_head_mx_bu']:.0f} bu a head")),
+                    unsafe_allow_html=True)
+            with t[1]:
+                st.markdown(tile(
+                    "US corn DOMESTIC demand gained",
+                    f"{R['domestic_bu']/1e6:,.0f} mil bu",
+                    sub(f"corn US yards feed instead · "
+                        f"{R['per_head_us_bu']:.0f} bu a head")),
+                    unsafe_allow_html=True)
+            with t[2]:
+                # THE NET IS NOT OPTIONAL. The export tile on its own is
+                # arithmetically right and tells a reader the opposite of what
+                # happens to US corn demand, which is the standing failure
+                # this repo records. The two are never shown without it.
+                _net = R["net_bu"] / 1e6
+                st.markdown(tile(
+                    "NET US corn demand",
+                    f"{_net:+,.0f} mil bu",
+                    sub("domestic gain less export loss, a year"),
+                    cls="" if _net >= 0 else "tile-scen"),
+                    unsafe_allow_html=True)
+
+            st.caption(
+                f"**The demand does not disappear — it moves, and it grows.** "
+                f"The same calf eats **{R['per_head_mx_bu']:.0f} bushels** "
+                f"finished in Mexico and **{R['per_head_us_bu']:.0f}** "
+                f"finished in a US yard, because it goes to a heavier finish "
+                f"on a more corn-dense ration north of the border. So "
+                f"reopening costs the **export** line and adds more than that "
+                f"back to **domestic feed**. Where it lands matters for basis: "
+                f"export demand loads the Gulf and rail, feedyard demand loads "
+                f"the Southern Plains."
+            )
+
+            # ── the substitution caveat ──────────────────────────────────────
+            st.markdown("<div style='height:10px'></div>",
+                        unsafe_allow_html=True)
+            st.markdown('<div class="sec-header">What Mexico Actually Fed'
+                        '</div>', unsafe_allow_html=True)
+
+            fg = cdm.feed_grain_total(CD["grains"])
+            fg = [row for row in fg if row[0] >= 2016]
+            fig = go.Figure()
+            for g, col in (("Corn", JPSI_BLUE), ("Sorghum", AMBER),
+                           ("Wheat", JPSI_DARK)):
+                fig.add_trace(go.Scatter(
+                    x=[f"MY{y}" for y, _p, _t in fg],
+                    y=[p.get(g, 0) for _y, p, _t in fg],
+                    name=g, mode="lines+markers",
+                    line=dict(color=col, width=2)))
+            fig.add_trace(go.Scatter(
+                x=[f"MY{y}" for y, _p, _t in fg],
+                y=[t for _y, _p, t in fg], name="All feed grain",
+                mode="lines", line=dict(color=MUTED, width=2, dash="dot")))
+            fig.update_layout(
+                height=300, margin=dict(l=10, r=10, t=24, b=10),
+                paper_bgcolor=CARD_BG, plot_bgcolor=CARD_BG,
+                font=dict(color=TEXT, size=11),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+                # CATEGORY, not a sniffed axis: "MY2016".."MY2026" would be
+                # read as numeric strings on a linear axis -- the trap
+                # beef_trade.annual_figure documents.
+                xaxis=dict(gridcolor=BORDER, title=None, type="category"),
+                yaxis=dict(gridcolor=BORDER, title="1000 MT"))
+            st.plotly_chart(fig, use_container_width=True)
+
+            _by = {y: (p, t) for y, p, t in fg}
+            _yrs = sorted(_by)
+            if len(_yrs) >= 2:
+                _a, _b = _yrs[-2], _yrs[-1]
+                def _d(y, g):
+                    return _by[y][0].get(g, 0) - _by[y - 1][0].get(g, 0)
+                st.caption(
+                    f"**Read the corn line with the others beside it.** Corn "
+                    f"feed use rose **{_d(_a,'Corn'):+,.0f}** thousand MT in "
+                    f"MY{_a}, which reads as a cattle story — but **all feed "
+                    f"grain together rose "
+                    f"{_by[_a][1]-_by[_a-1][1]:+,.0f}**, because sorghum fell "
+                    f"{_d(_a,'Sorghum'):+,.0f} and feed wheat "
+                    f"{_d(_a,'Wheat'):+,.0f} as Mexico's own crops failed. "
+                    f"Most of that corn replaced other grain rather than "
+                    f"feeding extra animals. The tiles above are a "
+                    f"bottom-up estimate from head and rations; this is what "
+                    f"Mexico's balance sheet actually shows, and the two do "
+                    f"not have to agree."
+                )
+
+            # USDA'S OWN BOOKS DISAGREE WITH THE PREMISE, and the panel
+            # says so rather than letting three tiles imply otherwise.
+            _ly2 = max(CD["corn"])
+            _dimp = (CD["corn"][_ly2].get("Imports", 0)
+                     - CD["corn"].get(_ly2 - 1, {}).get("Imports", 0))
+            if _dimp:
+                st.info(
+                    f"**USDA is not forecasting Mexico to buy less corn.** "
+                    f"The PSD vintage that postdates the reopening still has "
+                    f"MY{_ly2} imports **{_dimp:+,.0f}** thousand MT on the "
+                    f"year, on poultry and feed-sector growth — poultry is "
+                    f"about 47% of Mexican feed demand. What is sized above "
+                    f"is one component moving the other way inside a total "
+                    f"that is still rising, not a forecast that Mexico's "
+                    f"imports fall."
+                )
+
+            _sh, _rep = cdm.us_share(CD["corn"], max(CD["corn"]))
+            st.caption(
+                f"The US supplies **{_sh:.0%}** of Mexico's corn imports"
+                + ("" if _rep else
+                   " — a five-year average, because PSD zero-fills its "
+                   "US-share field for trade years that have not closed and "
+                   "the raw figure reads as nil")
+                + ". Mexico's own crop is mostly white corn for food; the "
+                  "imports are yellow dent for feed, which is the line these "
+                  "cattle sit on."
+            )
+
+        st.markdown("<hr style='margin:18px 0 8px;'>", unsafe_allow_html=True)
+        st.markdown(
+            '<div class="srcline">JSA · John Stewart &amp; Associates '
+            '&nbsp;·&nbsp; USDA FAS PSD (keyless bulk) · head cross-checked '
+            'against US Census imports &nbsp;·&nbsp; feeding assumptions are '
+            'JSA\'s, not USDA\'s</div>',
             unsafe_allow_html=True)

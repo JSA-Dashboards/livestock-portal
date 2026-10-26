@@ -1,0 +1,253 @@
+"""Corn demand that moves with Mexican feeder cattle — the staff-only tab.
+
+The panel's whole reason to exist is that the intuitive answer is wrong. While
+the border was shut, cattle that would have crossed were fed in Mexico on US
+corn, so reopening reads as lost US export demand. It is — but the same animal
+eats about 1.6x the corn finished in a US yard, so the demand MOVES to domestic
+feed and grows. An export tile on its own would be arithmetically right and
+would tell a reader the opposite of what happens.
+
+    python -m pytest tests/test_corn_demand.py -q
+"""
+
+import ast
+import inspect
+import os
+import sys
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_APP = os.path.join(_HERE, "..", "apps", "mexican_feeder_imports")
+sys.path.insert(0, _APP)
+
+import corn_demand as cdm  # noqa: E402
+
+PAGE = os.path.join(_APP, "app.py")
+MODULE = os.path.join(_APP, "corn_demand.py")
+
+
+def _page():
+    return open(PAGE, encoding="utf-8-sig").read()
+
+
+def _code_of(fn):
+    """Source with the docstring stripped — these guards must read code, not
+    the prose explaining the rule."""
+    node = ast.parse(inspect.getsource(fn).lstrip()).body[0]
+    body = node.body
+    if (body and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)):
+        body = body[1:]
+    return chr(10).join(ast.unparse(n) for n in body)
+
+
+# ── the arithmetic is anchored to this repo's own convention ────────────────
+
+def test_it_reproduces_corn_costs_own_worked_example():
+    """corn_cost.py states "an 80% corn ration and 6.5:1 conversion ... about
+    $52 a head over 650 lb of gain". If this formula reproduces that, the US
+    side uses the portal's documented convention rather than something
+    invented here — which is the only reason to prefer these constants."""
+    mt = cdm.corn_per_head(0, 650, 6.5, 0.80)
+    dollars = mt * cdm.BU_PER_MT * 0.86      # that module's measured spread
+    assert abs(dollars - 52) < 1.0, dollars
+    assert abs(mt * cdm.BU_PER_MT / 6.5 - 9.29) < 0.2
+
+
+def test_corn_is_charged_from_the_BUNK_not_the_border():
+    """THE LARGEST ERROR AVAILABLE HERE. The pounds between the border and the
+    feedlot are put on at grass on both sides — in Mexico the first 100-150 kg
+    carries no grain at all. A first version ran crossing-weight to finish
+    through a conversion and inflated both sides by roughly 40%."""
+    sig = inspect.signature(cdm.corn_per_head)
+    first = list(sig.parameters)[0]
+    assert "feedlot" in first or "in_lb" in first, first
+    # Raising the on-feed weight must REDUCE corn, because it shortens the
+    # grain-fed phase. A formula keyed on the border would not move at all.
+    hi = cdm.corn_per_head(900, 1400, 6.8, 0.80)
+    lo = cdm.corn_per_head(700, 1400, 6.8, 0.80)
+    assert hi < lo
+
+
+def test_the_two_sides_use_one_formula():
+    """The Mexico/US comparison must be a difference in INPUTS, not in method.
+    Two formulas is how the ratio becomes an artefact of the arithmetic."""
+    src = _code_of(cdm.displaced)
+    assert src.count("corn_per_head(") == 2, src
+
+
+def test_the_us_animal_eats_more_and_the_net_is_positive():
+    """The finding the panel exists to carry: reopening costs the export line
+    and adds MORE to domestic feed."""
+    r = cdm.displaced(1_000_000)
+    assert r["per_head_us_bu"] > r["per_head_mx_bu"]
+    assert r["net_bu"] > 0
+    assert abs(r["net_bu"] - (r["domestic_bu"] - r["export_bu"])) < 1e-6
+
+
+def test_the_per_head_figures_land_where_independent_research_puts_them():
+    """Checked against two independent Mexican routes (a UNAM finishing
+    programme and CONAFAB's feedlot compound-feed total) giving 0.6-1.0 MT a
+    head under closure conditions, and K-State's August 2026 closeouts giving
+    1.3-1.8 MT for the US animal. Pinning
+    the BAND, not the point, because every input is an assumption — but a
+    default that drifts outside it is a default nobody re-derived."""
+    r = cdm.displaced(1_000_000)
+    mx_mt = r["mx_mt"] / 1_000_000
+    us_mt = r["us_mt"] / 1_000_000
+    assert 0.70 <= mx_mt <= 1.05, mx_mt
+    assert 1.25 <= us_mt <= 1.85, us_mt
+    assert 1.3 <= us_mt / mx_mt <= 2.0, us_mt / mx_mt
+
+
+# ── PSD's two traps ─────────────────────────────────────────────────────────
+
+def test_the_latest_year_is_never_a_forward_forecast():
+    """PSD carries marketing years ahead of the calendar. Taking max() headlined
+    MY2027's 625,000-head RECOVERY FORECAST as if it were the year running,
+    reporting a 545,000 head shortfall where the real one is about a million.
+    The figure looked entirely plausible, which is the whole problem."""
+    from datetime import date
+    cattle = {2023: {"Exports": 1295.0}, 2024: {"Exports": 1250.0},
+              2025: {"Exports": 229.0}, 2026: {"Exports": 150.0},
+              2027: {"Exports": 625.0}}        # <- forecast
+    sf, base, ly, lh = cdm.crossing_shortfall(
+        cattle, normal_years=(2023, 2024), today=date(2026, 10, 26))
+    assert ly == 2026, ly
+    assert lh == 150_000
+    assert abs(sf - (1_272_500 - 150_000)) < 1
+
+
+def test_the_baseline_is_several_normal_years_not_one():
+    """Mexican exports are lumpy — 1,037 / 965 / 1,295 / 1,250 thousand head
+    over 2021-24 — so one year as the counterfactual moves the headline by a
+    third depending which is picked."""
+    src = inspect.signature(cdm.crossing_shortfall)
+    years = src.parameters["normal_years"].default
+    assert len(years) >= 3, years
+
+
+def test_a_zero_filled_us_share_falls_back_and_says_so():
+    """**PSD CARRIES A LITERAL ZERO** for `TY Imp. from U.S.` in trade years
+    that have not closed. MY2025 and MY2026 both read 0.0 while imports are
+    26,200 and 27,200. Read naively that says Mexico stopped buying US corn
+    altogether — the most wrong a number on this page could be."""
+    corn = {2021: {"Imports": 17584.0, "TY Imp. from U.S.": 16803.0},
+            2022: {"Imports": 19325.0, "TY Imp. from U.S.": 16454.0},
+            2023: {"Imports": 24222.0, "TY Imp. from U.S.": 23945.0},
+            2024: {"Imports": 25930.0, "TY Imp. from U.S.": 25809.0},
+            2025: {"Imports": 26200.0, "TY Imp. from U.S.": 0.0}}
+    share, reported = cdm.us_share(corn, 2025)
+    assert reported is False
+    assert 0.80 < share < 1.01, share
+    share24, rep24 = cdm.us_share(corn, 2024)
+    assert rep24 is True and abs(share24 - 25809 / 25930) < 1e-9
+
+
+def test_the_substitution_check_exists_and_counts_every_grain():
+    """Corn feed use rose +1,700 thousand MT in MY2025, which reads as a cattle
+    story. TOTAL feed grain rose +320: sorghum fell 900 and feed wheat 450 as
+    Mexico's own crops failed. Quoting the corn line alone attributes the lot
+    to cattle and is wrong by roughly a factor of five in that year."""
+    grains = {
+        "Corn":    {2024: {"Feed Dom. Consumption": 27500.0},
+                    2025: {"Feed Dom. Consumption": 29200.0}},
+        "Sorghum": {2024: {"Feed Dom. Consumption": 4700.0},
+                    2025: {"Feed Dom. Consumption": 3800.0}},
+        "Wheat":   {2024: {"Feed Dom. Consumption": 650.0},
+                    2025: {"Feed Dom. Consumption": 200.0}},
+    }
+    rows = cdm.feed_grain_total(grains)
+    by = {y: t for y, _p, t in rows}
+    assert by[2024] == 32850.0
+    assert by[2025] == 33200.0
+    corn_rise = 29200 - 27500
+    total_rise = by[2025] - by[2024]
+    assert total_rise < corn_rise / 4, (total_rise, corn_rise)
+
+
+# ── the panel ───────────────────────────────────────────────────────────────
+
+def test_the_tab_is_staff_only_and_its_body_is_guarded():
+    """HIDING A TAB'S LABEL DOES NOT STOP ITS BODY. portal_view.Hidden is a
+    no-op context manager, so an unguarded `with tab_corn:` would run the PSD
+    fetch on a client load and render the panel UNFRAMED into their page."""
+    page = _page()
+    assert 'hide=["Corn Demand"]' in page
+    # COMMENTS STRIPPED FIRST. This failed on the page's own comment warning
+    # that an unguarded `with tab_corn:` would leak the panel to clients --
+    # the trap tests/test_rundown.py and test_border_crossing_label.py both
+    # record. A guard that trips over the note describing the rule reads
+    # exactly like the rule being broken.
+    code = chr(10).join(l for l in page.splitlines()
+                        if not l.lstrip().startswith("#"))
+    i = code.index("if portal_view.shown(tab_corn):")
+    j = code.index("with tab_corn:")
+    assert i < j, "the body is not behind portal_view.shown()"
+
+
+def test_the_net_tile_is_on_the_panel():
+    """The export tile alone is arithmetically right and tells a reader the
+    opposite of what happens to US corn demand. The net is never omitted."""
+    page = _page()
+    assert "NET US corn demand" in page
+    assert "EXPORT demand lost" in page
+    assert "DOMESTIC demand gained" in page
+
+
+def test_the_panel_says_usda_is_not_forecasting_a_fall():
+    """USDA's own post-reopening vintage has Mexican corn imports UP on the
+    year, on poultry growth. Three tiles sizing a displacement, with nothing
+    saying that, would read as a forecast that Mexican demand falls."""
+    page = _page()
+    assert "USDA is not forecasting Mexico to buy less corn" in page
+
+
+def test_the_loader_passes_the_schema_at_the_call_site():
+    """st.cache_data hashes the arguments it is CALLED with: a parameter at its
+    default contributes nothing to the key, and an underscore-prefixed one is
+    excluded outright."""
+    page = _page()
+    assert isinstance(cdm.SCHEMA, int)
+    tree = ast.parse(page)
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "load_corn")
+    args = [a.arg for a in fn.args.args]
+    assert args and not any(a.startswith("_") for a in args), args
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+             and isinstance(n.func, ast.Name) and n.func.id == "load_corn"]
+    assert calls and all(c.args or c.keywords for c in calls)
+
+
+# ── the HTTP departure is deliberate and bounded ────────────────────────────
+
+def test_this_module_reaches_psd_and_nothing_else():
+    """border.py and mx_prices.py import no `requests` and must not start.
+    What that rule protects is CREDENTIALS — every key this page's data needs
+    belongs to an ingest elsewhere. PSD is a public keyless bulk file, so
+    nothing of the sort enters the process; but the departure is bounded to
+    one host and pinned here."""
+    src = open(MODULE, encoding="utf-8").read()
+    tree = ast.parse(src)
+    urls = [n.value for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+            and n.value.startswith("http")]
+    assert urls, "no URL constants found"
+    for u in urls:
+        assert u.startswith("https://apps.fas.usda.gov/psdonline/"), u
+    assert "api.census.gov" not in src, (
+        "Census needs a key this deployment deliberately does not carry")
+
+
+def test_the_two_existing_modules_still_cannot_fetch():
+    """Adding this module must not have loosened the rule for the others."""
+    for name in ("border.py", "mx_prices.py"):
+        tree = ast.parse(open(os.path.join(_APP, name), encoding="utf-8").read())
+        imported = set()
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Import):
+                imported.update(a.name.split(".")[0] for a in n.names)
+            elif isinstance(n, ast.ImportFrom) and n.module:
+                imported.add(n.module.split(".")[0])
+        for banned in ("requests", "urllib", "httpx"):
+            assert banned not in imported, f"{name} imports {banned}"
