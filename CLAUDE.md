@@ -86,6 +86,80 @@ out, including Ross's own. What is checkable is that the gate renders and the
 secret is found; whether the value is the one he meant is his to confirm, and
 worth asking for rather than assuming.
 
+#### The unlock is remembered in a cookie, because session_state is not enough
+
+Ross, 2026-10-26: *"after i login to my dashboard view- it makes me enter the
+password every time i click a different dashboard tab. i only want to enter the
+password one time per session."*
+
+**`st.session_state` LIVES AND DIES WITH ONE STREAMLIT SESSION**, and a session
+dies on any FULL page load — a refresh, a new browser tab, a pasted deep link,
+the Community Cloud iframe re-navigating. So the gate was doing exactly what it
+was written to do and still asking constantly.
+
+Reproduced rather than guessed at, and the reproduction is the useful part:
+
+| action | session | gate |
+|---|---|---|
+| click a top-nav link | kept (client-side routing) | stays open |
+| full navigation to the same URL | new | **asks again** |
+
+The marker test is what settled it — set `window.__marker` before clicking,
+then look for it afterwards. It survived a nav click and vanished on a full
+load, which is the difference between the two cases and is invisible from the
+screenshot.
+
+**THE LOCAL PORTAL CANNOT SEE THIS CLASS OF BUG.** This machine runs Streamlit
+**1.63**, which renders `st.navigation` in the SIDEBAR; the deployed app is
+**1.64**, which renders it as top-nav links in the toolbar. They are different
+widgets with different click behaviour. A 1.64 venv was built in the scratchpad
+purely to reproduce the real navigation — the dashboards fail to import there
+(no plotly, no Snowflake) and that does not matter, because the question was
+only ever "does this click start a new session".
+
+So the unlock is now also kept in a **signed cookie**, `jsa_portal_<SECRET_NAME>`:
+
+    <expires-epoch>.<hmac_sha256(passphrase, expires)>
+
+**The passphrase is the HMAC key and never leaves the server.** Three
+properties fall out of that, none accidental:
+
+- **Rotating the passphrase invalidates every token at once**, because it is
+  the key. That keeps the one revocation story this gate has ever had.
+- **A browser cannot extend its own expiry** — the expiry is inside the
+  signature. Verified in a real browser: a cookie edited to push the date out
+  came back gated with zero tiles.
+- **It still fails closed.** Verification needs the configured secret, so a
+  deployment without one has nothing to check against and shuts as before. The
+  cookie branch sits after the session-state fast path and before the
+  "not configured" branch, and a test pins that order.
+
+**It is a bearer token that JavaScript can read**, because JavaScript is what
+sets it — Streamlit has no server-side cookie API. It is no stronger than the
+passphrase it stands in for, which is already shared and forwardable. It buys
+convenience, not secrecy, and `portal_auth.py` says so where someone would
+otherwise assume it hardens the gate.
+
+Two implementation details that would each have shipped looking fine:
+
+- **The cookie is written on the run AFTER the one that accepts the
+  passphrase.** `st.rerun()` tears the page down immediately, so a `<script>`
+  emitted beside it may never reach the browser. The token is parked in
+  session_state and flushed by the unlocked branch, on a page that is actually
+  rendering.
+- **`Secure` is conditional on `location.protocol`.** A Secure cookie is
+  silently DROPPED on `http://localhost`, so hard-coding the flag would work on
+  the deployed app and do nothing in local testing — the exact shape of defect
+  this file keeps recording.
+
+`REMEMBER_DAYS` is 30; setting it to 0 reverts to session-only and is the
+fallback if the cookie ever misbehaves on a deployment.
+
+**THE STAFF SIGN-IN IS DELIBERATELY NOT REMEMBERED.** `ADMIN_PASSPHRASE` runs
+through `is_admin()` / `admin_sign_in()`, which are untouched, so the tools
+still ask after a reload. That is the inner gate and re-entering it is cheap;
+it was also not what Ross asked for.
+
 ### What comes out, as a standing rule rather than a list
 
 1. **Tabs that are a working tool rather than a market reading.**
