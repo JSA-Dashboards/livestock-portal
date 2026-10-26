@@ -86,11 +86,52 @@ out, including Ross's own. What is checkable is that the gate renders and the
 secret is found; whether the value is the one he meant is his to confirm, and
 worth asking for rather than assuming.
 
-#### The unlock is remembered in a cookie, because session_state is not enough
+#### Remembering the unlock: why the cookie fix does NOT work on Community Cloud
 
 Ross, 2026-10-26: *"after i login to my dashboard view- it makes me enter the
 password every time i click a different dashboard tab. i only want to enter the
 password one time per session."*
+
+**IT SHIPPED AND IT DID NOT FIX THE PROBLEM. Read this before building on
+it.** The cookie is written correctly and the server cannot read it, so the
+gate still asks. Everything below about session_state is right; the remedy is
+the part that was wrong, and it was wrong for a reason no amount of local
+testing could surface.
+
+**`st.context.cookies` RETURNS AN EMPTY DICT ON STREAMLIT COMMUNITY CLOUD.**
+The proxy in front of the app does not forward the browser's cookies to it.
+Measured on the live app, 2026-10-26:
+
+| | |
+|---|---|
+| browser, `document.cookie` | `proxy-tracking-id`, `_ga`, `jsa_portal_PORTAL_PASSPHRASE`, `jsa_portal_probe`, … |
+| server, `st.context.cookies` | `[]` |
+
+**THE DEPLOYED STREAMLIT IS 1.66.1, NOT 1.64** — the comment in `Home.py` that
+names 1.64 is stale, and `requirements.txt` pins only `streamlit>=1.40.0`, so
+Cloud installs whatever is current. Any claim here about deployed DOM or widget
+behaviour is a claim about a version nobody pinned.
+
+**HOW TO ASK THE DEPLOYED APP A QUESTION WITHOUT A PASSPHRASE**, which is the
+reusable part: put a panel behind a query param (`?probe=1`, the `?tools=1`
+shape) ABOVE the gate's `st.stop()`, print what the server can see, and read it
+from the browser. One load answered the installed version, whether `st.html`
+still takes `unsafe_allow_javascript`, and the cookie asymmetry above — none of
+which was reachable from this machine. It was reverted immediately after.
+
+The remaining options, none of them free:
+
+1. **Live with it** — session-only, as before.
+2. **Hand the token to the server through a channel the proxy does not
+   strip** — a query parameter, cleared immediately after it is read. Works,
+   and puts a bearer token in the URL and in browser history.
+3. **`st.login()` against Entra.** Streamlit manages its own auth cookie at
+   framework level, so it does not depend on `st.context.cookies`; it also
+   gives real per-person identity and revocation instead of a shared
+   passphrase. Needs an Azure app registration. This is the upgrade this
+   file already names under `is_admin()`, and it is the right answer for the
+   STAFF app; the client app would still want the passphrase, since clients
+   have no JSA identity.
 
 **`st.session_state` LIVES AND DIES WITH ONE STREAMLIT SESSION**, and a session
 dies on any FULL page load — a refresh, a new browser tab, a pasted deep link,

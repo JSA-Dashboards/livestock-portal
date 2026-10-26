@@ -166,6 +166,20 @@ def is_unlocked(secret_name: str = DEFAULT_SECRET) -> bool:
 # a top-nav link keeps the session (client-side routing, the gate stays open),
 # but a full navigation to the same URL comes back gated.
 #
+# IT DOES NOT WORK ON STREAMLIT COMMUNITY CLOUD, AND THAT IS MEASURED.
+# `st.context.cookies` returns an EMPTY dict there -- the proxy in front of the
+# app does not forward the browser's cookies to it. Probed on the live app,
+# 2026-10-26, from a page carrying eight cookies the browser could see:
+#
+#     browser (document.cookie) : proxy-tracking-id, _ga, ajs_anonymous_id,
+#                                 jsa_portal_PORTAL_PASSPHRASE, jsa_portal_probe, ...
+#     server  (st.context.cookies) : []
+#
+# So the WRITE below is fine and the READ is blind. The token machinery is kept
+# because it is correct, tested, and reusable by whatever channel replaces the
+# read -- but nothing here can remember an unlock on Community Cloud today, and
+# a reader should not assume otherwise. See CLAUDE.md for the options.
+#
 # So the unlock is remembered in a COOKIE as well. The cookie never contains
 # the passphrase; it holds an expiry and an HMAC of that expiry keyed on the
 # passphrase, so the browser cannot forge one or extend its own.
