@@ -2155,6 +2155,57 @@ if portal_view.shown(tab_corn):
                               us_finish=_usf, us_conv=_usc,
                               us_share_corn=_uss / 100.0)
 
+            # WHERE EVERY NUMBER COMES FROM, under the controls that set
+            # them. Ross asked twice; the answer was in a docstring and a
+            # tooltip, neither of which is where a reader of the tiles looks.
+            # Built from cdm.SOURCES so a default that moves without its
+            # citation shows up rather than going quiet.
+            with st.expander("Where these figures come from"):
+                st.caption(
+                    "**The two sides are not equally sourced.** The US "
+                    "programme is measured and has two independent "
+                    "cross-checks. The Mexican one rests on a single "
+                    "extension source, a ration share derived from three "
+                    "published parts, and a feedlot entry weight that is "
+                    "**ours** — nothing publishes it. That difference is "
+                    "worth knowing before trading on the gap between the "
+                    "two tiles."
+                )
+                _GRADE = {
+                    "measured": "measured — a published figure, used as published",
+                    "judgement": "judgement — a published RANGE, point chosen here",
+                    "derived": "derived — arithmetic on published parts",
+                    "ours": "OURS — an inference with no published counterpart",
+                }
+                st.dataframe(
+                    pd.DataFrame([{
+                        "Side": r["side"],
+                        "Input": r["input"],
+                        "Published": r["sourced"],
+                        "Grade": _GRADE[r["strength"]].split(" — ")[0],
+                        "Source": r["cite"],
+                        "Note": r["note"],
+                    } for r in cdm.SOURCES]),
+                    use_container_width=True, hide_index=True)
+
+                st.caption("  ·  ".join(_GRADE.values()))
+
+                st.markdown("**Independent cross-checks**")
+                for _cc in cdm.CROSS_CHECKS:
+                    _line = (f"- **{_cc['side']}** — {_cc['says']} "
+                             f"({_cc['cite']})")
+                    if _cc.get("agrees"):
+                        st.markdown(_line + " — agrees.")
+                    else:
+                        st.markdown(_line + f" — **{_cc.get('caveat','')}**")
+
+                st.caption(
+                    "Neither per-head figure is itself published. Each is "
+                    "three inputs multiplied together, which is why they are "
+                    "controls rather than constants, and why the cross-checks "
+                    "above matter more than any single one of them."
+                )
+
             st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
             t = st.columns(3)
             with t[0]:

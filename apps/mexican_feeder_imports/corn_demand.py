@@ -161,6 +161,96 @@ MX_CORN_SHARE = 0.46
 MX_BASIS = "as_fed"
 
 
+# ── where every feeding input comes from ───────────────────────────────────
+#
+# **THE TWO SIDES ARE NOT EQUALLY SOURCED AND THE PAGE SAYS WHICH IS WHICH.**
+# The US figure is a measured programme with two independent cross-checks.
+# The Mexican one is a single extension source, a derived ration share, and
+# a feedlot entry weight that is OURS -- nothing publishes it. A reader
+# comparing the two tiles is entitled to know that before he trades on the
+# difference.
+#
+# `strength` is the honest grade, not a confidence score:
+#   measured  - a published figure used as published
+#   judgement - a published RANGE, with the point inside it chosen here
+#   derived   - arithmetic on published parts, no single source for the result
+#   ours      - an inference with no published counterpart
+SOURCES = [
+    {"side": "US", "input": "On feed to finish",
+     "sourced": "825 -> 1,522 lb, 190 days, 3.52 ADG",
+     "strength": "measured",
+     "cite": "K-State Focus on Feedlots, August 2026 closeouts (steers)",
+     "note": "the page rounds finish to 1,500, about 2 bu below K-State"},
+    {"side": "US", "input": "Feed conversion",
+     "sourced": "6.47, DRY MATTER", "strength": "measured",
+     "cite": "K-State Focus on Feedlots, August 2026 closeouts (steers)",
+     "note": ""},
+    {"side": "US", "input": "Corn share of ration",
+     "sourced": "50-90% of dry matter", "strength": "judgement",
+     "cite": "Samuelson 2016 feedlot nutritionist survey",
+     "note": "the survey measures GRAIN, not corn specifically; 65% is "
+             "mid-range for a steam-flaked yard"},
+    {"side": "both", "input": "Corn moisture",
+     "sourced": "15.5%", "strength": "measured",
+     "cite": "No. 2 yellow corn market standard",
+     "note": "applied to the dry-matter side only"},
+    {"side": "Mexico", "input": "Finish weight",
+     "sourced": "500-550 kg (1,100-1,213 lb)", "strength": "measured",
+     "cite": "USDA FAS GAIN MX2026-0040, 24 Aug 2026 -- retained cattle "
+             "\"remained in domestic feedlots for additional months\"",
+     "note": ""},
+    {"side": "Mexico", "input": "Feedlot entry weight",
+     "sourced": "no published figure", "strength": "ours",
+     "cite": "inferred from the closure gain less a pasture share",
+     "note": "THE WEAKEST INPUT ON THE PAGE. Nothing publishes where a "
+             "retained Mexican calf goes on feed"},
+    {"side": "Mexico", "input": "Feed conversion",
+     "sourced": "6.0-6.5, AS FED", "strength": "judgement",
+     "cite": "Fernando Livas Calderon, FMVZ-UNAM, conventional finishing "
+             "programme",
+     "note": "a single source, and the most specific Mexican feedlot "
+             "description available"},
+    {"side": "Mexico", "input": "Corn share of ration",
+     "sourced": "38-54% of the as-fed ration", "strength": "derived",
+     "cite": "UNAM: ration 85% concentrate, concentrate 60-70% grain, corn "
+             "75-90% of that grain",
+     "note": "no published corn share exists; this is the product of three "
+             "published parts"},
+    {"side": "both", "input": "Head no longer fed in Mexico",
+     "sourced": "PSD Mexican cattle exports against the 2022-24 mean",
+     "strength": "measured",
+     "cite": "USDA FAS PSD, cross-checked against US Census imports",
+     "note": "the two agencies agree to 99% in 2024 and to the thousand in "
+             "2025"},
+]
+
+# Independent arrivals at the same per-head figure, which is the only thing
+# that makes a three-assumption estimate worth printing.
+CROSS_CHECKS = [
+    {"side": "US", "says": "62.7 bu to take a steer 750 -> 1,250 lb",
+     "cite": "Iowa Beef Center", "agrees": True},
+    {"side": "US", "says": "49-69 bu per finished steer calf",
+     "cite": "Iowa State University budgets", "agrees": True},
+    {"side": "Mexico", "says": "16-19 bu a head",
+     "cite": "CONAFAB 4.62 MMT of feedlot compound feed over about 4.5 "
+             "million head (AMEG)",
+     "agrees": False,
+     "caveat": "THE NORMAL PROGRAMME, NOT THE CLOSURE ONE. It converges with "
+               "the UNAM bottom-up, and both describe a short yard phase. "
+               "The closure figure is that roughly doubled on FAS's "
+               "description of longer feeding, so it is scaled rather than "
+               "measured"},
+]
+
+
+def strength_of(side, input_name):
+    """The honest grade for one input, or None."""
+    for row in SOURCES:
+        if row["side"] == side and row["input"] == input_name:
+            return row["strength"]
+    return None
+
+
 def _psd_rows(url: str, country: str = "Mexico"):
     """One country's rows out of a PSD bulk zip."""
     blob = requests.get(url, timeout=240).content

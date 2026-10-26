@@ -312,3 +312,65 @@ def test_the_page_says_which_basis_each_box_wants():
     page = _page()
     assert "AS FED" in page and "DRY MATTER" in page
     assert "different bases" in page
+
+
+# ── provenance ──────────────────────────────────────────────────────────────
+
+def test_every_feeding_input_carries_a_source_and_an_honest_grade():
+    """Ross asked twice where a figure came from and the answer lived only in
+    a docstring and a slider tooltip. The citations sit beside the constants
+    now and the page renders them, so a default that moves without its
+    citation is visible rather than silent."""
+    grades = {"measured", "judgement", "derived", "ours"}
+    assert len(cdm.SOURCES) >= 8
+    for r in cdm.SOURCES:
+        assert r["side"] in {"US", "Mexico", "both"}, r
+        assert r["strength"] in grades, r
+        assert r["cite"].strip(), r
+        assert r["sourced"].strip(), r
+
+
+def test_the_inference_is_graded_as_ours_not_as_measured():
+    """THE WEAKEST INPUT MUST SAY SO. The Mexican feedlot entry weight has no
+    published counterpart -- it is taken from the closure gain less a pasture
+    share. Grading it 'measured' alongside K-State's closeouts would put a
+    guess and a survey on the same footing in the same table."""
+    assert cdm.strength_of("Mexico", "Feedlot entry weight") == "ours"
+    assert cdm.strength_of("US", "Feed conversion") == "measured"
+    ours = [r for r in cdm.SOURCES if r["strength"] == "ours"]
+    assert len(ours) == 1, [r["input"] for r in ours]
+
+
+def test_the_mexican_cross_check_is_flagged_as_the_wrong_programme():
+    """CONAFAB and the UNAM bottom-up converge beautifully -- on the NORMAL
+    programme. The closure figure is that roughly doubled on FAS's
+    description of longer feeding, so it is scaled rather than measured.
+    Presenting it as an agreeing cross-check would be the most flattering
+    available misreading."""
+    mx = [c for c in cdm.CROSS_CHECKS if c["side"] == "Mexico"]
+    assert mx, "no Mexican cross-check recorded"
+    for c in mx:
+        assert c["agrees"] is False
+        assert "NORMAL PROGRAMME" in c.get("caveat", "").upper()
+    us = [c for c in cdm.CROSS_CHECKS if c["side"] == "US"]
+    assert len(us) >= 2 and all(c["agrees"] for c in us)
+
+
+def test_the_page_renders_the_table_rather_than_retyping_it():
+    """A provenance table typed into the page goes stale the first time a
+    constant moves, which is the failure it exists to prevent."""
+    page = _page()
+    assert "Where these figures come from" in page
+    assert "cdm.SOURCES" in page and "cdm.CROSS_CHECKS" in page
+    # Scoped to the EXPANDER. A citation in a slider tooltip is correct and
+    # useful -- the first version of this guard failed on exactly that, which
+    # is the "trips over the thing it is checking" trap this file records.
+    # What must not happen is the TABLE carrying typed copies, because those
+    # go stale the first time a constant moves.
+    i = page.index('"Where these figures come from"')
+    block = page[i:i + 3000]
+    for cite in ("Focus on Feedlots", "Livas", "CONAFAB", "Samuelson",
+                 "MX2026-0040", "Iowa Beef"):
+        assert cite not in block, (
+            f"{cite!r} is typed into the expander instead of read from "
+            f"cdm.SOURCES")
