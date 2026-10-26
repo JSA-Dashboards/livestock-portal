@@ -367,6 +367,29 @@ def feed_grain_total(grains):
     return out
 
 
+def peak_exports(cattle):
+    """(head, year) -- the most Mexico has shipped in a year on PSD's record.
+
+    THE SCENARIO CONTROL IS CAPPED ON THIS, NOT ON A RECENT MEAN. It was
+    capped at the 2022-24 average of 1,170,000, which is not a ceiling at all:
+    that window happens to span two weak years (965,000 in 2022 and 1,037,000
+    in 2021), and Mexico has shipped 1,658,000 in 1995, 1,539,000 in 2012 and
+    1,485,000 in 2020. Typing a perfectly ordinary recovery of 1.3 million
+    turned the box red with nothing saying why -- a control refusing a
+    scenario the border has actually delivered, three times.
+
+    The herd also grew about a million head during the closure, so even this
+    is not a hard physical limit. It is a generous bound that keeps a typo
+    from running the panel, rather than a claim about what can happen.
+    """
+    exp = {y: v.get("Exports", 0.0) * 1000
+           for y, v in cattle.items() if v.get("Exports")}
+    if not exp:
+        return 0.0, None
+    year = max(exp, key=lambda y: exp[y])
+    return exp[year], year
+
+
 def displaced(head, *,
               mx_in=MX_FEEDLOT_IN_LB, mx_finish=MX_FINISH_LB,
               mx_conv=MX_CONVERSION, mx_share=MX_CORN_SHARE,

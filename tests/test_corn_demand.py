@@ -374,3 +374,34 @@ def test_the_page_renders_the_table_rather_than_retyping_it():
         assert cite not in block, (
             f"{cite!r} is typed into the expander instead of read from "
             f"cdm.SOURCES")
+
+
+def test_the_head_box_is_capped_on_the_record_not_a_recent_mean():
+    """IT WAS CAPPED AT THE 2022-24 MEAN AND REFUSED AN ORDINARY SCENARIO.
+    1,170,000 is not a ceiling -- that window spans two weak years (965,000
+    in 2022, 1,037,000 in 2021) while Mexico has shipped 1,485,000 in 2020,
+    1,539,000 in 2012 and 1,658,000 in 1995. Typing 1.3 million turned the
+    box red with nothing saying why, which is a control refusing something
+    the border has actually done three times."""
+    cattle = {1995: {"Exports": 1658.0}, 2020: {"Exports": 1485.0},
+              2021: {"Exports": 1037.0}, 2022: {"Exports": 965.0},
+              2023: {"Exports": 1295.0}, 2024: {"Exports": 1250.0},
+              2026: {"Exports": 150.0}}
+    peak, year = cdm.peak_exports(cattle)
+    assert (peak, year) == (1_658_000, 1995)
+    _sf, base, _ly, _lh = cdm.crossing_shortfall(
+        cattle, normal_years=(2022, 2023, 2024))
+    assert peak > base, "the cap must exceed the baseline it replaced"
+    assert 1_300_000 <= peak, "1.3m must be accepted"
+
+
+def test_the_page_caps_on_the_peak_and_says_so():
+    page = _page()
+    assert "cdm.peak_exports" in page
+    assert "int(max(_peak, _base))" in page, (
+        "the head box is not capped on the record")
+    assert "most Mexico has" in page, "the cap is not explained to the reader"
+
+
+def test_peak_exports_survives_an_empty_series():
+    assert cdm.peak_exports({}) == (0.0, None)

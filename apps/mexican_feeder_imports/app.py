@@ -2073,14 +2073,25 @@ if portal_view.shown(tab_corn):
             # expects soon.
             _psd_next = (CD["cattle"].get(_ly + 1, {}).get("Exports", 0.0)
                          * 1000)
+            # CAPPED ON THE RECORD, NOT ON A RECENT MEAN. This was capped
+            # at the 2022-24 average of about 1.17m, which is not a ceiling:
+            # that window spans two weak years, and Mexico has shipped
+            # 1.49-1.66m three times. Typing an ordinary 1.3m recovery turned
+            # the box red with nothing saying why.
+            _peak, _peak_yr = cdm.peak_exports(CD["cattle"])
             _head = st.number_input(
                 "Head a year that stop being fed in Mexico", 0,
-                int(_base), int(_sf), 25_000, key="cd_head", format="%d",
+                int(max(_peak, _base)), int(_sf), 25_000, key="cd_head",
+                format="%d",
                 help=f"Defaults to the full shortfall against a normal year "
                      f"({_sf:,.0f} head). USDA's MY{_ly+1} forecast implies "
                      f"about {max(0.0, _base - _psd_next):,.0f}; the crossing "
                      f"pace so far since August is nearer a third of normal "
-                     f"again. The Crossings tab has the live count.")
+                     f"again. The Crossings tab has the live count. The box "
+                     f"accepts up to {_peak:,.0f}, the most Mexico has "
+                     f"shipped in a year on USDA's record ({_peak_yr}) — the "
+                     f"herd grew about a million head during the closure, so "
+                     f"that is a generous bound rather than a hard limit.")
 
             # THESE ARE YARD WEIGHTS, NOT BORDER WEIGHTS. The pounds between
             # the crossing and the bunk are grass on both sides -- in Mexico
