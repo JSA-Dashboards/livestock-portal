@@ -3542,6 +3542,223 @@ records for the letter page: every multi-line string living above the split is
 the only reason indenting the rest is safe. Check that again before moving this
 one.
 
+## The Corn Demand tab — STAFF ONLY
+
+Added 2026-10-26, after Ross asked how much corn Mexico imports from the US to
+feed to cattle and how much less they will need now feeders are crossing again.
+Third top-level tab on Mexican Feeder Imports, beside Crossings and Prices.
+Arithmetic and every fetch are in `apps/mexican_feeder_imports/corn_demand.py`;
+the layout is in `app.py`, the same split as `mx_prices` and `am_cutout`.
+
+**IT IS HIDDEN FROM THE CLIENT DEPLOYMENT, on Ross's instruction.** Every
+figure rests on feeding assumptions a client would read as measurement, and
+the interesting number is about US corn demand rather than about their cattle.
+`portal_view.tabs(..., hide=["Corn Demand"])`, with the body behind
+`portal_view.shown(tab_corn)` — **hiding a label does not stop a body**, so an
+unguarded `with tab_corn:` would run the PSD fetch on a client load and render
+the panel UNFRAMED into their page. Verified in a browser in both views: the
+client gets two tabs and nothing from the panel reaches even view-source.
+
+### THE ANSWER IS THE OPPOSITE OF THE PREMISE
+
+While the border was shut, cattle that would have crossed were kept and fed in
+Mexico on corn Mexico buys from the US, so reopening reads as lost export
+demand. It is — but **the same animal eats about twice the corn finished in a
+US yard**, because it goes to a heavier finish on a more corn-dense ration. The
+demand does not disappear. It MOVES from the export line to domestic feed, and
+grows. At the defaults: export down about 30 million bu a year, domestic feed
+up about 61, **net US corn demand UP about 31**.
+
+The sign does not flip anywhere in the plausible range of the inputs, which is
+what makes it worth printing. An export tile on its own would be
+arithmetically right and would tell a reader the opposite of what happens to US
+corn demand, so **the net is never shown without it**. Where it lands matters
+for basis: export demand loads the Gulf and rail, feedyard demand loads the
+Southern Plains that `corn_cost.py` already tracks.
+
+### No secret, no host, no cron — and why this module may fetch
+
+USDA FAS **PSD** is a keyless bulk download, 3.5 MB and about four seconds for
+both files, so this is a cached page fetch rather than a precomputed JSON or a
+droplet job.
+
+    psd_grains_pulses_csv.zip   Mexico corn, sorghum, wheat, barley
+    psd_livestock_csv.zip       Mexico cattle exports, slaughter, herd, beef
+
+`tests/test_mx_prices.py` asserts `border.py` and `mx_prices.py` import no
+`requests`, and those two are untouched. **What that rule protects is
+CREDENTIALS** — every USDA and Census key this page's data depends on belongs
+to an ingest elsewhere — and PSD introduces none. The departure is bounded to
+one host and a test pins that `corn_demand.py` reaches no other.
+
+**Census is deliberately NOT used.** It needs a key this deployment does not
+carry, and a missing one is HTTP 200 with a `Missing Key` HTML page — the "200
+that means no" trap recorded for slug 2452. Worth knowing if anyone does wire
+it up: quantity in metric tons exists **only at HS10**; HS4 `1005` and HS6
+`100590` both return `QTY_1_MO=0`. The series to use is `1005902030`, yellow
+dent US No. 2.
+
+### Four things in the data that look wrong and are not
+
+- **PSD zero-fills `TY Imp. from U.S.` for trade years that have not closed.**
+  Mexico MY2025 and MY2026 both read `0.0` while imports are 26,200 and 27,200
+  thousand MT. Read naively that says Mexico stopped buying US corn altogether,
+  which is the most wrong a number on this page could be. The row EXISTS with a
+  literal zero, so a `.get()` default does not save you. `us_share()` falls back
+  to the five-year mean and the caption says it is doing so.
+- **PSD carries marketing years ahead of the calendar.** `max(years)` on
+  Mexican cattle exports returns a pure forecast — MY2027 at 625,000 head — and
+  headlining it reported a 545,000 head shortfall where the year actually
+  running is 150,000 and the shortfall is about a million. Entirely plausible,
+  which is the problem with it. `crossing_shortfall` caps on the current
+  calendar year and takes `today` as an argument so a test does not change
+  answer with the clock.
+- **PSD's feed line is "Feed and Residual", not livestock feed.** FAS Post's own
+  sector table puts Mexican livestock corn consumption at about 25.0 MMT
+  against PSD's 29.6 for the same year — a 4.6 MMT gap, some 180 million
+  bushels, sitting inside the line being differenced. The balance sheet is a
+  sanity check on the head-and-ration arithmetic, never a measurement of it.
+- **USDA does NOT forecast Mexican corn demand falling on reopening.** The
+  vintage that postdates the August 2026 reopening still has MY2026/27 feed use
+  and imports each UP 1,000 thousand MT, on poultry — about 47% of Mexican feed
+  demand. The panel says so out loud, because three tiles sizing a displacement
+  would otherwise read as a forecast that Mexican demand falls. What is sized is
+  one component moving the other way inside a total that is still rising.
+
+### The corn line alone overstates the cattle story by about five times
+
+Corn feed use rose **+1,700** thousand MT in MY2025, which reads as a cattle
+story. **Total feed grain rose +320**: sorghum fell 900 and feed wheat 450 as
+Mexico's own crops failed (sorghum 4,163 → 3,400, wheat 2,648 → 1,719). Most of
+that corn replaced other grain rather than feeding extra animals, and FAS says
+so explicitly — feed demand "increasingly shifts toward imported yellow corn".
+
+`feed_grain_total()` exists for this and the second chart carries every grain.
+Quoting corn alone is the single biggest available error here.
+
+### Dry matter is not as fed, and the formula had no step for it
+
+K-State publishes feed:gain on a **dry-matter** basis; UNAM's Mexican programme
+is **as fed**; `corn_cost.py`'s own "80% corn ration and 6.5:1" is an as-fed
+rule of thumb. Corn is marketed at about 15.5% moisture, so a DM conversion
+times a DM corn share yields corn DRY MATTER and needs dividing by 0.845 to
+reach bushels. **Mixing them silently is an 18% error and nothing about the
+result looks wrong.**
+
+`corn_per_head(..., basis=)` has **no default** — a caller must state it. The
+first version had no moisture step at all and an inflated conversion was
+absorbing it: output close (61.5 bu against 60.0 by the clean route), inputs
+mislabelled, on sliders a reader can move.
+
+### Every input is graded, and one of them is ours
+
+Ross asked twice where a figure came from — first the conversions, then the
+per-head bushels — and both times the answer lived only in a docstring and a
+tooltip. `cdm.SOURCES` holds the citations beside the constants and the page
+renders an expander from them, so a default that moves without its citation
+shows up rather than going quiet.
+
+    measured   a published figure, used as published
+    judgement  a published RANGE, with the point inside it chosen here
+    derived    arithmetic on published parts, no single source for the result
+    ours       an inference with no published counterpart
+
+Nine inputs: five measured, two judgement, one derived, **one ours**. The one
+graded `ours` is the **Mexican feedlot entry weight** — nothing publishes where
+a retained Mexican calf goes on feed, so it is taken from the closure gain less
+a pasture share. It is the weakest thing on the page and a test asserts there is
+exactly one such row and that it is that one.
+
+**THE MEXICAN CROSS-CHECK IS FLAGGED AS THE WRONG PROGRAMME**, which is the
+subtlest thing here. CONAFAB's 4.62 MMT of feedlot compound feed over about 4.5
+million head gives 16–19 bu a head and converges beautifully with the UNAM
+bottom-up — but both describe the NORMAL programme with its short yard phase.
+The closure figure is that roughly doubled on FAS's description of cattle fed
+on "for additional months" and killed at 500–550 kg. **Scaled, not measured.**
+Listing it as an agreeing cross-check would be the most generous available
+misreading of our own evidence. The US side genuinely does have two that agree:
+Iowa Beef Center at 62.7 bu and ISU budgets at 49–69.
+
+### Nothing says what weight these cattle finish at, and the obvious worry is backwards
+
+Asked on 2026-10-26 whether US yards really feed Mexican feeders to 1,500 lb.
+**No published series can answer it.** Origin is recorded at the border and
+never again: across all **1,051 MARS reports** the only cattle ones naming
+Mexico are the four border-crossing reports, and the southwestern state feeder
+summaries carry no origin field at all — 89k rows Arkansas, 100k Oklahoma, 42k
+Kansas. `country_of_origin` exists on 3486 alone, where it is always "Mexico"
+by construction. Feedlot closeouts and mandatory price reporting do not carry
+it either, and no trial anywhere feeds Mexican-origin cattle in a US yard and
+reports their final live weight.
+
+**THE PREMISE BEHIND THE WORRY IS WRONG, WHICH IS THE USEFUL PART.** The doubt
+assumes these are Brahman-influenced and so finish light. USDA ERS says
+otherwise for the cattle that actually cross — LDP-M-196-01 (Peel, Johnson,
+Mathews): *"Cattle for export are primarily of British/Continental breeding,
+generally with no more than three-eighths Zebu influence."* Zebu dominance is
+in the tropics, not the arid northern export states. An NMSU survey of
+Chihuahua exporters lists Hereford, Angus, Limousin and Charolais; Santa Teresa
+auction reporting puts 60–75% at Angus/Charolais cross, Hereford and Red Angus.
+So the operative Bos indicus fraction is 0–37.5% and probably averages 15–25%,
+while **nearly all the Brahman trial literature tests 50–100%** and therefore
+describes a different population.
+
+The market agrees: the hedonic discount for "exotic influence" on 44,048 head
+of Arizona teleauction cattle is **-$3.23/cwt**, about $19 on a 600 lb calf. A
+genuine 200 lb finish-weight shortfall would be worth roughly $480 a head.
+Buyers are not behaving as if these cattle finish light.
+
+So 1,500 stays. A 25–75 lb origin adjustment is plausible and the control can
+dial it, but it is an unpublished proration and is not adopted as a default.
+
+**THE EXPOSURE IS ON INTAKE, NOT ON FINISH WEIGHT, and a model driven by
+weight alone cannot see it.** In the Colorado State trials (n=200 each,
+J Anim Sci 2025) Bos indicus dry-matter intake ran **20–29% below** Bos
+taurus while feed:gain was only 3–7% worse. Fed to a fixed number of DAYS such
+an animal eats materially less corn; fed to a fixed FAT endpoint it may eat
+more, because reaching the same backfat took **54 extra days** (Wyatt 2002,
+n=326). Those point opposite ways, and the two constant-fat studies that exist
+disagree in sign — Wyatt +190 lb, DeRouen 2000 (n=231) -112 lb. Commercial US
+yards close on fat and grid rather than on days, which is exactly the case with
+no agreed sign. The conversion and corn-share controls are where that
+uncertainty lives, not the finish weight.
+
+Worth not re-deriving: below about 50% Bos indicus there is **no published
+dose-response on final weight in either direction**. Crouse 1989 (USMARC,
+n=422) is the one study sized to give one and digitalcommons.unl.edu returns
+403 on it.
+
+### The head box refused a scenario the border has delivered
+
+The control was capped at the 2022–24 mean of 1,170,000 head, reusing the
+baseline as a maximum on the reasoning that no more cattle can stop being fed
+in Mexico than normally crossed. Wrong twice: that window spans two weak years
+(965,000 in 2022, 1,037,000 in 2021), and Mexico has shipped 1,485,000 in 2020,
+1,539,000 in 2012 and **1,658,000 in 1995**. Typing an ordinary 1.3 million
+recovery turned the box red with nothing saying why.
+
+`peak_exports()` caps it on the record now, and the help says why that is
+generous rather than physical — the herd grew about a million head during the
+closure, so even the record is not a hard limit.
+
+### The flow is not back yet, and the panel says so
+
+Reopening is phased — Douglas 2026-08-24, Santa Teresa 09-24 capped at 750 head
+a day, Columbus 10-26, Nogales planned 11-30 — and crossings are running near a
+third of normal. USDA's own MY2027 forecast is 625,000 head, half of 2024. So
+the full shortfall is a **scenario** and the head count is a control rather than
+a constant.
+
+The head figure itself is solid: PSD's Mexican exports and this page's own US
+Census import counts are two agencies counting the same animals from opposite
+sides of the border, and they agree to **99%** in 2024 and to the thousand in
+2025.
+
+`corn_demand.SCHEMA` exists because the cache serves shape, not freshness — the
+`leverage.SCHEMA` trap — and is passed at the call site, because a default is
+not part of the key. `tests/test_corn_demand.py` pins the basis rule, both PSD
+traps, the substitution check, the grading, the cap and the client gate.
+
 ## Commitment of Traders — the fourteenth dashboard
 
 Added 2026-10-07. Managed money's net futures position in Live Cattle and

@@ -53,6 +53,23 @@ the honest answer to "how much less will Mexico buy" is, on USDA's own books,
 none: what this panel sizes is one component moving the other way inside a
 total that is still rising.
 
+THE FINISH WEIGHT IS THE INPUT MOST OFTEN QUESTIONED AND IT IS NOT THE ONE
+MOST EXPOSED. Asked on 2026-10-26 whether US yards really feed Mexican cattle
+to 1,500 lb. No published series can answer it -- origin is recorded at the
+border and never again -- but the premise behind the doubt is itself wrong:
+USDA ERS puts the EXPORT cattle at primarily British/Continental, no more
+than three-eighths Zebu, so the Brahman trial literature (which tests 50-100%)
+describes a different population.
+
+What that literature does show is that the exposure is on INTAKE rather than
+on weight. In the Colorado State trials Bos indicus dry-matter intake ran
+20-29% BELOW Bos taurus while feed:gain was only 3-7% worse. Fed to a fixed
+number of DAYS such an animal eats materially less corn; fed to a fixed FAT
+endpoint it may eat more, because reaching the same backfat took 54 extra
+days. Those point opposite ways, and a model driven by finish weight alone
+cannot see either. The conversion and corn-share controls are where that
+uncertainty actually lives.
+
 THE SUBSTITUTION CAVEAT, which is why `feed_grain_total()` exists at all.
 Mexico's corn feed use rose +1,700 thousand MT in MY2025, which reads as a
 cattle story. Total feed grain rose **+320**: sorghum fell 900 and feed wheat
@@ -180,7 +197,15 @@ SOURCES = [
      "sourced": "825 -> 1,522 lb, 190 days, 3.52 ADG",
      "strength": "measured",
      "cite": "K-State Focus on Feedlots, August 2026 closeouts (steers)",
-     "note": "the page rounds finish to 1,500, about 2 bu below K-State"},
+     "note": "MEASURED FOR KANSAS CATTLE GENERALLY, NOT FOR THESE. No "
+             "published series breaks US feedlot or carcass data by cattle "
+             "origin -- checked across all 1,051 MARS reports and the state "
+             "feeder summaries, where origin is carried at the border and "
+             "nowhere downstream. A domestic benchmark is defensible because "
+             "USDA ERS puts Mexican EXPORT cattle at primarily "
+             "British/Continental breeding, no more than three-eighths Zebu; "
+             "a plausible origin adjustment is 25-75 lb lighter, which the "
+             "control above can dial. The page also rounds 1,522 to 1,500"},
     {"side": "US", "input": "Feed conversion",
      "sourced": "6.47, DRY MATTER", "strength": "measured",
      "cite": "K-State Focus on Feedlots, August 2026 closeouts (steers)",
@@ -231,6 +256,15 @@ CROSS_CHECKS = [
      "cite": "Iowa Beef Center", "agrees": True},
     {"side": "US", "says": "49-69 bu per finished steer calf",
      "cite": "Iowa State University budgets", "agrees": True},
+    {"side": "US", "says": "Mexican export cattle are primarily "
+                            "British/Continental, no more than three-eighths "
+                            "Zebu -- so the 100%-Brahman trial literature is "
+                            "not the relevant population and a domestic "
+                            "finishing benchmark stands",
+     "cite": "USDA ERS LDP-M-196-01 (Peel, Johnson, Mathews), corroborated by "
+             "an NMSU survey of Chihuahua exporters and Santa Teresa auction "
+             "reporting of 60-75% Angus/Charolais/Hereford",
+     "agrees": True},
     {"side": "Mexico", "says": "16-19 bu a head",
      "cite": "CONAFAB 4.62 MMT of feedlot compound feed over about 4.5 "
              "million head (AMEG)",
