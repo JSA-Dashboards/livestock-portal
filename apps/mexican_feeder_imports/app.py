@@ -2089,7 +2089,11 @@ if portal_view.shown(tab_corn):
             st.caption(
                 "Feedlot **entry** weight, not crossing weight: the pounds "
                 "between the border and the bunk are put on at grass on both "
-                "sides, and cost no corn."
+                "sides, and cost no corn. **The two sides are measured on "
+                "different bases** — K-State publishes US feed:gain on dry "
+                "matter, UNAM's Mexican programme is as fed — so each box "
+                "says which it wants, and only the US side carries the "
+                "corn-moisture step."
             )
             c2, c3 = st.columns(2)
             with c2:
@@ -2100,9 +2104,12 @@ if portal_view.shown(tab_corn):
                 _mxf = st.number_input("Finish weight, lb", 800.0, 1500.0,
                                        float(cdm.MX_FINISH_LB), 25.0,
                                        key="cd_mxf")
-                _mxc = st.number_input("Feed conversion, lb feed per lb gain",
-                                       4.0, 12.0, float(cdm.MX_CONVERSION),
-                                       0.1, key="cd_mxc")
+                _mxc = st.number_input(
+                    "Feed conversion, lb feed per lb gain — AS FED",
+                    4.0, 12.0, float(cdm.MX_CONVERSION), 0.1, key="cd_mxc",
+                    help="UNAM's conventional Mexican finishing programme: "
+                         "6.0–6.5 as fed. As-fed figures already carry the "
+                         "water, so no moisture step is applied to this side.")
                 # WHOLE PERCENTS. On a 0-1 slider Streamlit applies
                 # `format` to the raw value, so 0.65 printed as "1%" while
                 # the arithmetic below was correct -- a label that lies
@@ -2110,9 +2117,12 @@ if portal_view.shown(tab_corn):
                 _mxs = st.slider("Corn share of ration", 0, 100,
                                  int(round(cdm.MX_CORN_SHARE * 100)), 1,
                                  key="cd_mxs", format="%d%%",
-                                 help="Mexican yards lean on sorghum and "
-                                      "byproduct, so this sits below the US "
-                                      "figure rather than equal to it.")
+                                 help="Corn as a share of the AS-FED ration. "
+                                      "UNAM: ration 85% concentrate, of which "
+                                      "60–70% grain, and corn 75–90% of that "
+                                      "grain — so 38–54% of the ration. "
+                                      "Mexican yards lean on sorghum and "
+                                      "byproduct.")
             with c3:
                 st.markdown("**Fed in the US**")
                 _usi = st.number_input("On feed at, lb ", 500.0, 1100.0,
@@ -2121,16 +2131,22 @@ if portal_view.shown(tab_corn):
                 _usf = st.number_input("Finish weight, lb ", 1000.0, 1700.0,
                                        float(cdm.US_FINISH_LB), 25.0,
                                        key="cd_usf")
-                _usc = st.number_input("Feed conversion, lb feed per lb gain ",
-                                       4.0, 12.0, float(cdm.US_CONVERSION),
-                                       0.1, key="cd_usc")
+                _usc = st.number_input(
+                    "Feed conversion, lb feed per lb gain — DRY MATTER",
+                    4.0, 12.0, float(cdm.US_CONVERSION), 0.1, key="cd_usc",
+                    help="K-State Focus on Feedlots, August 2026 closeouts: "
+                         "6.47 on a dry-matter basis. Corn is marketed at "
+                         "about 15.5% moisture, so this side carries a "
+                         "moisture step the Mexican one does not.")
                 _uss = st.slider("Corn share of ration ", 0, 100,
                                  int(round(cdm.US_CORN_SHARE * 100)), 1,
                                  key="cd_uss", format="%d%%",
-                                 help="corn_cost.py on this portal states an "
-                                      "80% corn ration and 6.5:1, and "
-                                      "reproduces its own worked example at "
-                                      "those numbers.")
+                                 help="Corn as a share of ration DRY MATTER. "
+                                      "The Samuelson nutritionist survey puts "
+                                      "finishing grain at 50–90% of DM; 65% "
+                                      "is mid-range for a steam-flaked yard. "
+                                      "corn_cost.py's own 80% is an AS-FED "
+                                      "rule of thumb and is not this number.")
 
             # /100 HERE, not in the widget: the sliders carry whole
             # percents so their labels read correctly.

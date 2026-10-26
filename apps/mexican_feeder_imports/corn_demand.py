@@ -82,6 +82,12 @@ PSD_LIVESTOCK = ("https://apps.fas.usda.gov/psdonline/downloads/"
                  "psd_livestock_csv.zip")
 
 BU_PER_MT = 39.3683          # bushels of corn per metric tonne
+
+# Corn is MARKETED at about 15.5% moisture, so a dry-matter feed:gain and a
+# dry-matter corn share yield corn DRY MATTER -- not bushels. Dividing by this
+# is what turns one into the other, and leaving it out silently understates
+# market-weight corn by about 18%.
+CORN_DM = 0.845
 LB_PER_MT = 2204.62
 
 FEED_GRAINS = ("Corn", "Sorghum", "Wheat", "Barley", "Oats")
@@ -110,16 +116,24 @@ FEED_GRAINS = ("Corn", "Sorghum", "Wheat", "Barley", "Oats")
 # of corn a head against a Mexican industry cost study's 1.3-1.4 t of FEED at
 # 60-70% corn, and about 1.36 MT for the US animal -- a ratio near 1.6x rather
 # than the 2x a naive border-to-finish calculation gives.
-# K-State Focus on Feedlots, August 2026 closeouts -- the current measured
-# programme rather than a round number: steers 825 lb on feed, 1,522 lb final,
-# 190 days, 6.47 feed:gain on a dry-matter basis. Corn share of DM runs 50-90%
-# across the Samuelson nutritionist survey; 75% is mid-range for a steam-flaked
-# yard. These land at about 1.56 MT a head, inside the 1.3-1.8 MT that two
-# independent US sources (Iowa Beef Center 62.7 bu, ISU budgets 49-69 bu) give.
+# K-State Focus on Feedlots, August 2026 closeouts -- the measured programme,
+# used as measured: steers 825 lb on feed, 1,522 lb final, 190 days, **6.47
+# feed:gain on a DRY-MATTER basis**. Corn share of DM runs 50-90% across the
+# Samuelson nutritionist survey; 65% is mid-range for a steam-flaked yard.
+#
+# THESE WERE 6.8 AND 75% UNTIL 2026-10-26 AND NEITHER CAME FROM ANYWHERE.
+# They were picked in a sensitivity run before this research existed; the
+# weights and shares were updated to match it afterwards and the conversion
+# was not, leaving a comment citing 6.47 directly above a constant reading
+# 6.8. The output was close -- 61.5 bu against 60.0 by the clean route --
+# because the inflated conversion was absorbing the dry-matter step the
+# formula did not have. Right answer, wrong inputs, on controls a reader can
+# move.
 US_FEEDLOT_IN_LB = 825.0
 US_FINISH_LB = 1500.0
-US_CONVERSION = 6.8
-US_CORN_SHARE = 0.75
+US_CONVERSION = 6.47
+US_CORN_SHARE = 0.65
+US_BASIS = "dm"
 
 # The Mexican side is the CLOSURE programme, not the normal one, and the
 # difference is large. Normally a calf leaves at 175-225 kg and the Mexican
@@ -129,10 +143,22 @@ US_CORN_SHARE = 0.75
 # of a conventional finishing programme, and CONAFAB's own 4.62 MMT of
 # feedlot compound feed over about 4.5 million head. Both give 0.6-1.0 MT of
 # corn a head under closure conditions.
-MX_FEEDLOT_IN_LB = 700.0
-MX_FINISH_LB = 1100.0
-MX_CONVERSION = 7.0
-MX_CORN_SHARE = 0.65
+# UNAM's conventional finishing description, AS FED: 6.0-6.5 lb feed per lb
+# gain, ration 85% concentrate of which 60-70% is grain, and corn 75-90% of
+# that grain -- so corn is 38-54% of the as-fed ration. The yard phase is the
+# CLOSURE one: FAS reports retained cattle fed on "for additional months" and
+# killed at 500-550 kg, so entry near 600 lb and finish near 1,150 rather than
+# the 700-1,100 shipped first.
+#
+# TWO ERRORS WERE CANCELLING. The shipped 7.0 and 65% were both above the
+# sourced figures while the 400 lb yard gain was shorter than the programme
+# the published 24-39 bu band was built on. It landed inside that band by
+# luck rather than by construction.
+MX_FEEDLOT_IN_LB = 600.0
+MX_FINISH_LB = 1150.0
+MX_CONVERSION = 6.5
+MX_CORN_SHARE = 0.46
+MX_BASIS = "as_fed"
 
 
 def _psd_rows(url: str, country: str = "Mexico"):
@@ -177,8 +203,18 @@ def load():
     }
 
 
-def corn_per_head(feedlot_in_lb, finish_lb, conversion, corn_share):
+def corn_per_head(feedlot_in_lb, finish_lb, conversion, corn_share, *, basis):
     """Metric tonnes of corn eaten in the YARD, feedlot entry to finish.
+
+    `basis` says what `conversion` and `corn_share` are measured on and has NO
+    DEFAULT, deliberately -- a caller must state it, because the two are not
+    interchangeable and the error is invisible. "dm" divides by CORN_DM to
+    turn corn dry matter into market weight; "as_fed" does not, because
+    as-fed figures already carry the water.
+
+    K-State publishes feed:gain on a dry-matter basis, UNAM's Mexican
+    programme as-fed, and corn_cost.py's own "80% corn ration and 6.5:1" is
+    an as-fed rule of thumb. Mixing them silently is an 18% error.
 
     `feedlot_in_lb` is the weight the animal goes on feed at, NOT the weight
     it crossed the border at -- the pounds between those two are grass and
@@ -190,8 +226,13 @@ def corn_per_head(feedlot_in_lb, finish_lb, conversion, corn_share):
     method. Reproduces corn_cost.py's worked example exactly at that module's
     own stated 650 lb of gain / 6.5 / 80%.
     """
+    if basis not in ("dm", "as_fed"):
+        raise ValueError(f"basis must be 'dm' or 'as_fed', got {basis!r}")
     gain = max(0.0, finish_lb - feedlot_in_lb)
-    return gain * conversion * corn_share / LB_PER_MT
+    corn_lb = gain * conversion * corn_share
+    if basis == "dm":
+        corn_lb /= CORN_DM
+    return corn_lb / LB_PER_MT
 
 
 def us_share(corn, year):
@@ -240,7 +281,8 @@ def displaced(head, *,
               mx_in=MX_FEEDLOT_IN_LB, mx_finish=MX_FINISH_LB,
               mx_conv=MX_CONVERSION, mx_share=MX_CORN_SHARE,
               us_in=US_FEEDLOT_IN_LB, us_finish=US_FINISH_LB,
-              us_conv=US_CONVERSION, us_share_corn=US_CORN_SHARE):
+              us_conv=US_CONVERSION, us_share_corn=US_CORN_SHARE,
+              mx_basis=MX_BASIS, us_basis=US_BASIS):
     """
     What `head` cattle crossing instead of being fed in Mexico does to US corn.
 
@@ -255,8 +297,9 @@ def displaced(head, *,
     export loss alone would be arithmetically right and would tell a reader
     the opposite of what happens to US corn demand.
     """
-    mx = corn_per_head(mx_in, mx_finish, mx_conv, mx_share)
-    us = corn_per_head(us_in, us_finish, us_conv, us_share_corn)
+    mx = corn_per_head(mx_in, mx_finish, mx_conv, mx_share, basis=mx_basis)
+    us = corn_per_head(us_in, us_finish, us_conv, us_share_corn,
+                       basis=us_basis)
     return {
         "head": head,
         "per_head_mx_bu": mx * BU_PER_MT,

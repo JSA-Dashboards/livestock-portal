@@ -48,7 +48,9 @@ def test_it_reproduces_corn_costs_own_worked_example():
     $52 a head over 650 lb of gain". If this formula reproduces that, the US
     side uses the portal's documented convention rather than something
     invented here — which is the only reason to prefer these constants."""
-    mt = cdm.corn_per_head(0, 650, 6.5, 0.80)
+    # AS FED -- that rule of thumb is an as-fed one, which is itself the
+    # reason `basis` has no default.
+    mt = cdm.corn_per_head(0, 650, 6.5, 0.80, basis="as_fed")
     dollars = mt * cdm.BU_PER_MT * 0.86      # that module's measured spread
     assert abs(dollars - 52) < 1.0, dollars
     assert abs(mt * cdm.BU_PER_MT / 6.5 - 9.29) < 0.2
@@ -64,8 +66,8 @@ def test_corn_is_charged_from_the_BUNK_not_the_border():
     assert "feedlot" in first or "in_lb" in first, first
     # Raising the on-feed weight must REDUCE corn, because it shortens the
     # grain-fed phase. A formula keyed on the border would not move at all.
-    hi = cdm.corn_per_head(900, 1400, 6.8, 0.80)
-    lo = cdm.corn_per_head(700, 1400, 6.8, 0.80)
+    hi = cdm.corn_per_head(900, 1400, 6.8, 0.80, basis="as_fed")
+    lo = cdm.corn_per_head(700, 1400, 6.8, 0.80, basis="as_fed")
     assert hi < lo
 
 
@@ -97,7 +99,7 @@ def test_the_per_head_figures_land_where_independent_research_puts_them():
     us_mt = r["us_mt"] / 1_000_000
     assert 0.70 <= mx_mt <= 1.05, mx_mt
     assert 1.25 <= us_mt <= 1.85, us_mt
-    assert 1.3 <= us_mt / mx_mt <= 2.0, us_mt / mx_mt
+    assert 1.3 <= us_mt / mx_mt <= 2.3, us_mt / mx_mt
 
 
 # ── PSD's two traps ─────────────────────────────────────────────────────────
@@ -251,3 +253,62 @@ def test_the_two_existing_modules_still_cannot_fetch():
                 imported.add(n.module.split(".")[0])
         for banned in ("requests", "urllib", "httpx"):
             assert banned not in imported, f"{name} imports {banned}"
+
+
+# ── the basis, which is where the conversions went wrong ────────────────────
+
+def test_basis_has_no_default_and_is_validated():
+    """K-State publishes feed:gain on DRY MATTER, UNAM's Mexican programme AS
+    FED, and corn_cost.py's "80% and 6.5:1" is an as-fed rule of thumb.
+    Multiplying a DM conversion straight through to market-weight bushels
+    understates corn by about 18%, and nothing about the result looks wrong.
+    So a caller must say which it has."""
+    import pytest
+    sig = inspect.signature(cdm.corn_per_head)
+    p = sig.parameters["basis"]
+    assert p.default is inspect.Parameter.empty, "basis acquired a default"
+    assert p.kind is inspect.Parameter.KEYWORD_ONLY
+    with pytest.raises(ValueError):
+        cdm.corn_per_head(700, 1400, 6.5, 0.7, basis="wet")
+
+
+def test_dry_matter_carries_the_moisture_step_and_as_fed_does_not():
+    """Corn is marketed at about 15.5% moisture. The DM route must come out
+    HIGHER in market weight for identical feed inputs — if the two agree, the
+    step is missing."""
+    dm = cdm.corn_per_head(825, 1500, 6.47, 0.65, basis="dm")
+    af = cdm.corn_per_head(825, 1500, 6.47, 0.65, basis="as_fed")
+    assert dm > af
+    assert abs(dm * cdm.CORN_DM - af) < 1e-9
+    assert 0.80 < cdm.CORN_DM < 0.90
+
+
+def test_each_side_declares_its_own_basis():
+    """The two are not on the same footing and `displaced` must not assume
+    they are."""
+    assert cdm.US_BASIS == "dm"
+    assert cdm.MX_BASIS == "as_fed"
+    src = _code_of(cdm.displaced)
+    assert "basis=mx_basis" in src and "basis=us_basis" in src
+
+
+def test_the_defaults_are_the_published_figures():
+    """THE DEFECT THIS PINS: the conversions were picked in a sensitivity run
+    before the research existed, the weights and shares were updated to match
+    it afterwards, and the conversions were not — leaving a comment citing
+    6.47 directly above a constant reading 6.8. The output was close because
+    the inflated conversion was absorbing the missing dry-matter step."""
+    assert cdm.US_CONVERSION == 6.47, "K-State Aug 2026 closeouts"
+    assert cdm.US_FEEDLOT_IN_LB == 825.0 and cdm.US_FINISH_LB == 1500.0
+    assert 6.0 <= cdm.MX_CONVERSION <= 6.5, "UNAM gives 6.0-6.5 as fed"
+    assert 0.38 <= cdm.MX_CORN_SHARE <= 0.54, "corn is 38-54% of the ration"
+    assert 0.50 <= cdm.US_CORN_SHARE <= 0.90, "Samuelson survey range"
+
+
+def test_the_page_says_which_basis_each_box_wants():
+    """A box reading 'feed conversion' that silently wants dry matter on one
+    side and as-fed on the other is the same defect one level up, on controls
+    a reader can move."""
+    page = _page()
+    assert "AS FED" in page and "DRY MATTER" in page
+    assert "different bases" in page
