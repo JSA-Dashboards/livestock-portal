@@ -1561,21 +1561,33 @@ with tab_prec:
         # markdown parser, which is what renders a pair of dollar signs as
         # LaTeX elsewhere on this portal.
         _run = _pc["current_run"]
+        # EVERY RANKING NAMES ITS OWN PERIOD. Ross, 2026-10-27, on the shipped
+        # version: *"does 'a series high' mean the most since the cattle on
+        # feed series began in 1996?"* It did, and three of the four tiles
+        # ranked against a span they never named -- "a series high", "most on
+        # file", "of 358 windows". The standing rule on this portal is that a
+        # tile is read on its own and screenshotted away from its caption, so
+        # the span cannot live in the paragraph underneath.
+        _first = int(_pc["first_year"])
         _cards = [
             _snap_card(
                 "Record-Low Months in a Row", f"{_run}",
                 "months" if _run != 1 else "month",
                 '<span class="snap-neu">lowest for that calendar month</span>',
-                f'<span class="snap-neu">needs {_pc["min_prior"]}+ prior years</span>',
+                f'<span class="snap-neu">must beat {_pc["min_prior"]}+ earlier '
+                f'years</span>',
                 mom_lbl="BASIS", yoy_lbl="RULE", accent="#c98a56",
                 foot=(f'newest month on file: {MONTH_ABBR[int(_newest.month)]} '
-                      f'{int(_newest.year)}'),
+                      f'{int(_newest.year)} · series begins {_first}'),
             ),
             _snap_card(
                 "Record-Low Months, Last 12 Reports", f'{_r12.get("now", 0)}', "of 12",
-                f'<span class="snap-neu">most on file is {_r12.get("best", 0)}</span>',
+                f'<span class="snap-neu">{_r12.get("best", 0)} in any 12 '
+                f'months</span>',
                 '<span class="snap-neu">'
-                + ("a series high" if _r12.get("is_best") else "below the series high")
+                + (f"a series high — the most since {_first}"
+                   if _r12.get("is_best")
+                   else f'below the series high of {_r12.get("best", 0)}')
                 + "</span>",
                 mom_lbl="SERIES BEST", yoy_lbl="WHERE THIS SITS", accent="#c98a56",
                 foot=", ".join(f"{MONTH_ABBR[m]} {y}"
@@ -1584,16 +1596,19 @@ with tab_prec:
             _snap_card(
                 "Placements, Last 12 Months", f'{_roll.get("total", 0):,.0f}', "head",
                 f'<span class="snap-neu">{_prec_ord(_roll.get("rank", 0))} of '
-                f'{_roll.get("of", 0)} windows</span>',
+                f'{_roll.get("of", 0)} rolling 12-month windows since '
+                f'{_first}</span>',
                 '<span class="snap-neu">no seasonal adjustment needed</span>',
                 mom_lbl="RANK", yoy_lbl="BASIS",
-                foot="each 12-month window holds every calendar month once",
+                foot="one window ends on every month, and each holds "
+                     "every calendar month once",
             ),
             _snap_card(
                 "Placements per 100 Beef Cows", f'{_percow.get("value", 0):.1f}',
                 "per 100 cows",
                 f'<span class="snap-neu">{_prec_ord(_percow.get("rank", 0))} of '
-                f'{_percow.get("of", 0)} windows</span>',
+                f'{_percow.get("of", 0)} rolling 12-month windows since '
+                f'{_first}</span>',
                 '<span class="snap-neu">last 12 months over Jan-1 beef cows</span>',
                 mom_lbl="RANK", yoy_lbl="BASIS",
                 foot="separates fewer cattle placed from fewer cattle existing",

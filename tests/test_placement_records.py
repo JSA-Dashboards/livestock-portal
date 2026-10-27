@@ -282,3 +282,75 @@ def test_the_tiles_skip_the_markdown_parser():
     src = _panel_src()
     i = src.index("prec-grid")
     assert "st.html(" in src[:i], "the grid must be emitted through st.html"
+
+
+# ── a ranking that does not name its period ──────────────────────────────────
+
+# Phrases that rank this panel's figure against the rest of the series. Each
+# one is meaningless without the span it ranks within.
+_RANK_MARKERS = ("rolling 12-month windows", "series high", "in any 12 months")
+
+
+def _rankings_name_their_period(panel: str) -> bool:
+    """Does every ranking phrase sit in a tile that also names the span?
+
+    THE FOOT DOES NOT COUNT, and that is not fussiness -- the first version of
+    this check was per-CALL, and a tile whose rank line had lost its span still
+    passed because the small print underneath happened to mention the year.
+    Verified by mutation: it let `{n} rolling 12-month windows` through bare.
+    The span has to be on the ranking line or beside it, not in the footnote.
+    """
+    tree = ast.parse(panel)
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "_snap_card"):
+            continue
+        parts = [ast.get_source_segment(panel, a) or "" for a in node.args]
+        parts += [ast.get_source_segment(panel, k.value) or ""
+                  for k in node.keywords if k.arg != "foot"]
+        scope = " | ".join(parts)
+        if any(m in scope for m in _RANK_MARKERS) and "_first" not in scope:
+            return False
+    return True
+
+
+def test_every_ranking_names_the_span_it_ranks_within():
+    """Ross, on the shipped version: *"does 'a series high' mean the most since
+    the cattle on feed series began in 1996?"* It did, and the tile never said
+    so -- nor did "most on file", nor "the lowest of 358 windows".
+
+    A tile is read on its own and screenshotted away from the caption under
+    it, so the span cannot live in that caption. This is the portal's standing
+    headline rule arriving on a ranking rather than on a unit.
+    """
+    assert _rankings_name_their_period(_panel_src())
+
+
+def test_the_period_check_rejects_the_bare_rankings_it_replaced():
+    """A guard that cannot fail is the thing it guards against."""
+    bare = ('_snap_card("Placements", "1", "head",\n'
+            '    f\'<span>{rank} of {n} rolling 12-month windows</span>\',\n'
+            '    \'<span>a series high</span>\')\n')
+    assert not _rankings_name_their_period(bare)
+    fixed = bare.replace("windows</span>", "windows since {_first}</span>")
+    assert _rankings_name_their_period(fixed)
+    # And the hole the first version of this check had: a span sitting only in
+    # the footnote does NOT rescue a bare ranking line.
+    footnoted = ("_snap_card('Placements', '1', 'head',"
+                 " f'<span>{rank} of {n} rolling 12-month windows</span>',"
+                 " '<span>a series high</span>',"
+                 " foot=f'since {_first}')")
+    assert not _rankings_name_their_period(footnoted)
+
+
+def test_the_series_start_comes_from_the_data_not_a_literal():
+    """1996 is a property of what NASS serves, not a constant to type in. A
+    hard-coded year goes on reading 1996 the day the loaded window moves."""
+    src = _panel_src()
+    assert '_first = int(_pc["first_year"])' in src
+    # STRING CONSTANTS, not the raw source -- a comment quoting Ross's own
+    # question mentions the year, and that is not something the page renders.
+    # Parsing drops comments for free.
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            assert "1996" not in node.value, f"year written out: {node.value!r}"
