@@ -2152,6 +2152,79 @@ construction -- both come from one `compare()` call over one cow series -- and
 a test pins it rather than trusting it, because a table disagreeing with the
 tile six inches above is the failure this file records four times.
 
+### Per beef cow by year, and the retention question answered with a number
+
+Ross, 2026-10-27: a chart of the per-cow figures, what they mean, *"and how
+they might correlate to retention"*. The panel's standing rule is that it
+attributes no cause, and a test enforced it by banning the word. The way out
+was not to relax the rule but to MEASURE the thing:
+
+| | Pearson r | n |
+|---|---|---|
+| per-cow placements vs heifer share on feed | **+0.35** | 31 |
+| per-cow placements vs NEXT year's beef cow change | **-0.19** | 30 |
+| heifer share on feed vs NEXT year's beef cow change | **-0.63** | 30 |
+
+**THE OBVIOUS READING OF THIS PAGE IS WRONG.** "Fewer placed per cow means
+heifers are being kept back" is what the per-cow tile invites, and against the
+following year's herd change it runs **-0.19 over 30 years** -- close to no
+relationship. The heifer share manages **-0.63** on the same question. So the
+chart carries the heifer share beside the bars, and the caption says the red
+line is the one to read for retention. A page that implied otherwise would be
+supplying a plausible wrong cause, which is what this panel exists not to do.
+
+Even the +0.35 is **partly definitional** -- heifers are counted in placements
+-- which is a reason to read it as weaker than it looks, not stronger.
+
+**THE GUARD WAS REWORKED, NOT RELAXED.** It banned the word "retention"
+outright; it now bans causal CLAIMS ("caused by", "driven by", "because of",
+"proves", "shows that") and requires any mention of retention to arrive with
+an `r`, the word "measured", and the "not causes" caveat. A self-check feeds
+it a bare causal sentence and asserts it is rejected.
+
+**Two axes manufacture a correlation in a picture**, which is why the measured
+r sits under the chart: the number disciplines the drawing.
+
+### The on-feed ranking is AVERAGED, and the duplicate guard it needed
+
+Ross: *"an on-feed top 10 like we have for placements, and add the heifers on
+feed to that"*. Same table, one `agg` switch.
+
+**ON FEED IS A STOCK, NOT A FLOW.** Placements are head that went on feed
+during the month, so twelve of them add up; inventory is a standing count, and
+summing it bills the same animal for every month it stands in the yard. The
+wrong one renders perfectly -- about 132 million head, which reads as a big
+year rather than as a category error. `lowest_windows(..., agg="mean")`, and a
+test asserts the page asks for the mean on both on-feed rankings.
+
+**`_ordered()` NOW REFUSES A DUPLICATED MONTH.** `rolling(12)` counts ROWS,
+not calendar months, so a frame carrying two series gives a "12-month" window
+spanning six. Hit for real: `inventory.json` holds **fifteen** capacity
+classes under one `short_desc`, and unfiltered it ranked Jan 1997 twice at
+2.5M against a true 11M. The page passes the `CAP_1000`-filtered frame, so the
+guard is for whoever wires the next series.
+
+**The any-window on-feed ranking is a single stretch** -- Dec 1996 to Sep 1997,
+all ten rows -- so the caption's stretch count earns its keep immediately, and
+`_prec_stretch()` exists because "1 separate stretches" is not a sentence.
+
+**`heifer_by_year()` delegates to `share_at()` per year** rather than
+recomputing, so the chart, the on-feed table and the runs table cannot quote
+different percentiles for one year. The percentile is a year's MEAN placed in
+the QUARTERLY distribution -- a convention, not a fact, and two surfaces
+reading it two ways would both be defensible.
+
+**A NaN is not a correlation.** A series with no variance makes `corr()`
+return NaN and the caption would print "r = nan" to a client. `None` means not
+measurable and the sentence is dropped.
+
+**A caveat split across an implicit string concatenation is invisible to a
+grep.** "not causes" written as `f"... not "` `f"causes ..."` reads as absent,
+and the first version of the test failed on correct code. `_panel_text()`
+reads the prose off the AST, where Python has already folded the pieces into
+one node -- which also sidesteps the backslash mangling this file records
+twice.
+
 ### The run tile says how long a run of three actually is
 
 Ross, 2026-10-27: *"so the most consecutive months in a row of 3 record low

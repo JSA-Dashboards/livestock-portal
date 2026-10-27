@@ -65,7 +65,25 @@ MIN_RUN = 2
 
 
 def _ordered(placements: pd.DataFrame) -> pd.DataFrame:
-    return placements.sort_values(["year", "month"]).reset_index(drop=True)
+    """Sorted by date, and REFUSED if any month appears twice.
+
+    A duplicated (year, month) is the one input error that corrupts every
+    figure here silently: `rolling(12)` counts ROWS, not calendar months, so a
+    frame carrying two capacity classes gives a "12-month" window spanning six
+    months and a total that is plausible, wrong, and un-noticeable. Hit while
+    wiring the on-feed series, whose cache holds fifteen capacity classes
+    under one short_desc -- unfiltered it ranked Jan 1997 twice, at 2.5M
+    against a true 11M.
+    """
+    p = placements.sort_values(["year", "month"]).reset_index(drop=True)
+    dup = p.duplicated(["year", "month"])
+    if dup.any():
+        first = p.loc[dup, ["year", "month"]].iloc[0]
+        raise ValueError(
+            f"{int(dup.sum())} duplicated month(s), first {int(first.year)}-"
+            f"{int(first.month):02d}: filter the series to one class before "
+            "ranking it")
+    return p
 
 
 def flag_records(placements: pd.DataFrame,
@@ -172,7 +190,8 @@ def rolling_total(placements: pd.DataFrame, window: int = 12) -> dict:
 
 
 def lowest_windows(placements: pd.DataFrame, beef_cows: pd.Series = None,
-                   n: int = 10, window: int = 12, per_year: bool = False) -> dict:
+                   n: int = 10, window: int = 12, per_year: bool = False,
+                   agg: str = "sum") -> dict:
     """The `n` lowest rolling `window`-month placement totals, lowest first.
 
     WINDOWS OVERLAP, AND THAT IS THE THING TO KNOW BEFORE READING THIS AS A
@@ -196,10 +215,17 @@ def lowest_windows(placements: pd.DataFrame, beef_cows: pd.Series = None,
     totals on file and unremarkable per cow.
     """
     p = _ordered(placements)
-    p["roll"] = p.Value.rolling(window).sum()
+    # SUM FOR A FLOW, MEAN FOR A STOCK. Placements are a flow -- head that
+    # went on feed during the month -- so twelve of them add up. On-feed
+    # INVENTORY is a stock: summing it counts the same animal in every month
+    # it stands in the yard, which is a category error that still produces a
+    # plausible-looking number in the tens of millions.
+    roll = p.Value.rolling(window)
+    p["roll"] = roll.mean() if agg == "mean" else roll.sum()
     r = p.dropna(subset=["roll"]).copy()
     if r.empty:
-        return {"rows": [], "stretches": 0, "of": 0, "window": window}
+        return {"rows": [], "stretches": 0, "of": 0, "window": window,
+                "agg": agg, "per_year": per_year}
     if beef_cows is not None:
         r["per100"] = r.roll / r.year.map(beef_cows) * 100
     if per_year:
@@ -222,7 +248,7 @@ def lowest_windows(placements: pd.DataFrame, beef_cows: pd.Series = None,
     ends = sorted(d["year"] * 12 + d["month"] for d in rows)
     stretches = 1 + sum(1 for a, b in zip(ends, ends[1:]) if b - a > 1)
     return {"rows": rows, "stretches": stretches, "of": len(r),
-            "window": window, "per_year": per_year}
+            "window": window, "per_year": per_year, "agg": agg}
 
 
 def per_cow(placements: pd.DataFrame, beef_cows: pd.Series,
@@ -276,8 +302,74 @@ def share_at(share: pd.DataFrame, year: int) -> dict:
     return {"pct": v, "percentile": float((share.pct < v).mean() * 100)}
 
 
+def retention_signal(placements: pd.DataFrame, beef_cows: pd.Series,
+                     share: pd.DataFrame) -> dict:
+    """How closely per-cow placements track two measures of retention.
+
+    MEASURED, NEVER ASSERTED, and the measurement is the reason this exists.
+    "Fewer placed per cow means heifers are being kept back" is the obvious
+    reading of this page and it is mostly WRONG: against the following year's
+    beef cow change the per-cow figure runs about r = -0.19 over 30 years,
+    which is close to no relationship. The heifer share on feed manages about
+    r = -0.63 on the same question. So the honest answer to "does this show
+    retention" is "barely -- look at the heifer share instead", and a page
+    that implied otherwise would be supplying a plausible wrong cause, which
+    this panel exists not to do.
+
+    Note the per-cow-to-heifer-share link is PARTLY DEFINITIONAL: heifers are
+    counted in placements, so the two cannot be independent. That is a reason
+    to read the +0.35 as weaker than it looks, not stronger.
+    """
+    pc = pd.Series(per_cow(placements, beef_cows).get("by_year", {}), dtype=float)
+    cw = pd.Series(beef_cows, dtype=float).sort_index()
+    if pc.empty or cw.empty:
+        return {}
+    sh = (share.groupby("year").pct.mean() if share is not None and len(share)
+          else pd.Series(dtype=float))
+    frame = pd.DataFrame({"pc": pc, "sh": sh, "nx": (cw.shift(-1) / cw - 1) * 100})
+
+    def _r(a: str, b: str):
+        # NaN IS NOT A CORRELATION. A series with no variance -- a short
+        # window, or a state whose share never moves -- makes corr() return
+        # NaN, and a caption interpolating it prints "r = nan" on the page.
+        # None means "not measurable here" and the caption drops the sentence.
+        d = frame[[a, b]].dropna()
+        if len(d) <= 2:
+            return None, len(d)
+        v = d[a].corr(d[b])
+        return (None if pd.isna(v) else float(v)), len(d)
+
+    r_share, n_share = _r("pc", "sh")
+    r_herd, n_herd = _r("pc", "nx")
+    r_sh_herd, n_sh_herd = _r("sh", "nx")
+    return {"per_cow_vs_share": r_share, "n_share": n_share,
+            "per_cow_vs_herd": r_herd, "n_herd": n_herd,
+            "share_vs_herd": r_sh_herd, "n_share_herd": n_sh_herd}
+
+
+def heifer_by_year(share: pd.DataFrame) -> dict:
+    """{year: {"pct", "percentile"}} for every year in the share series.
+
+    DELEGATES TO share_at() PER YEAR rather than recomputing, so the chart and
+    the runs table cannot quote different percentiles for one year. That is
+    the failure this file records five times over, and it is cheap to make
+    impossible: the percentile is a year's MEAN placed in the QUARTERLY
+    distribution, which is a convention, not a fact, and two surfaces reading
+    it two ways would both be defensible.
+    """
+    if share is None or not len(share):
+        return {}
+    out = {}
+    for y in sorted(int(v) for v in share.year.unique()):
+        at = share_at(share, y)
+        if at:
+            out[y] = at
+    return out
+
+
 def compare(placements: pd.DataFrame, beef_cows: pd.Series,
-            share: pd.DataFrame, min_prior: int = MIN_PRIOR_YEARS) -> dict:
+            share: pd.DataFrame, min_prior: int = MIN_PRIOR_YEARS,
+            inventory: pd.DataFrame = None) -> dict:
     """Everything the panel draws, from one pass over the series."""
     flagged = flag_records(placements, min_prior)
     roll = rolling_total(placements)
@@ -298,6 +390,13 @@ def compare(placements: pd.DataFrame, beef_cows: pd.Series,
         "last12": records_in_last(flagged),
         "rolling": roll,
         "per_cow": per_cow(placements, beef_cows),
+        "retention_signal": retention_signal(placements, beef_cows, share),
+        "heifer_by_year": heifer_by_year(share),
+        "lowest_onfeed": (lowest_windows(inventory, agg="mean")
+                          if inventory is not None and len(inventory) else {}),
+        "lowest_onfeed_per_year": (
+            lowest_windows(inventory, agg="mean", per_year=True)
+            if inventory is not None and len(inventory) else {}),
         "lowest_windows": lowest_windows(placements, beef_cows),
         "lowest_per_year": lowest_windows(placements, beef_cows, per_year=True),
         "runs": rows,

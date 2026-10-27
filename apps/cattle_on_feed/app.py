@@ -1516,6 +1516,50 @@ with tab_flows:
 # supplies a plausible wrong cause. The three framings are shown together
 # because they disagree.
 
+def _prec_stretch(n: int) -> str:
+    """"1 stretch" / "3 separate stretches" -- the on-feed any-window ranking
+    really does come from a single stretch, so the plural cannot be assumed."""
+    return "1 stretch" if n == 1 else f"{n} separate stretches"
+
+
+def prec_per_cow_chart(by_year: dict, heifer: dict, height: int = 400) -> go.Figure:
+    """Placements per 100 beef cows by year, with the heifer share beside it.
+
+    TWO AXES, AND THE CAPTION CARRIES THE MEASURED r FOR THAT REASON. Two
+    series on independently scaled axes will look related whatever they do,
+    which is the classic way to manufacture a correlation in a picture. The
+    number under the chart is what disciplines it: these two move together at
+    about +0.35, which is weak, and the page says so rather than leaving the
+    impression to the drawing.
+    """
+    if not by_year:
+        return go.Figure()
+    years = sorted(by_year)
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=years, y=[by_year[y] for y in years], marker_color=HEIFER_COLOR,
+        name="Placements per 100 beef cows",
+        hovertemplate="%{x}: %{y:.1f} head per 100 beef cows<extra></extra>"))
+    hy = [y for y in years if y in heifer]
+    if hy:
+        fig.add_trace(go.Scatter(
+            x=hy, y=[heifer[y]["pct"] for y in hy], yaxis="y2",
+            mode="lines+markers", name="Heifers on feed",
+            line=dict(color=COL_NEG, width=2), marker=dict(size=5),
+            customdata=[[heifer[y]["percentile"]] for y in hy],
+            hovertemplate="%{x}: %{y:.1f}% heifers on feed · "
+                          "%{customdata[0]:.0f}th percentile<extra></extra>"))
+    _apply(fig, height=height, y_title="Head placed per 100 beef cows")
+    fig.update_layout(
+        yaxis2=dict(title="Heifers, % of cattle on feed", overlaying="y",
+                    side="right", showgrid=False, ticksuffix="%"),
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+        margin=dict(l=55, r=70, t=50, b=40))
+    fig.update_xaxes(dtick=2)
+    return fig
+
+
 def _prec_times(n: int) -> str:
     return {1: "once", 2: "twice"}.get(n, f"{n} times")
 
@@ -1559,7 +1603,8 @@ with tab_prec:
             series_for(steer, "US")[["year", "month", "Value"]])
         _pc = placement_records.compare(
             series_for(place_full, "US")[["year", "month", "Value"]],
-            _pc_cows, _pc_share)
+            _pc_cows, _pc_share,
+            inventory=series_for(inv_full, "US")[["year", "month", "Value"]])
 
         st.markdown('<div class="sec-hdr">Placement records — United States</div>',
                     unsafe_allow_html=True)
@@ -1747,14 +1792,12 @@ with tab_prec:
                      f"{_low['of']} such windows since {_first}.")
             _ovl = (f"Adjacent years can still **overlap** — a December window "
                     f"and the following January window share eleven months — so "
-                    f"these ten come from **{_low['stretches']} separate "
-                    f"stretches**."
+                    f"these ten come from **{_prec_stretch(_low['stretches'])}**."
                     if _per_year else
                     f"Those windows **overlap** — the 12 months to August and "
                     f"the 12 months to September share eleven of their months — "
                     f"so a single quiet stretch fills several rows: these ten "
-                    f"come from **{_low['stretches']} separate stretches**, not "
-                    f"ten.")
+                    f"come from **{_prec_stretch(_low['stretches'])}**, not ten.")
             st.caption(
                 f"**#1 is the lowest.** {_lead} {_ovl} **Per 100 beef cows** "
                 f"is how many head went on feed for every 100 beef cows in the "
@@ -1762,6 +1805,98 @@ with tab_prec:
                 f"total to the size of the herd that produced it, which is why "
                 f"a window can be among the lowest on head and ordinary per "
                 f"cow."
+            )
+
+        # ── per beef cow, by year, with the heifer share beside it ──────────
+        # Ross, 2026-10-27: a chart of the per-cow figures, what they mean,
+        # "and how they might correlate to retention".
+        #
+        # THE ANSWER IS MEASURED AND IT IS MOSTLY NO. Per-cow placements
+        # against the FOLLOWING year's beef cow change run about r = -0.19
+        # over 30 years, which is close to no relationship; the heifer share
+        # manages about -0.63 on the same question. So the chart carries the
+        # heifer share too and the caption reports both numbers. Asserting a
+        # retention story off the per-cow line would be supplying a plausible
+        # wrong cause, which is the one thing this panel refuses to do.
+        _pc_by_year = _pc["per_cow"].get("by_year", {})
+        _heif = _pc.get("heifer_by_year", {})
+        if _pc_by_year:
+            st.markdown('<div class="sec-hdr">Placements per beef cow, by '
+                        'year</div>', unsafe_allow_html=True)
+            st.plotly_chart(prec_per_cow_chart(_pc_by_year, _heif),
+                            use_container_width=True)
+            st.caption(
+                "Bars are the 12 months ending each December — how many head "
+                "went on feed for every 100 beef cows in the US breeding herd "
+                "that January 1. A high bar means more cattle placed per cow "
+                "in the herd, a low one fewer. The red line is heifers as a "
+                "percent of the cattle on feed, on its own axis; hover for "
+                "that year's percentile."
+            )
+            _rs = _pc.get("retention_signal") or {}
+            if _rs.get("per_cow_vs_herd") is not None:
+                st.caption(
+                    f"**Does the per-cow line track heifer retention? Measured, "
+                    f"not assumed — and mostly it does not.** Against the "
+                    f"*following* year's change in beef cow numbers it runs "
+                    f"**r = {_rs['per_cow_vs_herd']:+.2f}** over "
+                    f"{_rs['n_herd']} years, which is close to no relationship "
+                    f"at all. The heifer share on the same test runs "
+                    f"**r = {_rs['share_vs_herd']:+.2f}** — far closer — so the "
+                    f"red line, not the bars, is the one to read for that "
+                    f"question, and the Heifers on Feed tab is where it lives. "
+                    f"The two series here move together at "
+                    f"**r = {_rs['per_cow_vs_share']:+.2f}**, and even that is "
+                    f"partly definitional: heifers are counted in placements, "
+                    f"so the two cannot be independent. **These are "
+                    f"associations measured over {_rs['n_herd']} years, not "
+                    f"causes**, and two series on separate axes will look "
+                    f"related whatever they do."
+                )
+
+        # ── the same ranking for on-feed inventory ───────────────────────────
+        # Ross: "an on-feed top 10 like we have for placements, and add the
+        # heifers on feed to that".
+        #
+        # AVERAGE, NOT SUM, BECAUSE ON FEED IS A STOCK. Placements are a flow
+        # and twelve months of them add up; inventory is a standing count, so
+        # summing it bills the same animal for every month it stands in the
+        # yard. It is wired through the same `agg` switch rather than a second
+        # function, and the caption names the basis.
+        _onf = (_pc.get("lowest_onfeed_per_year") if _per_year
+                else _pc.get("lowest_onfeed")) or {}
+        if _onf.get("rows"):
+            st.markdown('<div class="sec-hdr">The ten lowest 12-month average '
+                        'on-feed inventories</div>', unsafe_allow_html=True)
+            _orows = []
+            for _r in _onf["rows"]:
+                _h = _heif.get(_r["year"]) or {}
+                _orows.append({
+                    "Rank": _r["rank"],
+                    "12 months ending": f'{MONTH_ABBR[_r["month"]]} {_r["year"]}',
+                    "Avg on feed": _r["total"],
+                    "Heifers on feed": (f'{_h["pct"]:.1f}%' if _h else "—"),
+                    "Heifer share percentile": (f'{_h["percentile"]:.0f}th'
+                                                if _h else "—"),
+                })
+            st.dataframe(pd.DataFrame(_orows), hide_index=True, width="stretch",
+                         column_config={
+                             "Avg on feed":
+                                 st.column_config.NumberColumn(format="%,.0f"),
+                             "Heifers on feed": st.column_config.TextColumn(
+                                 help="Heifers as a percent of the cattle on "
+                                      "feed, averaged over that calendar year."),
+                         })
+            st.caption(
+                f"**#1 is the lowest**, and it is an **average**, not a total: "
+                f"cattle on feed is a standing count, so twelve months of it do "
+                f"not add up the way placements do. Out of {_onf['of']} windows "
+                f"since {_first}, and these ten come from "
+                f"**{_prec_stretch(_onf['stretches'])}** — the same overlap as "
+                f"the table above. Heifers on feed is that calendar year's "
+                f"average share with its percentile across the whole series, "
+                f"the same figures the runs table quotes. The Ranking switch "
+                f"above governs both tables."
             )
 
         st.caption(

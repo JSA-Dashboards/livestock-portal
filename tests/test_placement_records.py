@@ -25,6 +25,7 @@ The other three things pinned here:
 """
 
 import ast
+import re
 import sys
 from pathlib import Path
 
@@ -33,6 +34,7 @@ import pytest
 
 _ROOT = Path(__file__).resolve().parent.parent
 _APP = _ROOT / "apps" / "cattle_on_feed" / "app.py"
+_PR = _ROOT / "apps" / "cattle_on_feed" / "placement_records.py"
 sys.path.insert(0, str(_ROOT / "apps" / "cattle_on_feed"))
 
 import placement_records as pr  # noqa: E402
@@ -172,12 +174,71 @@ def _panel_src():
     return src[i:j]
 
 
-def test_the_panel_attributes_no_cause():
-    """The standing rule. Whether this is retention or a smaller herd is what
-    the three figures let a reader judge; the page must not decide it."""
-    low = _panel_src().lower()
-    for word in ("retention", "retaining", "rebuild", "expansion", "because of"):
+def _panel_text() -> str:
+    """The panel's prose, with implicit string concatenation joined up.
+
+    A caption written as several adjacent literals is ONE sentence to the
+    reader and several to a naive grep: "not causes" split across a line break
+    reads as absent, and a test that greps the raw source for it fails on
+    correct code. Found exactly that way.
+    """
+    # NO REGEX, AND NO ESCAPES. Python folds implicit concatenation at
+    # parse time -- adjacent plain strings become one Constant, adjacent
+    # f-strings one JoinedStr -- so the whole sentence is already joined
+    # in the tree. Reading it there also avoids the backslash mangling
+    # this repo records twice.
+    parts = []
+    for node in ast.walk(ast.parse(_panel_src())):
+        if isinstance(node, ast.JoinedStr):
+            parts.append("".join(
+                v.value if isinstance(v, ast.Constant)
+                and isinstance(v.value, str) else " {} "
+                for v in node.values))
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            parts.append(node.value)
+    return chr(10).join(parts).lower()
+
+
+# Phrases that assert a CAUSE rather than report a measurement.
+_CAUSAL = ("caused by", "driven by", "because of", "due to", "proves",
+           "demonstrates", "shows that", "means that", "explains")
+
+
+def test_the_panel_asserts_no_CAUSE():
+    """The standing rule, and it survives the panel gaining a correlation:
+    what is banned is a causal CLAIM, not a subject."""
+    low = _panel_text()
+    for word in _CAUSAL:
         assert word not in low, f"the panel asserts a cause: {word!r}"
+
+
+def _retention_is_qualified(panel_text: str) -> bool:
+    """If the panel talks about retention it must show its working."""
+    if not any(w in panel_text for w in
+               ("retention", "retaining", "rebuild", "expansion")):
+        return True
+    return ("r = " in panel_text
+            and "not causes" in panel_text
+            and "measured" in panel_text)
+
+
+def test_retention_may_be_MEASURED_but_never_asserted():
+    """Ross asked how the per-cow figure might correlate to retention. The
+    answer is a number -- about -0.19 against the next year's herd change,
+    which is close to nothing -- so the panel reports correlations and names
+    them as associations. What it must never do is state the link as fact,
+    which is why a mention has to arrive with an r, the word measured, and the
+    "not causes" caveat."""
+    assert _retention_is_qualified(_panel_text())
+
+
+def test_the_retention_check_rejects_a_bare_causal_claim():
+    """A guard that cannot fail is the thing it guards against."""
+    assert not _retention_is_qualified(
+        "placements per cow are low, so heifer retention is under way")
+    assert _retention_is_qualified("no mention of the subject at all")
+    assert _retention_is_qualified(
+        "retention: r = -0.19, measured over 30 years, associations not causes")
 
 
 def test_the_panel_names_the_record_rule_it_used():
@@ -593,3 +654,89 @@ def test_tied_totals_rank_by_the_EARLIER_window_not_by_pandas():
     again = pr.lowest_windows(p, n=5, per_year=True)
     assert [(r["year"], r["month"]) for r in again["rows"]] == \
            [(r["year"], r["month"]) for r in got["rows"]]
+
+
+def test_a_flat_series_yields_no_correlation_rather_than_nan():
+    """corr() on a series with no variance returns NaN, and a caption
+    interpolating it prints "r = nan" to a client. None drops the sentence."""
+    rows = _ramp(range(2000, 2012))
+    cows = pd.Series({y: 30e6 for y in range(2000, 2012)})     # herd never moves
+    share = pd.DataFrame({"year": list(range(2000, 2012)),
+                          "month": [1] * 12, "pct": [35.0] * 12})
+    got = pr.retention_signal(_series(rows), cows, share)
+    for k in ("per_cow_vs_share", "per_cow_vs_herd", "share_vs_herd"):
+        assert got[k] is None or isinstance(got[k], float)
+        if got[k] is not None:
+            assert got[k] == got[k], f"{k} is NaN"
+
+
+def test_retention_signal_measures_what_it_claims_on_a_known_relationship():
+    """A herd that falls hardest after the years with the most placed per cow
+    must come back NEGATIVE, or the sign convention is wrong and every word of
+    the caption is backwards."""
+    years = list(range(2000, 2016))
+    rows, cows = [], {}
+    for i, y in enumerate(years):
+        hot = i % 2 == 0                      # alternate heavy / light years
+        for m in range(1, 13):
+            rows.append((y, m, 2_500_000 if hot else 1_500_000))
+        cows[y] = 30e6
+    # herd shrinks the year AFTER a heavy year
+    for i, y in enumerate(years[1:], 1):
+        cows[y] = cows[years[i - 1]] * (0.97 if (i - 1) % 2 == 0 else 1.03)
+    got = pr.retention_signal(_series(rows), pd.Series(cows),
+                              pd.DataFrame(columns=["year", "month", "pct"]))
+    assert got["per_cow_vs_herd"] is not None
+    assert got["per_cow_vs_herd"] < 0, got["per_cow_vs_herd"]
+
+
+# ── a stock is not a flow ────────────────────────────────────────────────────
+
+def test_on_feed_is_AVERAGED_not_summed():
+    """Placements are a flow and twelve months of them add up. Cattle on feed
+    is a standing count: summing it bills the same animal for every month it
+    stands in the yard. The wrong one still produces a plausible number — 132
+    million head reads as a big year, not as a category error."""
+    rows = [(y, m, 11_000_000) for y in (2000, 2001) for m in range(1, 13)]
+    flow = pr.lowest_windows(_series(rows), n=1)
+    stock = pr.lowest_windows(_series(rows), n=1, agg="mean")
+    assert flow["rows"][0]["total"] == pytest.approx(132_000_000)
+    assert stock["rows"][0]["total"] == pytest.approx(11_000_000)
+    assert stock["agg"] == "mean" and flow["agg"] == "sum"
+
+
+def test_a_duplicated_month_is_REFUSED_rather_than_quietly_rescaled():
+    """rolling(12) counts ROWS, not calendar months. A frame carrying two
+    capacity classes gives a "12-month" window spanning six months — hit for
+    real on the on-feed cache, which holds fifteen classes under one
+    short_desc and ranked Jan 1997 twice at 2.5M against a true 11M."""
+    rows = [(2000, m, 1_000_000) for m in range(1, 13)]
+    rows += [(2000, 6, 9_000_000)]                     # June twice
+    with pytest.raises(ValueError, match="duplicated month"):
+        pr.lowest_windows(_series(rows), n=1)
+
+
+def test_the_duplicate_guard_names_the_offending_month():
+    rows = [(2000, m, 1_000_000) for m in range(1, 13)] + [(2000, 6, 5.0)]
+    try:
+        pr.lowest_windows(_series(rows), n=1)
+    except ValueError as e:
+        assert "2000-06" in str(e), str(e)
+    else:
+        raise AssertionError("no refusal")
+
+
+def test_the_page_averages_the_on_feed_series():
+    """The page must ask for the mean. Passing the default would rank sums of
+    an inventory, which is the category error above with nothing raising."""
+    src = _panel_src()
+    assert "lowest_onfeed" in src
+    mod = ast.parse(_PR.read_text(encoding="utf-8"))
+    comp = next(n for n in mod.body
+                if isinstance(n, ast.FunctionDef) and n.name == "compare")
+    calls = [c for c in ast.walk(comp)
+             if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)
+             and c.func.id == "lowest_windows"]
+    onfeed = [c for c in calls
+              if any(k.arg == "agg" and k.value.value == "mean" for k in c.keywords)]
+    assert len(onfeed) == 2, "both on-feed rankings must average"
