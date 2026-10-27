@@ -1632,7 +1632,8 @@ with tab_prec:
                 f'<span class="snap-neu">{_prec_ord(_percow.get("rank", 0))} of '
                 f'{_percow.get("of", 0)} rolling 12-month windows since '
                 f'{_first}</span>',
-                '<span class="snap-neu">last 12 months over Jan-1 beef cows</span>',
+                '<span class="snap-neu">head placed per 100 Jan-1 beef '
+                'cows</span>',
                 mom_lbl="RANK", yoy_lbl="BASIS",
                 foot="separates fewer cattle placed from fewer cattle existing",
             ),
@@ -1697,7 +1698,27 @@ with tab_prec:
         # three calendar years, not ten. Ten rows read as ten episodes unless
         # the page says otherwise, which would overstate how often this has
         # happened on exactly the figure the panel leads with.
-        _low = _pc["lowest_windows"]
+        # TWO RANKINGS, BECAUSE A LITERAL TOP TEN IS NEARLY DEGENERATE.
+        # "Any window" is what Ross asked for and is the honest answer to the
+        # question -- but six of its ten rows are one 2026 stretch read from
+        # six month-ends. "One per year" takes each calendar year's quietest
+        # 12 months, which reads as a league table of years instead.
+        #
+        # A SWITCH RATHER THAN TWO STACKED TABLES: twenty rows of near
+        # identical shape invite a reader to confuse them, and both rankings
+        # are already computed in compare(), so neither costs a fetch. This is
+        # the Cold Storage shape. The variable is `_low_mode` and never `view`
+        # -- this page binds `view` to a segmented control at module level,
+        # the collision that cost a rename once already.
+        _low_mode = st.segmented_control(
+            "Ranking", ["Any window", "One per year"], default="Any window",
+            key="prec_low_mode",
+            help="Any window ranks every rolling 12-month window. One per "
+                 "year takes each calendar year's quietest 12 months, so ten "
+                 "rows are ten years.",
+        )
+        _per_year = _low_mode == "One per year"
+        _low = _pc["lowest_per_year"] if _per_year else _pc["lowest_windows"]
         if _low["rows"]:
             st.markdown('<div class="sec-hdr">The ten lowest 12-month placement '
                         'totals</div>', unsafe_allow_html=True)
@@ -1709,17 +1730,38 @@ with tab_prec:
                                       else f'{_r["per100"]:.1f}'),
             } for _r in _low["rows"]]
             st.dataframe(pd.DataFrame(_lrows), hide_index=True, width="stretch",
-                         column_config={"Placements":
-                                        st.column_config.NumberColumn(format="%,.0f")})
+                         column_config={
+                             "Placements":
+                                 st.column_config.NumberColumn(format="%,.0f"),
+                             "Per 100 beef cows": st.column_config.TextColumn(
+                                 help="Head placed on feed over this window, "
+                                      "for every 100 beef cows in the US "
+                                      "breeding herd on January 1 of that "
+                                      "year."),
+                         })
+            _lead = (f"Each row is the quietest 12 months *ending* in that "
+                     f"calendar year, one year per row, out of {_low['of']} "
+                     f"years since {_first}."
+                     if _per_year else
+                     f"Each row is the 12 months *ending* that month, out of "
+                     f"{_low['of']} such windows since {_first}.")
+            _ovl = (f"Adjacent years can still **overlap** — a December window "
+                    f"and the following January window share eleven months — so "
+                    f"these ten come from **{_low['stretches']} separate "
+                    f"stretches**."
+                    if _per_year else
+                    f"Those windows **overlap** — the 12 months to August and "
+                    f"the 12 months to September share eleven of their months — "
+                    f"so a single quiet stretch fills several rows: these ten "
+                    f"come from **{_low['stretches']} separate stretches**, not "
+                    f"ten.")
             st.caption(
-                f"**#1 is the lowest.** Each row is the 12 months *ending* that "
-                f"month, out of {_low['of']} such windows since {_first}. Those "
-                f"windows **overlap** — the 12 months to August and the 12 months "
-                f"to September share eleven of their months — so a single quiet "
-                f"stretch fills several rows: these ten come from "
-                f"**{_low['stretches']} separate stretches**, not ten. Per 100 beef "
-                f"cows is the same window over that year's Jan-1 herd, and it is "
-                f"here because the two can rank differently."
+                f"**#1 is the lowest.** {_lead} {_ovl} **Per 100 beef cows** "
+                f"is how many head went on feed for every 100 beef cows in the "
+                f"US breeding herd on January 1 of that year. It scales the "
+                f"total to the size of the herd that produced it, which is why "
+                f"a window can be among the lowest on head and ordinary per "
+                f"cow."
             )
 
         st.caption(

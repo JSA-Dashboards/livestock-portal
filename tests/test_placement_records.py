@@ -512,3 +512,84 @@ def test_the_page_tells_the_reader_the_windows_overlap():
     assert "overlap" in tail
     assert "_low['stretches']" in tail or '_low["stretches"]' in tail, \
         "the number of stretches must be computed, not written down"
+
+
+# ── one window per year ──────────────────────────────────────────────────────
+
+def test_per_year_returns_one_row_per_calendar_year():
+    got = pr.lowest_windows(_series(_ramp(range(2000, 2011))), n=10, per_year=True)
+    years = [r["year"] for r in got["rows"]]
+    assert len(years) == len(set(years)), "a year may appear once"
+
+
+def test_per_year_picks_that_years_QUIETEST_window():
+    rows = [(y, m, 3_000_000) for y in range(2000, 2004) for m in range(1, 13)]
+    rows = {(y, m): v for y, m, v in rows}
+    rows[(2002, 5)] = 100_000                   # one very quiet month in 2002
+    p = _series([(y, m, v) for (y, m), v in rows.items()])
+    got = pr.lowest_windows(p, n=5, per_year=True)
+    top = got["rows"][0]
+    # The lowest window of 2002 is the first one that CONTAINS that month.
+    assert top["year"] == 2002 and top["month"] == 5
+
+
+def test_per_year_does_NOT_abolish_overlap_and_does_not_claim_to():
+    """A December window and the following January window are different years
+    and still share eleven months. The caption leans on `stretches` to say so,
+    so `stretches` has to keep counting in this mode."""
+    rows = {(y, m): 3_000_000 for y in range(2000, 2004) for m in range(1, 13)}
+    rows[(2001, 12)] = 100_000                  # drags Dec 2001 AND Jan 2002 down
+    p = _series([(y, m, v) for (y, m), v in rows.items()])
+    got = pr.lowest_windows(p, n=2, per_year=True)
+    ends = sorted((r["year"], r["month"]) for r in got["rows"])
+    assert ends == [(2001, 12), (2002, 1)], ends
+    assert got["stretches"] == 1, "adjacent month-ends are one stretch"
+
+
+def test_compare_carries_both_rankings():
+    rows = _ramp(range(2000, 2011))
+    got = pr.compare(_series(rows), pd.Series({y: 30e6 for y in range(2000, 2011)}),
+                     pd.DataFrame(columns=["year", "month", "pct"]))
+    assert got["lowest_windows"]["per_year"] is False
+    assert got["lowest_per_year"]["per_year"] is True
+    ys = [r["year"] for r in got["lowest_per_year"]["rows"]]
+    assert len(ys) == len(set(ys))
+
+
+def test_the_page_offers_both_rankings_and_never_rebinds_view():
+    """`view` is bound to a segmented control at module level on this page --
+    the collision that cost a rename once already."""
+    src = _panel_src()
+    assert "lowest_per_year" in src and "segmented_control" in src
+    assert "\n        view = " not in src and "\n            view = " not in src
+
+
+# ── what "per 100 beef cows" means ───────────────────────────────────────────
+
+def test_the_per_cow_column_says_what_it_IS_not_just_what_it_is_made_of():
+    """Ross: *"what does the per 100 beef cows mean?"* The column named the
+    ratio and the caption named its ingredients; neither said what the number
+    counts. A reader who cannot take a normalised figure apart will not trust
+    it -- the reasoning that keeps the crush pages' explainers."""
+    src = _panel_src()
+    assert "for every 100 beef cows" in src, "the caption must define the ratio"
+    assert "breeding herd" in src
+    i = src.index("Per 100 beef cows\": st.column_config")
+    assert "help=" in src[i:i + 400], "the column needs its own tooltip"
+
+
+def test_tied_totals_rank_by_the_EARLIER_window_not_by_pandas():
+    """A RANK column must not depend on incidental ordering. Two windows on
+    the same total were being swapped by nsmallest, which would move a row's
+    rank between runs with nothing in the data having changed."""
+    rows = {(y, m): 3_000_000 for y in range(2000, 2004) for m in range(1, 13)}
+    rows[(2002, 5)] = 100_000          # ties the 2002 and 2003 best windows
+    p = _series([(y, m, v) for (y, m), v in rows.items()])
+    got = pr.lowest_windows(p, n=5, per_year=True)
+    assert got["rows"][0]["total"] == got["rows"][1]["total"], "the tie is the point"
+    assert (got["rows"][0]["year"], got["rows"][0]["month"]) == (2002, 5)
+    assert (got["rows"][1]["year"], got["rows"][1]["month"]) == (2003, 1)
+    # and it is stable across repeated calls
+    again = pr.lowest_windows(p, n=5, per_year=True)
+    assert [(r["year"], r["month"]) for r in again["rows"]] == \
+           [(r["year"], r["month"]) for r in got["rows"]]

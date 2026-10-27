@@ -172,7 +172,7 @@ def rolling_total(placements: pd.DataFrame, window: int = 12) -> dict:
 
 
 def lowest_windows(placements: pd.DataFrame, beef_cows: pd.Series = None,
-                   n: int = 10, window: int = 12) -> dict:
+                   n: int = 10, window: int = 12, per_year: bool = False) -> dict:
     """The `n` lowest rolling `window`-month placement totals, lowest first.
 
     WINDOWS OVERLAP, AND THAT IS THE THING TO KNOW BEFORE READING THIS AS A
@@ -183,6 +183,13 @@ def lowest_windows(placements: pd.DataFrame, beef_cows: pd.Series = None,
     window is, but a reader who takes ten rows for ten episodes has been
     misled. `stretches` counts how many SEPARATE runs of consecutive
     month-ends the rows come from, so the page can say so out loud.
+
+    `per_year` ranks the quietest window ENDING in each calendar year instead,
+    which is the view that reads as a league table -- ten distinct years rather
+    than one stretch seen from several month-ends. It does not abolish overlap
+    and does not claim to: a December window and the following January window
+    are different years and still share eleven months, so `stretches` is
+    computed in both modes.
 
     `per100` rides along per row because the panel's whole point is that the
     total and the per-cow figure disagree; a window can be among the lowest
@@ -195,15 +202,27 @@ def lowest_windows(placements: pd.DataFrame, beef_cows: pd.Series = None,
         return {"rows": [], "stretches": 0, "of": 0, "window": window}
     if beef_cows is not None:
         r["per100"] = r.roll / r.year.map(beef_cows) * 100
+    if per_year:
+        # The quietest window ENDING in each calendar year. It does not remove
+        # overlap, it bounds it: a December window and the following January
+        # window are different years and still share eleven months, which is
+        # why `stretches` is computed either way rather than assumed to be n.
+        r = r.loc[r.groupby("year").roll.idxmin()]
     rows = []
-    for i, (_, x) in enumerate(r.nsmallest(n, "roll").iterrows(), 1):
+    # TIES BREAK ON THE EARLIER WINDOW, explicitly. `nsmallest` leaves the
+    # order of tied rows to pandas, which is a poor thing to put a RANK
+    # column against -- two windows on the same total would swap places
+    # between runs with nothing in the data having changed.
+    ranked = r.sort_values(["roll", "year", "month"]).head(n)
+    for i, (_, x) in enumerate(ranked.iterrows(), 1):
         per = x.per100 if beef_cows is not None else None
         rows.append({"rank": i, "year": int(x.year), "month": int(x.month),
                      "total": float(x.roll),
                      "per100": None if per is None or pd.isna(per) else float(per)})
     ends = sorted(d["year"] * 12 + d["month"] for d in rows)
     stretches = 1 + sum(1 for a, b in zip(ends, ends[1:]) if b - a > 1)
-    return {"rows": rows, "stretches": stretches, "of": len(r), "window": window}
+    return {"rows": rows, "stretches": stretches, "of": len(r),
+            "window": window, "per_year": per_year}
 
 
 def per_cow(placements: pd.DataFrame, beef_cows: pd.Series,
@@ -280,6 +299,7 @@ def compare(placements: pd.DataFrame, beef_cows: pd.Series,
         "rolling": roll,
         "per_cow": per_cow(placements, beef_cows),
         "lowest_windows": lowest_windows(placements, beef_cows),
+        "lowest_per_year": lowest_windows(placements, beef_cows, per_year=True),
         "runs": rows,
         "min_prior": min_prior,
         "first_year": int(_ordered(placements).year.min()),

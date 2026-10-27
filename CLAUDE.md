@@ -2114,6 +2114,39 @@ immediately: the 2015/16 windows run **67.7-69.7** per 100 beef cows against
 2026's **72.0-74.6**, so they rank LOWER per cow while ranking HIGHER on the
 total. That is the panel's whole thesis, visible in one table.
 
+**IT HAS TWO MODES, BEHIND A SWITCH.** `Any window | One per year`, the Cold
+Storage shape. "Any window" is the literal ranking Ross asked for; "One per
+year" takes each calendar year's quietest 12 months, so ten rows are ten
+years rather than one stretch read from six month-ends. Both are computed in
+`compare()`, so the switch costs no fetch, and a switch beats two stacked
+tables because twenty rows of near identical shape invite a reader to confuse
+them. The variable is `_low_mode` and never `view` -- this page binds `view`
+to a segmented control at module level.
+
+**One per year does NOT abolish overlap and must not claim to.** A December
+window and the following January window are different years and still share
+eleven months -- on this series Dec 2015 and Jan 2016 are both in the top ten,
+which is why that mode reports **9** stretches rather than ten. `stretches` is
+computed in both modes for exactly that reason.
+
+**TIES BREAK ON THE EARLIER WINDOW, EXPLICITLY.** `nsmallest` left the order
+of tied rows to pandas, which is a poor thing to put a RANK column against:
+two windows on the same total swapped places between runs with nothing in the
+data having changed. Found by a test that asserted the wrong tie-break and was
+right to fail. It sorts on `["roll", "year", "month"]` now, and the shipped
+tables are byte-identical either way because real 12-month head totals do not
+tie.
+
+**"Per 100 beef cows" now says what it IS, not what it is made of.** Ross:
+*"what does the per 100 beef cows mean?"* The column named the ratio, the tile
+gave the formula ("last 12 months over Jan-1 beef cows") and the caption named
+the ingredients -- none said what the number counts. It is explained in three
+places now: the caption in plain words ("how many head went on feed for every
+100 beef cows in the US breeding herd on January 1"), a `help=` tooltip on the
+column, and the tile's basis line, which reads "head placed per 100 Jan-1 beef
+cows". A normalised figure a reader cannot take apart is one they will not
+trust -- the reasoning that keeps the crush pages' explainers.
+
 Rank 1's per-cow figure and the tile above it are the same number by
 construction -- both come from one `compare()` call over one cow series -- and
 a test pins it rather than trusting it, because a table disagreeing with the
