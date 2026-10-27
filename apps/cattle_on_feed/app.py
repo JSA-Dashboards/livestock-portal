@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import portal_view  # noqa: E402
 import cof_recap  # noqa: E402
 import cold_storage  # noqa: E402
+import placement_records  # noqa: E402
 from nass_cache_client import fetch_cached  # noqa: E402
 
 # ── JSA brand ────────────────────────────────────────────────────────────────
@@ -235,6 +236,38 @@ def fetch_series(short_desc: str, years: tuple, domaincat_filter: str = None) ->
 
 
 CAP_1000 = "CAPACITY: (1,000 OR MORE HEAD)"
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_beef_cows(schema: int) -> pd.Series:
+    """Jan-1 beef cow inventory, year-indexed, SURVEY only.
+
+    SURVEY ONLY IS LOAD-BEARING. This series also carries CENSUS rows, and the
+    Census of Agriculture years 1997, 2002 and 2017 come back at 1.4M, 1.2M and
+    4.0M head against a true ~30M -- a collapse and recovery that never
+    happened, on a series used as a denominator.
+
+    The params are us_cow_herd/inventory.py's BEEF_COWS verbatim, which omits
+    the four keys every other fetch on this page sends. The cache key is a hash
+    of the exact dict, so "tidying" it to match returns nothing at all.
+    """
+    try:
+        payload = fetch_cached({"agg_level_desc": "NATIONAL",
+                                "short_desc": "CATTLE, COWS, BEEF - INVENTORY"})
+    except Exception:
+        return pd.Series(dtype="float64")
+    rows = payload.get("data") if isinstance(payload, dict) else None
+    if not rows:
+        return pd.Series(dtype="float64")
+    df = pd.DataFrame(rows)
+    if "source_desc" in df:
+        df = df[df["source_desc"] == "SURVEY"]
+    df = df[df["reference_period_desc"] == "FIRST OF JAN"]
+    df["Value"] = pd.to_numeric(df["Value"].astype(str).str.replace(",", "", regex=False),
+                                errors="coerce")
+    df = df.dropna(subset=["Value"])
+    df["year"] = df["year"].astype(int)
+    return df.groupby("year")["Value"].max()
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -1002,8 +1035,8 @@ header_slot = st.container()
 # Hiding it also skips `_latest_recap()`, which fetches and parses USDA's
 # released report text -- the body is behind `if tab_recap.open:`, so a client
 # costs that fetch nothing.
-tab_summary, tab_recap, tab_flows, tab_weights, tab_season, tab_heifer, tab_state, tab_data = portal_view.tabs([
-    "⭐  Summary", "📄  COF Recap", "📊  On-Feed & Flows", "⚖️  Placements by Weight", "📅  Seasonality", "🐄  Heifers on Feed", "🗺️  State Comparison", "📋  Data",
+tab_summary, tab_recap, tab_flows, tab_weights, tab_prec, tab_season, tab_heifer, tab_state, tab_data = portal_view.tabs([
+    "⭐  Summary", "📄  COF Recap", "📊  On-Feed & Flows", "⚖️  Placements by Weight", "📉  Placement Records", "📅  Seasonality", "🐄  Heifers on Feed", "🗺️  State Comparison", "📋  Data",
 ], hide={"📄  COF Recap", "📅  Seasonality", "🗺️  State Comparison", "📋  Data"},
     on_change="rerun")
 
@@ -1473,6 +1506,159 @@ with tab_flows:
         st.dataframe(merged, hide_index=True, width="stretch")
 
 # ── Seasonality ────────────────────────────────────────────────────────────────
+# ── Placement Records ────────────────────────────────────────────────────────
+# Asked for by Ross, 2026-10-27, after he noticed placements had been the lowest
+# on record for their calendar month three reports running.
+#
+# IT REPORTS WHAT MOVED AND REFUSES TO SAY WHY. Whether a run of record lows is
+# heifer retention or simply a smaller herd is the question it exists to let a
+# reader judge, and this page has a standing rule against a caption that
+# supplies a plausible wrong cause. The three framings are shown together
+# because they disagree.
+
+def _prec_ord(n: int) -> str:
+    """1 -> 'the lowest', 2 -> '2nd lowest', 122 -> '122nd lowest'.
+
+    A bare "122 lowest of 358 windows" is not a sentence, and rank 1 reads
+    worst of all -- "1 lowest", when the point is that nothing is below it.
+    The standing rule on this page is that a figure reads on its own.
+    """
+    if n == 1:
+        return "the lowest"
+    suffix = "th" if 11 <= n % 100 <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix} lowest"
+
+
+with tab_prec:
+    if tab_prec.open:
+        _pc_cows = fetch_beef_cows(placement_records.SCHEMA)
+        _pc_share = placement_records.heifer_share(
+            series_for(heifer, "US")[["year", "month", "Value"]],
+            series_for(steer, "US")[["year", "month", "Value"]])
+        _pc = placement_records.compare(
+            series_for(place_full, "US")[["year", "month", "Value"]],
+            _pc_cows, _pc_share)
+
+        st.markdown('<div class="sec-hdr">Placement records — United States</div>',
+                    unsafe_allow_html=True)
+
+        _r12, _roll, _percow = _pc["last12"], _pc["rolling"], _pc["per_cow"]
+        _newest = _pc["flagged"].iloc[-1]
+        # ONE GRID, NOT FOUR STREAMLIT COLUMNS. The four feet wrap to
+        # different line counts and left the row ragged at 192/206/233/233px --
+        # invisible to get_page_text and to the suite, exactly as the daily
+        # cash tile row was.
+        #
+        # Streamlit columns cannot fix it from the outside: five wrappers sit
+        # between the column and the card, and `height: 100%` on the column is
+        # WORSE THAN NOTHING -- an explicit height defeats the flex row's own
+        # `align-items: stretch`, and then resolves against an auto-height
+        # parent, so the column ends up SHORTER than the row. Measured.
+        #
+        # Grid items stretch to their row by default, so equal height is the
+        # behaviour rather than something layered on top, and it holds at any
+        # width and through a Streamlit upgrade. st.html also skips the
+        # markdown parser, which is what renders a pair of dollar signs as
+        # LaTeX elsewhere on this portal.
+        _run = _pc["current_run"]
+        _cards = [
+            _snap_card(
+                "Record-Low Months in a Row", f"{_run}",
+                "months" if _run != 1 else "month",
+                '<span class="snap-neu">lowest for that calendar month</span>',
+                f'<span class="snap-neu">needs {_pc["min_prior"]}+ prior years</span>',
+                mom_lbl="BASIS", yoy_lbl="RULE", accent="#c98a56",
+                foot=(f'newest month on file: {MONTH_ABBR[int(_newest.month)]} '
+                      f'{int(_newest.year)}'),
+            ),
+            _snap_card(
+                "Record-Low Months, Last 12 Reports", f'{_r12.get("now", 0)}', "of 12",
+                f'<span class="snap-neu">most on file is {_r12.get("best", 0)}</span>',
+                '<span class="snap-neu">'
+                + ("a series high" if _r12.get("is_best") else "below the series high")
+                + "</span>",
+                mom_lbl="SERIES BEST", yoy_lbl="WHERE THIS SITS", accent="#c98a56",
+                foot=", ".join(f"{MONTH_ABBR[m]} {y}"
+                               for y, m in _r12.get("months", [])[-6:]),
+            ),
+            _snap_card(
+                "Placements, Last 12 Months", f'{_roll.get("total", 0):,.0f}', "head",
+                f'<span class="snap-neu">{_prec_ord(_roll.get("rank", 0))} of '
+                f'{_roll.get("of", 0)} windows</span>',
+                '<span class="snap-neu">no seasonal adjustment needed</span>',
+                mom_lbl="RANK", yoy_lbl="BASIS",
+                foot="each 12-month window holds every calendar month once",
+            ),
+            _snap_card(
+                "Placements per 100 Beef Cows", f'{_percow.get("value", 0):.1f}',
+                "per 100 cows",
+                f'<span class="snap-neu">{_prec_ord(_percow.get("rank", 0))} of '
+                f'{_percow.get("of", 0)} windows</span>',
+                '<span class="snap-neu">last 12 months over Jan-1 beef cows</span>',
+                mom_lbl="RANK", yoy_lbl="BASIS",
+                foot="separates fewer cattle placed from fewer cattle existing",
+            ),
+        ]
+        st.html(
+            "<style>"
+            ".prec-grid{display:grid;grid-template-columns:repeat(4,1fr);"
+            "gap:12px;align-items:stretch;}"
+            ".prec-grid>.snap-card{height:100%;box-sizing:border-box;}"
+            "@media (max-width:900px){.prec-grid{grid-template-columns:repeat(2,1fr);}}"
+            "</style>"
+            '<div class="prec-grid">' + "".join(_cards) + "</div>"
+        )
+
+        st.caption(
+            f"A **record low** here means placements came in below every prior year at "
+            f"the **same calendar month**. Placements are seasonal — October is always "
+            f"large and July always small — so a bare \"lowest ever\" would only ever "
+            f"name a summer month. A month also needs **{_pc['min_prior']}+ prior years** "
+            f"to beat before it can set one: the series begins {_pc['first_year']}, and "
+            f"on a shorter requirement its early years manufacture records they never "
+            f"earned."
+        )
+
+        if _pc["runs"]:
+            st.markdown('<div class="sec-hdr">Every run of three or more, and what '
+                        'the herd did next</div>', unsafe_allow_html=True)
+            _rows = []
+            for _row in _pc["runs"]:
+                _rn, _sh = _row["run"], _row["share"]
+                _rows.append({
+                    "Run": (f'{MONTH_ABBR[_rn["start"][1]]}–{MONTH_ABBR[_rn["end"][1]]} '
+                            f'{_rn["end"][0]}'),
+                    "Months": _rn["months"],
+                    "Lowest month": min(_rn["values"]),
+                    "Heifers on feed": (f'{_sh["pct"]:.1f}%' if _sh else "—"),
+                    "Heifer share percentile": (f'{_sh["percentile"]:.0f}th' if _sh else "—"),
+                    "Beef cows, next year": ("—" if _row["cows_next"] is None
+                                             else f'{_row["cows_next"]:+.1f}%'),
+                    "Beef cows, year after": ("—" if _row["cows_then"] is None
+                                              else f'{_row["cows_then"]:+.1f}%'),
+                })
+            st.dataframe(pd.DataFrame(_rows), hide_index=True, width="stretch",
+                         column_config={"Lowest month":
+                                        st.column_config.NumberColumn(format="%,.0f")})
+            st.caption(
+                "Heifers on feed is heifers as a percent of heifers plus steers, averaged "
+                "over that year, with its percentile across the whole series. **Imported "
+                "feeders are overwhelmingly steers and sit in that denominator**, so a year "
+                "when imports are blocked carries a mechanically higher heifer share than "
+                "the same herd would otherwise show — worth knowing before reading one run "
+                "against another. Beef cow changes are USDA's Jan-1 inventory."
+            )
+
+        st.caption(
+            "**The three figures above can disagree, which is why all three are here.** "
+            "The calendar-month record is what a monthly report invites and is the most "
+            "fragile — a margin of a few thousand head sits inside USDA's revision range. "
+            "The 12-month total is seasonality-free and revision-proof. Placements per "
+            "beef cow is the only one that separates *fewer cattle being placed* from "
+            "*fewer cattle existing*. This panel attributes no cause."
+        )
+
+
 with tab_season:
     if tab_season.open:
         SEASON_METRICS = {
