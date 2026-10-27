@@ -2088,6 +2088,32 @@ is where a pair of dollar signs becomes inline LaTeX. Measured equal at 1440
 and 1280, no overflow. `tests/test_placement_records.py` pins the grid and
 checks its own detector against the columns form it replaced.
 
+### The run tile says how long a run of three actually is
+
+Ross, 2026-10-27: *"so the most consecutive months in a row of 3 record low
+placements has happened twice, 2015 and 2026?"* Re-derived from the series
+rather than read off the tile, and the answer is a little stronger than the
+question: **three is the CEILING, not just the current high.** No four-month
+run has ever happened, at any `min_prior` from 0 to 20. Both runs are
+**Jul-Sep**, the same three calendar months. Runs of two are ordinary -- six
+of them (Sep-Oct 2012, Aug-Sep 2013, Jul-Aug 2014, Oct-Nov 2025, plus the two
+threes), so the step from two to three is where it gets rare. At the shipped
+rule there are 20 record-low months in the whole series.
+
+`run_standing()` computes it and the tile reads *"the longest since 1996,
+matched once before"*, so a reader is not left to judge whether three is a
+lot.
+
+**THE RUN IN PROGRESS IS NOT ONE OF ITS OWN PRECEDENTS.** `runs()` returns the
+live run like any other, so counting runs of the longest length without
+excluding it reports the run as having matched ITSELF -- "matched once before"
+on a run that is the first of its length, which is entirely plausible and
+wrong. `ties` counts EARLIER runs only, and a test pins it.
+
+Worth knowing for the 2014-cycle comparison Ross originally asked about: that
+cycle ran in **two bursts**, Jul-Aug 2014 and then Jul-Sep 2015 -- five
+record-low months across two summers.
+
 ### A guard on the ranking line, where the FOOT does not count
 
 Every tile that ranks names its own span, per the standing headline rule above.

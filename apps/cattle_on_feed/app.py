@@ -1516,6 +1516,28 @@ with tab_flows:
 # supplies a plausible wrong cause. The three framings are shown together
 # because they disagree.
 
+def _prec_times(n: int) -> str:
+    return {1: "once", 2: "twice"}.get(n, f"{n} times")
+
+
+def _prec_standing(st: dict, first: int) -> str:
+    """Where the run in progress sits against every earlier run, in words.
+
+    EVERY BRANCH NAMES THE SPAN. "the longest on record" ranks a figure
+    against a period it does not state, which is the defect Ross reported on
+    the other three tiles -- so this helper interpolates `first` on every
+    path, and a test fails any branch that returns a bare string.
+    """
+    longest, ties = st.get("longest", 0), st.get("ties", 0)
+    if not st.get("current"):
+        return f"the longest since {first} is {longest} months"
+    if not st.get("is_longest"):
+        return f"short of the longest since {first}, {longest} months"
+    if not ties:
+        return f"the longest since {first}"
+    return f"the longest since {first}, matched {_prec_times(ties)} before"
+
+
 def _prec_ord(n: int) -> str:
     """1 -> 'the lowest', 2 -> '2nd lowest', 122 -> '122nd lowest'.
 
@@ -1574,11 +1596,12 @@ with tab_prec:
                 "Record-Low Months in a Row", f"{_run}",
                 "months" if _run != 1 else "month",
                 '<span class="snap-neu">lowest for that calendar month</span>',
-                f'<span class="snap-neu">must beat {_pc["min_prior"]}+ earlier '
-                f'years</span>',
-                mom_lbl="BASIS", yoy_lbl="RULE", accent="#c98a56",
-                foot=(f'newest month on file: {MONTH_ABBR[int(_newest.month)]} '
-                      f'{int(_newest.year)} · series begins {_first}'),
+                f'<span class="snap-neu">'
+                f'{_prec_standing(_pc["standing"], _first)}</span>',
+                mom_lbl="BASIS", yoy_lbl="WHERE THIS SITS", accent="#c98a56",
+                foot=(f'must beat {_pc["min_prior"]}+ earlier years · newest '
+                      f'month on file: {MONTH_ABBR[int(_newest.month)]} '
+                      f'{int(_newest.year)}'),
             ),
             _snap_card(
                 "Record-Low Months, Last 12 Reports", f'{_r12.get("now", 0)}', "of 12",

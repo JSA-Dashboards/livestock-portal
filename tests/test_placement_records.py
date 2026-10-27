@@ -354,3 +354,73 @@ def test_the_series_start_comes_from_the_data_not_a_literal():
     for node in ast.walk(ast.parse(src)):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             assert "1996" not in node.value, f"year written out: {node.value!r}"
+
+
+# ── where the run in progress stands ─────────────────────────────────────────
+
+def _long_base(years=range(2000, 2016)):
+    """Sixteen flat years, so later months can set records under min_prior=10."""
+    return [(y, m, 2_000_000) for y in years for m in range(1, 13)]
+
+
+def test_the_run_in_progress_is_not_one_of_its_own_precedents():
+    """`runs()` returns the live run like any other, so counting runs of the
+    longest length without excluding it reports the run as matching ITSELF --
+    'matched once before' on a run that is the first of its length."""
+    rows = _long_base()
+    rows += [(2016, 1, 1_000_000), (2016, 2, 1_000_000)]      # a 2-run, live
+    st = pr.run_standing(pr.flag_records(_series(rows), min_prior=10))
+    assert st == {"current": 2, "longest": 2, "ties": 0, "is_longest": True}
+
+
+def test_ties_counts_only_EARLIER_runs_of_the_same_length():
+    """The shipped case: two runs of three, one of them still running."""
+    rows = _long_base()
+    rows += [(2016, m, 1_000_000) for m in (1, 2, 3)]          # run of 3
+    rows += [(2016, m, 9_000_000) for m in (4, 5)]             # broken
+    rows += [(2016, m, 1_000_000) for m in (6, 7, 8)]          # run of 3, live
+    st = pr.run_standing(pr.flag_records(_series(rows), min_prior=10))
+    assert st["current"] == 3 and st["longest"] == 3
+    assert st["ties"] == 1, "the earlier run of three, not itself"
+    assert st["is_longest"]
+
+
+def test_a_shorter_live_run_is_not_the_longest():
+    rows = _long_base()
+    rows += [(2016, m, 1_000_000) for m in (1, 2, 3)]
+    rows += [(2016, 4, 9_000_000)]
+    rows += [(2016, 5, 1_000_000)]                             # live run of 1
+    st = pr.run_standing(pr.flag_records(_series(rows), min_prior=10))
+    assert st["current"] == 1 and st["longest"] == 3
+    assert not st["is_longest"]
+
+
+def test_no_live_run_still_reports_the_longest():
+    rows = _long_base()
+    rows += [(2016, m, 1_000_000) for m in (1, 2)]
+    rows += [(2016, 3, 9_000_000)]                             # newest is not one
+    st = pr.run_standing(pr.flag_records(_series(rows), min_prior=10))
+    assert st["current"] == 0 and st["longest"] == 2 and not st["is_longest"]
+
+
+def test_compare_carries_the_standing_to_the_page():
+    rows = _long_base()
+    rows += [(2016, m, 1_000_000) for m in (1, 2, 3)]
+    got = pr.compare(_series(rows), pd.Series({y: 30e6 for y in range(2000, 2017)}),
+                     pd.DataFrame(columns=["year", "month", "pct"]))
+    assert got["standing"]["current"] == 3
+
+
+def test_every_branch_of_the_standing_sentence_names_the_span():
+    """"the longest on record" ranks against a period it does not state --
+    the exact defect Ross reported on the other three tiles. A bare string
+    returned from any branch puts it straight back."""
+    fn = next(n for n in _tree().body
+              if isinstance(n, ast.FunctionDef) and n.name == "_prec_standing")
+    returns = [n for n in ast.walk(fn) if isinstance(n, ast.Return)]
+    assert returns, "no branches found -- the test is pointed at the wrong name"
+    for r in returns:
+        src = ast.unparse(r)
+        assert isinstance(r.value, ast.JoinedStr), f"bare string returned: {src}"
+        names = {n.id for n in ast.walk(r.value) if isinstance(n, ast.Name)}
+        assert "first" in names, f"branch does not name the span: {src}"

@@ -49,7 +49,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-# Bump when summary() changes the SHAPE of what it returns -- st.cache_data
+# Bump when compare() changes the SHAPE of what it returns -- st.cache_data
 # keys on the calling function and never on this module. Passed at the call
 # site, because a default is not part of the key.
 SCHEMA = 1
@@ -110,6 +110,27 @@ def current_run(flagged: pd.DataFrame) -> int:
             break
         n += 1
     return n
+
+
+def run_standing(flagged: pd.DataFrame) -> dict:
+    """Where the run ending at the newest month sits against every other run.
+
+    THE RUN IN PROGRESS IS NOT ONE OF ITS OWN PRECEDENTS, which is the only
+    subtle thing here: `runs()` returns it like any other, so counting runs of
+    the longest length without excluding it reports the current run as having
+    matched itself.
+
+    `ties` is therefore how many EARLIER runs reached the same length --
+    0 means outright, 1 means "matched once before".
+    """
+    rs = runs(flagged, min_run=1)
+    cur = current_run(flagged)
+    longest = max((r["months"] for r in rs), default=0)
+    newest = (int(flagged.iloc[-1].year), int(flagged.iloc[-1].month)) if len(flagged) else None
+    ties = sum(1 for r in rs
+               if r["months"] == longest and not (cur and r["end"] == newest))
+    return {"current": cur, "longest": longest, "ties": ties,
+            "is_longest": bool(cur) and cur == longest}
 
 
 def records_in_last(flagged: pd.DataFrame, window: int = 12) -> dict:
@@ -219,6 +240,7 @@ def compare(placements: pd.DataFrame, beef_cows: pd.Series,
     return {
         "flagged": flagged,
         "current_run": current_run(flagged),
+        "standing": run_standing(flagged),
         "last12": records_in_last(flagged),
         "rolling": roll,
         "per_cow": per_cow(placements, beef_cows),
