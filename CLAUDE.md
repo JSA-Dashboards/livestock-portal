@@ -5218,6 +5218,67 @@ happened once in this repo. Patch regex through a file written with the Write
 tool, never a heredoc, and `tests/test_onthisday.py` now asserts no compiled
 pattern in the module contains a backspace.
 
+### Every event history.com lists, not just the tagged ones — 2026-10-27
+
+Ross: *"i would like to add every on this day that history shows that we are
+pulling from ... instead of just the few slugs i have told you to show me."*
+
+**THE CATEGORY TEST WAS DISCARDING HALF THE FEED.** Measured across six
+sampled dates before the change: **64 events scraped, 14 blocked by `_GRIM`,
+31 dropped for carrying no tag, 19 left.** The positive-admission rule — sport,
+agriculture, the presidency, military history, or a US first — was the entire
+constraint, and **the limit of 8 had never once bound**; the widest day
+produced five survivors. The panel Ross saw was three or four items deep on a
+day the feed offered eleven.
+
+What it dropped was not noise. **"Joseph Glidden applies for a patent on his
+barbed wire design"** is about as good a close as this letter will ever get,
+and it was thrown away. The mechanism is worth keeping because it is not
+obvious: that item DOES tag `first` (on "patent"), but `first` was never
+admission on its own — it needed `US` **and** `first`, and the text does not
+name America. "First oil-producing well on Osage land" and Khrushchev
+withdrawing the missiles from Cuba went the same way.
+
+After: **50 offered against 19**, same six dates. Today's panel went from 3 to
+8 and now carries the barbed wire patent.
+
+**`_GRIM` IS UNTOUCHED AND STILL RUNS FIRST**, and the asymmetry is the whole
+safety of the change — the veto is the half that protects a client letter,
+where the category test was only the half that narrowed it. The module
+docstring's standing rule is unchanged and is now carrying more weight than it
+was: the human is the safety, the filter is the first pass. **Treat any stem
+added to `_GRIM` as load-bearing rather than tidy-up**, because it is now the
+only thing between history.com and a letter.
+
+**THREE EARLIER CALLS ARE SUPERSEDED, and the tests that pinned them now
+assert the opposite.** Pelé's farewell game (soccer, taken out of `_SPORT` on
+2026-10-01), Mao proclaiming the PRC and Gorbachev taking over the USSR
+("a milestone abroad is not a US fun fact") are all offered again. Each test
+was rewritten rather than deleted, keeping the history in its docstring —
+`test_soccer_is_offered_again_and_that_is_deliberate` and
+`test_a_milestone_abroad_is_offered_now_and_ranks_below_one_at_home`. The
+second pins what actually survives: a foreign milestone carries no tag, scores
+zero, and sorts beneath the agricultural and presidential items rather than
+displacing them. **That ranking is what keeps the cost of the widening to a
+glance.**
+
+**A TAG NO LONGER EXCLUDES ANYTHING, ONLY RANKS IT.** So taking a stem OUT of
+a positive pattern is no longer a way to keep an item off the panel — leaving
+`soccer` out of `_SPORT` now only stops Pelé ranking as sport. There is a note
+at `_tags` saying so, because removing a stem to exclude something is exactly
+the change someone would make next and it would silently do nothing.
+
+**`DEFAULT_LIMIT` is 40, up from 8.** With the veto as the only filter the feed
+yields eight to fourteen, so 8 would have started cutting the moment the
+category test came out — and cutting by WEIGHT, which means the untagged items
+this change exists to surface would have been the first ones dropped. 40 is
+above anything history.com has published for one date (widest sampled: 15) and
+is a runaway-parse backstop, not a curation step.
+
+**`_keep` lost its `tags` parameter** rather than keeping it unused. An
+argument a function ignores reads as live wiring and silently is not — the
+defect found in `headlines.fetch_usda_narratives(as_of)` the same day.
+
 ### The technical read picks its own month
 
 Added 2026-10-12 at Ross's request: *"can we make a drop down where I can

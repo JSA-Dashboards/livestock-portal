@@ -109,18 +109,27 @@ def test_the_facts_ross_asked_for_are_admitted(monkeypatch):
         assert wanted in years, f"{wanted} is still being filtered out"
 
 
-def test_soccer_is_not_a_sport_for_this_letter(monkeypatch):
+def test_soccer_is_offered_again_and_that_is_deliberate(monkeypatch):
     """
-    Deliberately out, and it was briefly in.
+    THIS TEST USED TO ASSERT THE OPPOSITE, AND THE REVERSAL IS THE POINT.
 
-    `soccer` went into _SPORT with the other widenings on 2026-10-01 and Ross
-    took it straight back out -- this is a US cattle letter. Pele's farewell
-    game is exactly the item the omission exists to drop, so it is pinned
-    rather than left to the next person's judgement.
+    `soccer` went into _SPORT on 2026-10-01 and Ross took it straight back
+    out -- this is a US cattle letter -- so Pele's farewell game was pinned
+    OUT here rather than left to the next person's judgement.
+
+    Superseded 2026-10-27: "i would like to add every on this day that
+    history shows ... instead of just the few slugs i have told you to show
+    me." A tag no longer decides admission, so leaving `soccer` out of
+    _SPORT no longer excludes anything -- it only stops Pele ranking as
+    sport. The exclusion is gone whether or not anyone intended it, and a
+    test asserting it would now be pinning a rule the code does not have.
     """
     _stub(monkeypatch, OCT_1)
     years = [i["year"] for i in onthisday.candidates(D, limit=20)["items"]]
-    assert 1977 not in years
+    assert 1977 in years, "Pele should be offered now"
+    assert "sport" not in dict(
+        (i["year"], i["tags"]) for i in onthisday.candidates(D, limit=20)["items"]
+    )[1977], "soccer still must not RANK as sport"
 
 
 @pytest.mark.parametrize("text", [
@@ -137,7 +146,7 @@ def test_a_president_is_reason_enough(text):
     """
     tags = onthisday._tags(text)
     assert "pres" in tags, tags
-    assert onthisday._keep(text, tags)
+    assert onthisday._keep(text)
 
 
 @pytest.mark.parametrize("text", [
@@ -152,7 +161,7 @@ def test_a_president_does_not_override_the_denylist(text):
     Assassinations are the most famous presidential anniversaries there are,
     which is exactly why this needs a test rather than an assumption.
     """
-    assert not onthisday._keep(text, onthisday._tags(text))
+    assert not onthisday._keep(text)
 
 
 @pytest.mark.parametrize("text", [
@@ -170,7 +179,7 @@ def test_the_stems_cover_the_whole_word_family(text):
     It was found by spot-checking a SECOND day after a change, which is the
     habit worth keeping: one day's feed is not a test suite.
     """
-    assert not onthisday._keep(text, onthisday._tags(text))
+    assert not onthisday._keep(text)
 
 
 @pytest.mark.parametrize("text", [
@@ -202,17 +211,73 @@ def test_widening_the_allowlist_let_nothing_grim_through(monkeypatch):
         assert banned not in years, f"{banned} reached the pick list"
 
 
-def test_a_milestone_abroad_is_still_not_a_us_fun_fact(monkeypatch):
+def test_a_milestone_abroad_is_offered_now_and_ranks_below_one_at_home(monkeypatch):
     """
-    The widened milestone list must not turn this into "anything not grim".
+    THIS TEST USED TO ASSERT THE OPPOSITE, AND THE REVERSAL IS THE POINT.
 
-    Mao proclaiming the PRC and Gorbachev taking over the USSR are neither
-    grim nor American, and a cattle letter has no use for them.
+    It read "the widened milestone list must not turn this into anything not
+    grim" -- Mao proclaiming the PRC and Gorbachev taking over the USSR being
+    neither grim nor American.
+
+    Superseded 2026-10-27. It IS "anything not grim" now, by request. What
+    survives is the ranking: a foreign milestone carries no tag, so it scores
+    zero and sorts beneath the agricultural and presidential items rather
+    than displacing them. That is the property worth pinning, because it is
+    what keeps the cost of the widening to a glance.
     """
     _stub(monkeypatch, OCT_1 + [(1988, "Mikhail Gorbachev becomes head of Soviet Union")])
-    years = [i["year"] for i in onthisday.candidates(D, limit=20)["items"]]
-    assert 1949 not in years
-    assert 1988 not in years
+    items = onthisday.candidates(D, limit=20)["items"]
+    years = [i["year"] for i in items]
+    assert 1949 in years and 1988 in years, "foreign milestones are offered now"
+
+    # ...and they are bottom of the pile. Re-derive the ranking the cut uses
+    # rather than reading display order, which is chronological.
+    by_year = {i["year"]: i["tags"] for i in items}
+    assert by_year[1949] == [] and by_year[1988] == [], by_year
+    assert by_year[1924], "Jimmy Carter should still carry a tag that outranks them"
+
+
+def test_the_category_test_is_gone(monkeypatch):
+    """
+    THE WHOLE POINT OF THE 2026-10-27 CHANGE, in the item that argued for it.
+
+    Joseph Glidden's barbed wire patent is as good a close as this letter
+    will ever get and it carried NO tag -- the ag pattern knows cattle and
+    crops, not the fence that ended the open range. Under the old
+    positive-admission rule it was dropped outright, along with 31 of 64
+    events across six sampled dates.
+    """
+    _stub(monkeypatch, [
+        (1873, "Joseph Glidden applies for a patent on his barbed wire design"),
+        (1962, "Nikita Khrushchev orders withdrawal of missiles from Cuba"),
+        (1966, "'It's the Great Pumpkin, Charlie Brown' debuts"),
+    ])
+    items = onthisday.candidates(D)["items"]
+    assert [i["year"] for i in items] == [1966, 1962, 1873], items
+
+    # WHY EACH ONE USED TO FAIL, which is the detail worth pinning: barbed
+    # wire and the Great Pumpkin do tag `first` -- "patent", "debuts" -- but
+    # `first` was never admission on its own, it needed US AND first, and
+    # neither names America. Khrushchev carries nothing at all. So the old
+    # rule dropped all three, and `first` still scores zero today.
+    by_year = {i["year"]: i["tags"] for i in items}
+    assert by_year == {1873: ["first"], 1962: [], 1966: ["first"]}, by_year
+    assert all("US" not in t for t in by_year.values()), by_year
+
+
+def test_the_veto_is_the_only_filter_left(monkeypatch):
+    """
+    The other half of the same change: _GRIM must still take everything out.
+
+    If this ever passes with a grim year present, the widening has reached
+    the half it was never meant to touch.
+    """
+    _stub(monkeypatch, OCT_1)
+    years = [i["year"] for i in onthisday.candidates(D, limit=40)["items"]]
+    for banned in (1864, 1910, 1946, 1987, 1993, 2005, 2017):
+        assert banned not in years, f"{banned} reached the pick list"
+    # and everything that is NOT grim is now there -- 8 of the 15 OCT_1 rows
+    assert len(years) == 8, years
 
 
 def test_the_weight_key_does_not_leak_into_the_payload(monkeypatch):
@@ -243,7 +308,7 @@ def test_the_weight_key_does_not_leak_into_the_payload(monkeypatch):
 def test_military_history_is_reason_enough(text):
     """War stands alone, like agriculture, sport and the presidency. It does
     not also have to be a US first."""
-    assert onthisday._keep(text, onthisday._tags(text)), text
+    assert onthisday._keep(text), text
 
 
 @pytest.mark.parametrize("text", [
@@ -261,7 +326,7 @@ def test_the_war_tag_cannot_admit_an_atrocity(text):
     what gets past the veto. Each of these is war-related and each is still
     refused.
     """
-    assert not onthisday._keep(text, onthisday._tags(text)), text
+    assert not onthisday._keep(text), text
 
 
 @pytest.mark.parametrize("text", [
@@ -284,7 +349,7 @@ def test_the_ones_that_slipped_the_sweeps(text):
     the third time, and the EXISTING pick-list guard caught it rather than
     any amount of staring at the pattern.
     """
-    assert not onthisday._keep(text, onthisday._tags(text)), text
+    assert not onthisday._keep(text), text
 
 
 @pytest.mark.parametrize("text", [
