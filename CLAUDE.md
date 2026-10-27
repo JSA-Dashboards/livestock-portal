@@ -462,6 +462,17 @@ same day:
 - **A bare `0`.** "0 vs Aug" reads as a missing figure; USDA leaving a
   forecast alone is an answer, so it prints "unchanged".
 - **Parentheses around a number.** In USDA's reports they mean NEGATIVE.
+- **A RANKING THAT DOES NOT NAME ITS SPAN.** Added 2026-10-27 from the
+  Placement Records tiles, and it is the same rule arriving on a comparison
+  rather than on a unit. "a series high", "most on file is 5" and "the lowest
+  of 358 windows" each rank a figure against a period the tile never states --
+  358 windows of what, since when. Ross asked outright: *"does 'a series high'
+  mean the most since the cattle on feed series began in 1996?"* It did. They
+  read "a series high — the most since 1996" and "the lowest of 358 rolling
+  12-month windows since 1996" now. **The span must not live in the caption
+  underneath**, which is the whole force of this section: captions scroll away
+  and tiles get screenshotted. And the year is interpolated from the data, not
+  typed, so it cannot go on saying 1996 when the loaded window moves.
 
 The two further up this file are the same rule arriving from other
 directions: the Mexican feeder caveat that must stay above the figure it
@@ -2076,6 +2087,16 @@ than something layered on top; `st.html` also skips the markdown parser, which
 is where a pair of dollar signs becomes inline LaTeX. Measured equal at 1440
 and 1280, no overflow. `tests/test_placement_records.py` pins the grid and
 checks its own detector against the columns form it replaced.
+
+### A guard on the ranking line, where the FOOT does not count
+
+Every tile that ranks names its own span, per the standing headline rule above.
+The test that holds it was per-CALL first, and **it passed a tile whose rank
+line had lost its span** -- because the small print underneath happened to
+mention the year. Caught by mutation, not by reading it: it let a bare
+`{n} rolling 12-month windows` through. The check now scopes to the ranking
+arguments and skips `foot=`, and its self-check pins that footnote hole
+specifically.
 
 `placement_records.SCHEMA` exists because the cache serves shape, not freshness
 -- the `leverage.SCHEMA` trap -- and is passed at the call site, because a
