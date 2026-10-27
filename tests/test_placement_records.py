@@ -740,3 +740,53 @@ def test_the_page_averages_the_on_feed_series():
     onfeed = [c for c in calls
               if any(k.arg == "agg" and k.value.value == "mean" for k in c.keywords)]
     assert len(onfeed) == 2, "both on-feed rankings must average"
+
+
+# ── the two chart bases ──────────────────────────────────────────────────────
+
+def test_both_bases_cover_the_SAME_windows():
+    """The switch changes the normalisation and nothing else. Different
+    windows under one heifer line would put three series on one x-axis
+    describing different twelve-month spans, which no caption can repair."""
+    rows = _ramp(range(2000, 2011))
+    cows = pd.Series({y: 30e6 for y in range(2000, 2011)})
+    p = _series(rows)
+    assert set(pr.total_by_year(p)) == set(pr.per_cow(p, cows)["by_year"])
+
+
+def test_the_total_series_agrees_with_the_ranking_table():
+    """Two surfaces, one figure: the bar for the newest year and rank 1 of the
+    any-window table are the same window, so they must be the same number."""
+    rows = _ramp(range(2000, 2011))
+    p = _series(rows)
+    tot = pr.total_by_year(p)
+    low = pr.lowest_windows(p, n=1)
+    newest = max(tot)
+    assert low["rows"][0]["year"] == newest
+    assert tot[newest] == pytest.approx(low["rows"][0]["total"])
+
+
+def test_total_by_year_takes_the_LAST_window_of_each_year():
+    rows = [(y, m, 1_000_000) for y in (2000, 2001) for m in range(1, 13)]
+    rows += [(2002, m, 1_000_000 if m < 12 else 5_000_000) for m in range(1, 13)]
+    got = pr.total_by_year(_series(rows))
+    assert got[2002] == pytest.approx(11 * 1_000_000 + 5_000_000), \
+        "December's window, not January's"
+
+
+def test_the_chart_is_fed_one_series_and_a_matching_label():
+    """A y-axis title naming per-cow over a bar of raw head, or the reverse,
+    is the silent failure here -- both render perfectly."""
+    src = _panel_src()
+    i = src.index("prec_basis_chart(")
+    call = src[i:i + 500]
+    assert "_tot_by_year if _is_total else _pc_by_year" in call
+    assert "Head placed, 12 months" in call and "per 100 beef cows" in call
+    # the label and the hover must switch on the SAME condition as the data
+    assert call.count("_is_total") == 3, call
+
+
+def test_the_total_basis_is_a_sum_not_an_average():
+    """Placements are a flow. The on-feed ranking averages; this must not."""
+    rows = [(y, m, 1_000_000) for y in (2000, 2001) for m in range(1, 13)]
+    assert pr.total_by_year(_series(rows))[2001] == pytest.approx(12_000_000)

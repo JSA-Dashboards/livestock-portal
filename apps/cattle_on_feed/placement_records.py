@@ -302,6 +302,25 @@ def share_at(share: pd.DataFrame, year: int) -> dict:
     return {"pct": v, "percentile": float((share.pct < v).mean() * 100)}
 
 
+def total_by_year(placements: pd.DataFrame, window: int = 12,
+                  agg: str = "sum") -> dict:
+    """{year: the window ENDING that December} -- the chart's other basis.
+
+    Mirrors `per_cow()["by_year"]` exactly: the LAST window of each calendar
+    year, so the two chart modes cover identical periods and the annual heifer
+    line lines up with both. Taking a different window for one of them would
+    put two series on one axis that describe different twelve-month spans,
+    which no caption can repair.
+    """
+    p = _ordered(placements)
+    roll = p.Value.rolling(window)
+    p["roll"] = roll.mean() if agg == "mean" else roll.sum()
+    r = p.dropna(subset=["roll"])
+    if r.empty:
+        return {}
+    return {int(y): float(v) for y, v in r.groupby("year").roll.last().items()}
+
+
 def retention_signal(placements: pd.DataFrame, beef_cows: pd.Series,
                      share: pd.DataFrame) -> dict:
     """How closely per-cow placements track two measures of retention.
@@ -390,6 +409,7 @@ def compare(placements: pd.DataFrame, beef_cows: pd.Series,
         "last12": records_in_last(flagged),
         "rolling": roll,
         "per_cow": per_cow(placements, beef_cows),
+        "total_by_year": total_by_year(placements),
         "retention_signal": retention_signal(placements, beef_cows, share),
         "heifer_by_year": heifer_by_year(share),
         "lowest_onfeed": (lowest_windows(inventory, agg="mean")

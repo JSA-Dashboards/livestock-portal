@@ -1522,8 +1522,9 @@ def _prec_stretch(n: int) -> str:
     return "1 stretch" if n == 1 else f"{n} separate stretches"
 
 
-def prec_per_cow_chart(by_year: dict, heifer: dict, height: int = 400) -> go.Figure:
-    """Placements per 100 beef cows by year, with the heifer share beside it.
+def prec_basis_chart(values: dict, heifer: dict, y_title: str, hover: str,
+                     height: int = 400) -> go.Figure:
+    """Placements by year on either basis, with the heifer share beside it.
 
     TWO AXES, AND THE CAPTION CARRIES THE MEASURED r FOR THAT REASON. Two
     series on independently scaled axes will look related whatever they do,
@@ -1532,14 +1533,14 @@ def prec_per_cow_chart(by_year: dict, heifer: dict, height: int = 400) -> go.Fig
     about +0.35, which is weak, and the page says so rather than leaving the
     impression to the drawing.
     """
-    if not by_year:
+    if not values:
         return go.Figure()
-    years = sorted(by_year)
+    years = sorted(values)
     fig = go.Figure()
     fig.add_trace(go.Bar(
-        x=years, y=[by_year[y] for y in years], marker_color=HEIFER_COLOR,
-        name="Placements per 100 beef cows",
-        hovertemplate="%{x}: %{y:.1f} head per 100 beef cows<extra></extra>"))
+        x=years, y=[values[y] for y in years], marker_color=HEIFER_COLOR,
+        name=y_title,
+        hovertemplate="%{x}: " + hover + "<extra></extra>"))
     hy = [y for y in years if y in heifer]
     if hy:
         fig.add_trace(go.Scatter(
@@ -1549,7 +1550,7 @@ def prec_per_cow_chart(by_year: dict, heifer: dict, height: int = 400) -> go.Fig
             customdata=[[heifer[y]["percentile"]] for y in hy],
             hovertemplate="%{x}: %{y:.1f}% heifers on feed · "
                           "%{customdata[0]:.0f}th percentile<extra></extra>"))
-    _apply(fig, height=height, y_title="Head placed per 100 beef cows")
+    _apply(fig, height=height, y_title=y_title)
     fig.update_layout(
         yaxis2=dict(title="Heifers, % of cattle on feed", overlaying="y",
                     side="right", showgrid=False, ticksuffix="%"),
@@ -1820,23 +1821,47 @@ with tab_prec:
         # wrong cause, which is the one thing this panel refuses to do.
         _pc_by_year = _pc["per_cow"].get("by_year", {})
         _heif = _pc.get("heifer_by_year", {})
+        _tot_by_year = _pc.get("total_by_year", {})
         if _pc_by_year:
-            st.markdown('<div class="sec-hdr">Placements per beef cow, by '
-                        'year</div>', unsafe_allow_html=True)
-            st.plotly_chart(prec_per_cow_chart(_pc_by_year, _heif),
-                            use_container_width=True)
+            st.markdown('<div class="sec-hdr">Placements by year, against '
+                        'heifers on feed</div>', unsafe_allow_html=True)
+            # TWO BASES, ONE CHART. The tab led with a 12-month placement
+            # total that appeared in no chart at all -- only in tables -- so
+            # the headline figure had no shape over time. Per-cow and total
+            # cover the SAME windows (each year's December), so the switch
+            # changes the normalisation and nothing else, and the heifer line
+            # lines up with both.
+            _basis = st.segmented_control(
+                "Basis", ["Per 100 beef cows", "12-month total"],
+                default="Per 100 beef cows", key="prec_basis",
+                help="The same windows either way — each year's 12 months "
+                     "ending December. Per cow divides by that January 1 herd.",
+            )
+            _is_total = _basis == "12-month total"
+            st.plotly_chart(
+                prec_basis_chart(
+                    _tot_by_year if _is_total else _pc_by_year, _heif,
+                    "Head placed, 12 months" if _is_total
+                    else "Head placed per 100 beef cows",
+                    "%{y:,.0f} head placed" if _is_total
+                    else "%{y:.1f} head per 100 beef cows"),
+                use_container_width=True)
             st.caption(
-                "Bars are the 12 months ending each December — how many head "
-                "went on feed for every 100 beef cows in the US breeding herd "
-                "that January 1. A high bar means more cattle placed per cow "
-                "in the herd, a low one fewer. The red line is heifers as a "
-                "percent of the cattle on feed, on its own axis; hover for "
-                "that year's percentile."
+                ("Bars are the total head placed on feed in the 12 months "
+                 "ending each December. This is the figure the tables above "
+                 "rank, drawn over time."
+                 if _is_total else
+                 "Bars are the 12 months ending each December — how many head "
+                 "went on feed for every 100 beef cows in the US breeding herd "
+                 "that January 1. A high bar means more cattle placed per cow "
+                 "in the herd, a low one fewer.")
+                + " The red line is heifers as a percent of the cattle on "
+                  "feed, on its own axis; hover for that year's percentile."
             )
             _rs = _pc.get("retention_signal") or {}
             if _rs.get("per_cow_vs_herd") is not None:
                 st.caption(
-                    f"**Does the per-cow line track heifer retention? Measured, "
+                    f"**Does the per-cow figure track heifer retention? Measured, "
                     f"not assumed — and mostly it does not.** Against the "
                     f"*following* year's change in beef cow numbers it runs "
                     f"**r = {_rs['per_cow_vs_herd']:+.2f}** over "

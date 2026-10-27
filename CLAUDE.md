@@ -2185,6 +2185,22 @@ it a bare causal sentence and asserts it is rejected.
 **Two axes manufacture a correlation in a picture**, which is why the measured
 r sits under the chart: the number disciplines the drawing.
 
+**THE CHART HAS TWO BASES, AND THE SECOND ONE CLOSED A REAL GAP.** Ross:
+*"does it make sense to add the heifers on feed in the placements chart? i
+think it does"* -- it was already on the per-cow chart, but the question
+pointed at something true: the tab LED with a 12-month placement total that
+appeared in no chart at all, only in tables, so its headline figure had no
+shape over time. `Per 100 beef cows | 12-month total`, with the heifer line in
+both.
+
+**Both bases cover the SAME windows** -- each year's 12 months ending December
+-- so the switch changes the normalisation and nothing else, and the annual
+heifer line lines up with either. `total_by_year()` mirrors
+`per_cow()["by_year"]` for exactly that reason; taking a different window for
+one of them would put series describing different twelve-month spans on one
+axis, which no caption can repair. The newest bar is 19,876,000, the same
+figure as rank 1 of the any-window table, and a test pins that they agree.
+
 ### The on-feed ranking is AVERAGED, and the duplicate guard it needed
 
 Ross: *"an on-feed top 10 like we have for placements, and add the heifers on
