@@ -1976,6 +1976,112 @@ A test compares the body's end line against the last `st.stop()`.
 shape and `weight_classes` was already in it. This is a render, not a reshape —
 bumping reflexively would have refetched every page for nothing.
 
+## The Placement Records tab
+
+Added 2026-10-27, after Ross: *"i am wanting to see back in the 2014 cycle how
+many consecutive reports we had placements that were the lowest for the cattle
+on feed series since it started and compare it to what we are seeing now ...
+trying to see if there is any correlation with that to heifer retention/herd
+expansion?"* Fifth tab on Cattle on Feed, after Placements by Weight.
+Arithmetic in `apps/cattle_on_feed/placement_records.py`; layout in `app.py`,
+the same split as `cof_recap` and `leverage`. **In both views** -- it is a
+market reading, not a workbench.
+
+### THE RECORD RULE IS THE WHOLE CORRECTNESS, AND IT REVERSED THE ANSWER
+
+Placements are strongly seasonal -- October is always large, July always small
+-- so "lowest ever" on the raw series is a statement about the calendar. A
+record has to be conditioned on the calendar month. But then **a month cannot
+set a record the first time it appears, and a short history manufactures
+them**:
+
+    minimum prior years required     3-month runs found
+                 0                   5   (1997, 1998, 2001, 2015, 2026)
+                 5                   3   (2001, 2015, 2026)
+                10                   2   (2015, 2026)
+                20                   1   (2026)
+
+**Sep-Nov 2001 is an artefact of a five-year-old series and it is not a
+low-placement episode at all**: its lowest "record" month is 1,908,000 head,
+**7.4% ABOVE the highest** of the 2026 run, and its 12-month total ranks 302nd
+of 359 windows. Admit it and a record run looks like something that happens in
+ordinary years; exclude it and the only genuine precedent is 2015.
+`MIN_PRIOR_YEARS` is 10 and **the page prints the rule**, because a record is
+meaningless without it and the number is a judgement.
+
+The first pass at this analysis reached the opposite conclusion off the 2001
+run, and three independent checks found it. The lesson is the one this file
+keeps relearning from another direction: **a counter-example from the start of
+a series is usually the series, not the market.**
+
+### THREE FRAMINGS, BECAUSE THEY DISAGREE
+
+| | 2026 | 2015 |
+|---|---|---|
+| calendar-month records in a row | 3 | 3 |
+| 12-month placement total | **lowest of 358 windows** | 5th |
+| per 100 Jan-1 beef cows | **122nd lowest of 358** | 25th |
+
+The calendar-month record is what a monthly report invites and is the most
+fragile -- the August 2026 margin is **12,000 head** against a largest-ever
+revision of 20,000. The 12-month total is seasonality-free **by construction**
+(every window holds each calendar month exactly once, so no adjustment is
+claimed and none is made) and revision-proof. **Placements per beef cow is the
+discriminator** and the least likely to be reached for: it separates *fewer
+cattle being placed* from *fewer cattle existing*, and it is the only measure
+on which the two episodes come apart.
+
+**THE PANEL ATTRIBUTES NO CAUSE**, and a test fails it for saying otherwise --
+it greps the block for *retention*, *rebuild*, *expansion*. Whether this is
+heifer retention or a smaller herd is what the three figures let a reader
+judge. Same arithmetic/editorial line the 6 State market summary runs on.
+
+### Things that look wrong and are not
+
+- **The beef-cow denominator filters to `SURVEY`.** `CATTLE, COWS, BEEF -
+  INVENTORY` also carries CENSUS rows, and 1997, 2002 and 2017 come back at
+  1.4M, 1.2M and 4.0M against a true ~30M -- a collapse and recovery that never
+  happened, in the denominator of the one figure that discriminates.
+- **Its cache params are `{agg_level_desc, short_desc}` and nothing else.**
+  `fetch_cached` hashes the EXACT dict, so adding the four BASE keys every
+  other fetch on this page sends returns nothing at all. A test pins the key
+  set, because the obvious tidy-up is to make it match its neighbours.
+- **A record must be strictly lower, and is judged AT THE TIME** -- below every
+  PRIOR year's same month, not below a series including years that had not
+  happened yet. Retrospective comparison erases records that really printed.
+- **The heifer share in the runs table is heifers over heifers+steers on
+  feed**, and the caption warns that **imported feeders are overwhelmingly
+  steers and sit in that denominator**. A year when imports are blocked carries
+  a mechanically higher share than the same herd would otherwise show. That
+  correction is part of what reversed the first analysis.
+
+### The tile row would not stay level, and it could not be fixed from outside
+
+The four feet wrap to different line counts, so as four `st.columns` the row
+rendered **192/206/233/233px** -- the defect this file already records for the
+daily cash tiles, which `py_compile`, the suite and `get_page_text` all pass.
+
+**`height: 100%` ON THE COLUMN IS WORSE THAN NOTHING.** Measured in a browser:
+an explicit height defeats the flex row's own `align-items: stretch`, and then
+resolves against an auto-height parent -- so the column came out **shorter than
+the row it was in** (199px inside 217px) while the card overflowed it. Five
+wrappers sit between the column and the card
+(`stVerticalBlock -> stElementContainer -> stMarkdown -> an unnamed emotion div
+-> stMarkdownContainer`), and stretching that chain by `data-testid` is a
+selector set that one Streamlit bump retires.
+
+So the tiles are **one CSS grid through `st.html`**, cards concatenated. Grid
+items stretch to their row by default, so equal height is the behaviour rather
+than something layered on top; `st.html` also skips the markdown parser, which
+is where a pair of dollar signs becomes inline LaTeX. Measured equal at 1440
+and 1280, no overflow. `tests/test_placement_records.py` pins the grid and
+checks its own detector against the columns form it replaced.
+
+`placement_records.SCHEMA` exists because the cache serves shape, not freshness
+-- the `leverage.SCHEMA` trap -- and is passed at the call site, because a
+default is not part of the key. The body is behind `if tab_prec.open:`: a
+hidden tab is hidden, not skipped, and this one costs a Snowflake fetch.
+
 ## The Data tab's "% of year ago"
 
 Added 2026-10-19 at Ross's request — a third column on the on-feed inventory,
