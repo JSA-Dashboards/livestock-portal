@@ -790,3 +790,45 @@ def test_the_total_basis_is_a_sum_not_an_average():
     """Placements are a flow. The on-feed ranking averages; this must not."""
     rows = [(y, m, 1_000_000) for y in (2000, 2001) for m in range(1, 13)]
     assert pr.total_by_year(_series(rows))[2001] == pytest.approx(12_000_000)
+
+
+# ── heifers on feed, on every ranking ────────────────────────────────────────
+
+def test_the_heifer_series_is_bound_BEFORE_every_use():
+    """Streamlit runs the page top to bottom. The heifer series was bound down
+    in the chart section, below the placements table that now reads it — which
+    is a NameError on the live page that py_compile, the suite and
+    get_page_text all pass. This page has hit that twice; it is a line-number
+    check for that reason, not a style preference."""
+    src = _panel_src()
+    assign = src.index("_heif = _pc.get(")
+    uses = [i for i in range(len(src))
+            if src.startswith("_heif.get(", i) or src.startswith("_heif,", i)]
+    assert uses, "nothing reads the heifer series"
+    assert assign < min(uses), "the heifer series is used before it is bound"
+
+
+def test_both_rankings_show_heifers_on_feed():
+    """Ross wanted the heifer figures beside whichever years reach the top
+    ten, on the placements table as well as the on-feed one."""
+    src = _panel_src()
+    # plain substrings: the headings are split across string literals, so a
+    # probe carrying the opening quote matches nothing.
+    pl = src.index("ten lowest 12-month placement")
+    of = src.index("ten lowest 12-month average")
+    for name, start, end in (("placements", pl, of), ("on-feed", of, len(src))):
+        block = src[start:end]
+        assert '"Heifers on feed"' in block, f"{name} table has no heifer column"
+        assert '"Heifer share percentile"' in block, name
+        # the COLUMN NAME alone is satisfied by the column_config entry, so
+        # assert the table actually READS the series too. Caught by mutation:
+        # renaming the row key left the config behind and the test passed.
+        assert "_heif.get(" in block or "_heif.get" in block,             f"{name} table names the column but never reads the series"
+
+
+def test_both_tables_read_ONE_heifer_source():
+    """Two tables computing the percentile two ways would both be defensible
+    and would disagree — the failure this file records five times."""
+    src = _panel_src()
+    assert src.count("_pc.get(\"heifer_by_year\"") == 1
+    assert "share_at(" not in src, "the page must not recompute the percentile"

@@ -1611,6 +1611,11 @@ with tab_prec:
                     unsafe_allow_html=True)
 
         _r12, _roll, _percow = _pc["last12"], _pc["rolling"], _pc["per_cow"]
+        # HOISTED ABOVE BOTH TABLES AND THE CHART. Streamlit runs this top to
+        # bottom, so a name used by the placements table cannot be bound down
+        # in the chart section -- that is a NameError on the live page which
+        # every source-text test passes, the trap this page has hit twice.
+        _heif = _pc.get("heifer_by_year", {})
         _newest = _pc["flagged"].iloc[-1]
         # ONE GRID, NOT FOUR STREAMLIT COLUMNS. The four feet wrap to
         # different line counts and left the row ragged at 192/206/233/233px --
@@ -1774,6 +1779,11 @@ with tab_prec:
                 "Placements": _r["total"],
                 "Per 100 beef cows": ("—" if _r["per100"] is None
                                       else f'{_r["per100"]:.1f}'),
+                "Heifers on feed": (f'{(_heif.get(_r["year"]) or {})["pct"]:.1f}%'
+                                    if _heif.get(_r["year"]) else "—"),
+                "Heifer share percentile": (
+                    f'{(_heif.get(_r["year"]) or {})["percentile"]:.0f}th'
+                    if _heif.get(_r["year"]) else "—"),
             } for _r in _low["rows"]]
             st.dataframe(pd.DataFrame(_lrows), hide_index=True, width="stretch",
                          column_config={
@@ -1784,6 +1794,10 @@ with tab_prec:
                                       "for every 100 beef cows in the US "
                                       "breeding herd on January 1 of that "
                                       "year."),
+                             "Heifers on feed": st.column_config.TextColumn(
+                                 help="Heifers as a percent of the cattle on "
+                                      "feed, averaged over the calendar year "
+                                      "the window ends in."),
                          })
             _lead = (f"Each row is the quietest 12 months *ending* in that "
                      f"calendar year, one year per row, out of {_low['of']} "
@@ -1805,7 +1819,9 @@ with tab_prec:
                 f"US breeding herd on January 1 of that year. It scales the "
                 f"total to the size of the herd that produced it, which is why "
                 f"a window can be among the lowest on head and ordinary per "
-                f"cow."
+                f"cow. **Heifers on feed** is that calendar year's average "
+                f"share with its percentile across the whole series — the same "
+                f"figures the runs table and the on-feed table quote."
             )
 
         # ── per beef cow, by year, with the heifer share beside it ──────────
@@ -1820,7 +1836,6 @@ with tab_prec:
         # retention story off the per-cow line would be supplying a plausible
         # wrong cause, which is the one thing this panel refuses to do.
         _pc_by_year = _pc["per_cow"].get("by_year", {})
-        _heif = _pc.get("heifer_by_year", {})
         _tot_by_year = _pc.get("total_by_year", {})
         if _pc_by_year:
             st.markdown('<div class="sec-hdr">Placements by year, against '

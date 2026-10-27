@@ -2224,6 +2224,18 @@ guard is for whoever wires the next series.
 all ten rows -- so the caption's stretch count earns its keep immediately, and
 `_prec_stretch()` exists because "1 separate stretches" is not a sentence.
 
+**BOTH RANKINGS CARRY THE HEIFER FIGURES**, on Ross's ask, and the contrast
+is the most useful thing on the tab: the 2015/16 windows sit at a **32.6-32.9%**
+heifer share, the **4th percentile**, while the 2026 windows at the same
+placement level sit at **37.8%**, the **54th**. Record-low placements with
+heifers held back, against record-low placements without.
+
+**THE HEIFER SERIES IS BOUND ABOVE BOTH TABLES AND THE CHART.** It was first
+bound inside the chart section, which sits BELOW the placements table that now
+reads it -- a NameError on the live page that `py_compile`, the suite and
+`get_page_text` all pass. This page has hit that twice, so the guard is a
+line-number check: the assignment index must precede every use.
+
 **`heifer_by_year()` delegates to `share_at()` per year** rather than
 recomputing, so the chart, the on-feed table and the runs table cannot quote
 different percentiles for one year. The percentile is a year's MEAN placed in
