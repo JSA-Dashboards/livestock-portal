@@ -171,6 +171,41 @@ def rolling_total(placements: pd.DataFrame, window: int = 12) -> dict:
                        for _, x in r.nsmallest(5, "roll").iterrows()]}
 
 
+def lowest_windows(placements: pd.DataFrame, beef_cows: pd.Series = None,
+                   n: int = 10, window: int = 12) -> dict:
+    """The `n` lowest rolling `window`-month placement totals, lowest first.
+
+    WINDOWS OVERLAP, AND THAT IS THE THING TO KNOW BEFORE READING THIS AS A
+    LEAGUE TABLE. The 12 months ending August and the 12 months ending
+    September share eleven of their months, so ONE quiet stretch fills several
+    rows -- on the series as it stands the ten lowest windows touch just three
+    calendar years. That is not a fault in the ranking, it is what a rolling
+    window is, but a reader who takes ten rows for ten episodes has been
+    misled. `stretches` counts how many SEPARATE runs of consecutive
+    month-ends the rows come from, so the page can say so out loud.
+
+    `per100` rides along per row because the panel's whole point is that the
+    total and the per-cow figure disagree; a window can be among the lowest
+    totals on file and unremarkable per cow.
+    """
+    p = _ordered(placements)
+    p["roll"] = p.Value.rolling(window).sum()
+    r = p.dropna(subset=["roll"]).copy()
+    if r.empty:
+        return {"rows": [], "stretches": 0, "of": 0, "window": window}
+    if beef_cows is not None:
+        r["per100"] = r.roll / r.year.map(beef_cows) * 100
+    rows = []
+    for i, (_, x) in enumerate(r.nsmallest(n, "roll").iterrows(), 1):
+        per = x.per100 if beef_cows is not None else None
+        rows.append({"rank": i, "year": int(x.year), "month": int(x.month),
+                     "total": float(x.roll),
+                     "per100": None if per is None or pd.isna(per) else float(per)})
+    ends = sorted(d["year"] * 12 + d["month"] for d in rows)
+    stretches = 1 + sum(1 for a, b in zip(ends, ends[1:]) if b - a > 1)
+    return {"rows": rows, "stretches": stretches, "of": len(r), "window": window}
+
+
 def per_cow(placements: pd.DataFrame, beef_cows: pd.Series,
             window: int = 12) -> dict:
     """Trailing placements per 100 Jan-1 beef cows, and its rank.
@@ -244,6 +279,7 @@ def compare(placements: pd.DataFrame, beef_cows: pd.Series,
         "last12": records_in_last(flagged),
         "rolling": roll,
         "per_cow": per_cow(placements, beef_cows),
+        "lowest_windows": lowest_windows(placements, beef_cows),
         "runs": rows,
         "min_prior": min_prior,
         "first_year": int(_ordered(placements).year.min()),

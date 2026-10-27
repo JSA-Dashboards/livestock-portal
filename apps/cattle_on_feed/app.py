@@ -1687,6 +1687,41 @@ with tab_prec:
                 "against another. Beef cow changes are USDA's Jan-1 inventory."
             )
 
+        # THE TEN LOWEST 12-MONTH TOTALS. Asked for by Ross, 2026-10-27:
+        # *"a list of the top 10 rolling 12 month placements ranking from #1
+        # being the lowest"*, in the shape of the runs table above.
+        #
+        # WINDOWS OVERLAP AND THE CAPTION HAS TO SAY SO. The 12 months ending
+        # August and the 12 months ending September share eleven of their
+        # months, so one quiet stretch fills several rows -- these ten touch
+        # three calendar years, not ten. Ten rows read as ten episodes unless
+        # the page says otherwise, which would overstate how often this has
+        # happened on exactly the figure the panel leads with.
+        _low = _pc["lowest_windows"]
+        if _low["rows"]:
+            st.markdown('<div class="sec-hdr">The ten lowest 12-month placement '
+                        'totals</div>', unsafe_allow_html=True)
+            _lrows = [{
+                "Rank": _r["rank"],
+                "12 months ending": f'{MONTH_ABBR[_r["month"]]} {_r["year"]}',
+                "Placements": _r["total"],
+                "Per 100 beef cows": ("—" if _r["per100"] is None
+                                      else f'{_r["per100"]:.1f}'),
+            } for _r in _low["rows"]]
+            st.dataframe(pd.DataFrame(_lrows), hide_index=True, width="stretch",
+                         column_config={"Placements":
+                                        st.column_config.NumberColumn(format="%,.0f")})
+            st.caption(
+                f"**#1 is the lowest.** Each row is the 12 months *ending* that "
+                f"month, out of {_low['of']} such windows since {_first}. Those "
+                f"windows **overlap** — the 12 months to August and the 12 months "
+                f"to September share eleven of their months — so a single quiet "
+                f"stretch fills several rows: these ten come from "
+                f"**{_low['stretches']} separate stretches**, not ten. Per 100 beef "
+                f"cows is the same window over that year's Jan-1 herd, and it is "
+                f"here because the two can rank differently."
+            )
+
         st.caption(
             "**The three figures above can disagree, which is why all three are here.** "
             "The calendar-month record is what a monthly report invites and is the most "

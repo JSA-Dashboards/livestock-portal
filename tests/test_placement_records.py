@@ -424,3 +424,91 @@ def test_every_branch_of_the_standing_sentence_names_the_span():
         assert isinstance(r.value, ast.JoinedStr), f"bare string returned: {src}"
         names = {n.id for n in ast.walk(r.value) if isinstance(n, ast.Name)}
         assert "first" in names, f"branch does not name the span: {src}"
+
+
+# ── the ten lowest 12-month totals ───────────────────────────────────────────
+
+def _ramp(years, start=3_000_000, step=-10_000):
+    """A series falling steadily, so the newest windows are the lowest."""
+    out, v = [], start
+    for y in years:
+        for m in range(1, 13):
+            out.append((y, m, v))
+            v += step
+    return out
+
+
+def test_rank_one_is_the_lowest_window():
+    got = pr.lowest_windows(_series(_ramp(range(2000, 2011))), n=10)
+    assert got["rows"][0]["rank"] == 1
+    totals = [r["total"] for r in got["rows"]]
+    assert totals == sorted(totals), "rows must run lowest first"
+    assert totals[0] == min(totals)
+
+
+def test_it_returns_at_most_n_and_copes_with_a_short_series():
+    rows = _ramp(range(2000, 2002))            # 24 months -> 13 windows
+    assert len(pr.lowest_windows(_series(rows), n=10)["rows"]) == 10
+    short = _ramp(range(2000, 2001))           # 12 months -> 1 window
+    got = pr.lowest_windows(_series(short), n=10)
+    assert len(got["rows"]) == 1 and got["of"] == 1
+
+
+def test_overlapping_windows_are_counted_as_ONE_stretch():
+    """The whole reason the caption exists. A steadily falling series puts the
+    ten lowest windows on ten CONSECUTIVE month-ends -- one quiet stretch read
+    ten times, not ten episodes."""
+    got = pr.lowest_windows(_series(_ramp(range(2000, 2011))), n=10)
+    assert got["stretches"] == 1
+
+
+def test_two_separate_quiet_spells_count_as_two_stretches():
+    rows = [(y, m, 3_000_000) for y in range(2000, 2012) for m in range(1, 13)]
+    rows = dict(((y, m), v) for y, m, v in rows)
+    for m in range(1, 13):                      # a quiet 2003
+        rows[(2003, m)] = 1_000_000
+    for m in range(1, 13):                      # and a quiet 2009
+        rows[(2009, m)] = 1_000_000
+    p = _series([(y, m, v) for (y, m), v in rows.items()])
+    got = pr.lowest_windows(p, n=4)
+    assert got["stretches"] == 2, got
+
+
+def test_per_cow_on_a_row_matches_what_the_tile_reports():
+    """The table and the tile above it must not disagree about one window --
+    the failure this file records four times over. They agree only because
+    both read the same series through the same arithmetic, so that is pinned
+    rather than trusted."""
+    rows = _ramp(range(2000, 2011))
+    cows = pd.Series({y: 30e6 + (y - 2000) * 1e5 for y in range(2000, 2011)})
+    p = _series(rows)
+    tile = pr.per_cow(p, cows)                  # the newest window
+    table = pr.lowest_windows(p, cows, n=10)
+    newest = max(table["rows"], key=lambda r: (r["year"], r["month"]))
+    assert (newest["year"], newest["month"]) == tile["ends"]
+    assert newest["per100"] == pytest.approx(tile["value"])
+
+
+def test_no_cow_series_leaves_the_column_empty_rather_than_guessing():
+    got = pr.lowest_windows(_series(_ramp(range(2000, 2011))), None, n=3)
+    assert all(r["per100"] is None for r in got["rows"])
+
+
+def test_compare_carries_the_ranking_to_the_page():
+    rows = _ramp(range(2000, 2011))
+    got = pr.compare(_series(rows),
+                     pd.Series({y: 30e6 for y in range(2000, 2011)}),
+                     pd.DataFrame(columns=["year", "month", "pct"]))
+    assert got["lowest_windows"]["rows"][0]["rank"] == 1
+
+
+def test_the_page_tells_the_reader_the_windows_overlap():
+    """Ten rows read as ten episodes. On this series they are three stretches,
+    so without the caption the panel overstates how often its own headline
+    figure has been reached."""
+    src = _panel_src()
+    i = src.index("lowest_windows")
+    tail = src[i:]
+    assert "overlap" in tail
+    assert "_low['stretches']" in tail or '_low["stretches"]' in tail, \
+        "the number of stretches must be computed, not written down"

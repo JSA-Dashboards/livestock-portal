@@ -2088,6 +2088,37 @@ is where a pair of dollar signs becomes inline LaTeX. Measured equal at 1440
 and 1280, no overflow. `tests/test_placement_records.py` pins the grid and
 checks its own detector against the columns form it replaced.
 
+### The ten lowest 12-month totals, and why the caption counts stretches
+
+Asked for by Ross, 2026-10-27: *"a list of the top 10 rolling 12 month
+placements ranking from #1 being the lowest"*, in the shape of the runs table
+above it.
+
+**ROLLING WINDOWS OVERLAP, SO TEN ROWS ARE NOT TEN EPISODES.** The 12 months
+ending August and the 12 months ending September share eleven of their months,
+so one quiet stretch fills several rows -- the ten lowest windows on this
+series touch **three calendar years** (2015, 2016, 2026) and come from **three
+separate stretches**. A reader taking the table at face value would conclude
+this has happened ten times, on exactly the figure the panel leads with.
+`lowest_windows()` returns `stretches` and the caption prints it; a test fails
+the page if the word "overlap" or the computed count goes missing.
+
+That was checked BEFORE the table was built rather than after, which is the
+only reason the caption exists. A literal top ten is still what shipped --
+it is what was asked for and it is the honest answer to the question -- but
+one-per-year and greedy non-overlapping variants were computed first to see
+what the literal one was hiding.
+
+**The per-cow column is on the same rows on purpose**, and it earns its place
+immediately: the 2015/16 windows run **67.7-69.7** per 100 beef cows against
+2026's **72.0-74.6**, so they rank LOWER per cow while ranking HIGHER on the
+total. That is the panel's whole thesis, visible in one table.
+
+Rank 1's per-cow figure and the tile above it are the same number by
+construction -- both come from one `compare()` call over one cow series -- and
+a test pins it rather than trusting it, because a table disagreeing with the
+tile six inches above is the failure this file records four times.
+
 ### The run tile says how long a run of three actually is
 
 Ross, 2026-10-27: *"so the most consecutive months in a row of 3 record low
