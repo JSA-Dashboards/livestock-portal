@@ -59,6 +59,11 @@ SCHEMA = 1
 # hiding it in here.
 MIN_PRIOR_YEARS = 10
 
+# Below this many percentile points the contrast is not worth a sentence --
+# "from the 48th to the 52nd" is noise wearing the clothes of a finding.
+# The shape `six_state.ROSTER_MATERIAL` already uses.
+HEIFER_SPREAD_MATERIAL = 20
+
 # A run shorter than this is not worth a headline -- single record months are
 # ordinary (52 of 370 on the raw rule).
 MIN_RUN = 2
@@ -384,6 +389,35 @@ def heifer_by_year(share: pd.DataFrame) -> dict:
         if at:
             out[y] = at
     return out
+
+
+def heifer_spread(rows: list, heifer: dict,
+                  material: int = HEIFER_SPREAD_MATERIAL) -> dict:
+    """The widest heifer-share contrast among a set of ranked rows.
+
+    READ OFF THE DATA AT RENDER TIME, NEVER WRITTEN INTO PROSE. The caption
+    this feeds currently says the 4th percentile against the 54th; both ends
+    move as USDA revises and as new windows enter the ranking, and a sentence
+    carrying the numbers would go stale against the table directly above it.
+    That is the mistake `southeast.py` records for "2010-2012 is the trough of
+    the whole record", which was true of one panel and false of the next.
+
+    It reports WHAT the two ends are and never why they differ.
+    """
+    pts = [(r["year"], heifer[r["year"]]) for r in rows
+           if heifer.get(r["year"]) and heifer[r["year"]].get("percentile") is not None]
+    if len(pts) < 2:
+        return {}
+    # TIES BREAK ON THE SHARE ITSELF. Percentiles print rounded, so two years
+    # both reading "4th" can differ underneath, and picking between them on
+    # float order names whichever pandas happened to rank first -- a caption
+    # citing 2016 at 32.9% while the table above shows 2015 at 32.6% on the
+    # same printed percentile. The more extreme share wins.
+    lo = min(pts, key=lambda t: (t[1]["percentile"], t[1]["pct"]))
+    hi = max(pts, key=lambda t: (t[1]["percentile"], t[1]["pct"]))
+    gap = float(hi[1]["percentile"] - lo[1]["percentile"])
+    return {"low": dict(year=lo[0], **lo[1]), "high": dict(year=hi[0], **hi[1]),
+            "gap": gap, "material": gap >= material}
 
 
 def compare(placements: pd.DataFrame, beef_cows: pd.Series,

@@ -1516,6 +1516,29 @@ with tab_flows:
 # supplies a plausible wrong cause. The three framings are shown together
 # because they disagree.
 
+def _prec_spread_line(rows: list, heifer: dict) -> str:
+    """The contrast between the heifer shares in a ranking, in words.
+
+    BOTH ENDS ARE READ AT RENDER TIME. Ross asked for the 4th-against-54th
+    contrast to be called out, and writing those two numbers into the sentence
+    is how a caption comes to disagree with the table printed directly above
+    it -- the mistake recorded for the southeast retention panel, where "the
+    trough of the whole record" was true of one panel and false of the next.
+    Nothing here names a year or a percentile.
+
+    It states WHAT the two ends are. It does not say why they differ.
+    """
+    sp = placement_records.heifer_spread(rows, heifer)
+    if not sp or not sp.get("material"):
+        return ""
+    lo, hi = sp["low"], sp["high"]
+    return (f" Across these ten the heifer share runs from the "
+            f"**{lo['percentile']:.0f}th percentile ({lo['year']}, "
+            f"{lo['pct']:.1f}%)** to the **{hi['percentile']:.0f}th "
+            f"({hi['year']}, {hi['pct']:.1f}%)** — a comparable placement "
+            f"level reached with very different shares of heifers on feed.")
+
+
 def _prec_stretch(n: int) -> str:
     """"1 stretch" / "3 separate stretches" -- the on-feed any-window ranking
     really does come from a single stretch, so the plural cannot be assumed."""
@@ -1822,6 +1845,7 @@ with tab_prec:
                 f"cow. **Heifers on feed** is that calendar year's average "
                 f"share with its percentile across the whole series — the same "
                 f"figures the runs table and the on-feed table quote."
+                + _prec_spread_line(_low["rows"], _heif)
             )
 
         # ── per beef cow, by year, with the heifer share beside it ──────────

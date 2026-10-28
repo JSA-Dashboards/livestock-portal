@@ -832,3 +832,78 @@ def test_both_tables_read_ONE_heifer_source():
     src = _panel_src()
     assert src.count("_pc.get(\"heifer_by_year\"") == 1
     assert "share_at(" not in src, "the page must not recompute the percentile"
+
+
+# ── the heifer-share contrast ────────────────────────────────────────────────
+
+def _heif_map(pairs):
+    return {y: {"pct": p, "percentile": q} for y, p, q in pairs}
+
+
+def test_the_spread_reports_both_ENDS_of_the_ranking():
+    rows = [{"year": 2015}, {"year": 2016}, {"year": 2026}]
+    got = pr.heifer_spread(rows, _heif_map([(2015, 32.6, 4), (2016, 32.9, 6),
+                                            (2026, 37.8, 54)]))
+    assert got["low"]["year"] == 2015 and got["low"]["percentile"] == 4
+    assert got["high"]["year"] == 2026 and got["high"]["percentile"] == 54
+    assert got["gap"] == pytest.approx(50) and got["material"]
+
+
+def test_a_narrow_spread_is_not_worth_a_sentence():
+    """"from the 48th to the 52nd" is noise wearing the clothes of a finding."""
+    rows = [{"year": 2020}, {"year": 2021}]
+    got = pr.heifer_spread(rows, _heif_map([(2020, 37.0, 48), (2021, 37.4, 52)]))
+    assert not got["material"], got
+
+
+def test_the_threshold_is_the_shipped_one():
+    assert pr.HEIFER_SPREAD_MATERIAL == 20
+
+
+def test_a_ranking_with_one_known_year_has_no_spread():
+    got = pr.heifer_spread([{"year": 2026}, {"year": 1900}],
+                           _heif_map([(2026, 37.8, 54)]))
+    assert got == {}
+
+
+def test_the_caption_reads_BOTH_ENDS_at_render_time():
+    """Writing "4th" and "54th" into the sentence is how a caption comes to
+    disagree with the table printed directly above it. Both ends move as USDA
+    revises and as new windows enter the ranking."""
+    src = _panel_src()
+    tree = ast.parse(_APP.read_text(encoding="utf-8-sig"))
+    fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+              and n.name == "_prec_spread_line")
+    body = ast.unparse(fn)
+    assert "heifer_spread(" in body
+    assert "percentile" in body
+    # RENDERED STRINGS ONLY, never the docstring -- it quotes Ross's request,
+    # which names the very numbers the sentence must not hard-code. Dropping
+    # the first statement is how the docstring leaves the comparison.
+    rendered = []
+    for node in ast.walk(ast.Module(body=fn.body[1:], type_ignores=[])):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            rendered.append(node.value)
+    blob = " ".join(rendered)
+    for literal in ("4th", "54th", "32.6", "37.8"):
+        assert literal not in blob, f"{literal!r} written into the sentence"
+    assert "_prec_spread_line(" in src, "the caption must call it"
+
+
+def test_the_spread_sentence_asserts_no_cause():
+    fn = next(n for n in ast.parse(_APP.read_text(encoding="utf-8-sig")).body
+              if isinstance(n, ast.FunctionDef) and n.name == "_prec_spread_line")
+    low = ast.unparse(fn).lower()
+    for word in _CAUSAL:
+        assert word not in low, f"the spread sentence asserts a cause: {word!r}"
+
+
+def test_a_tied_percentile_names_the_more_extreme_share():
+    """Percentiles print rounded, so two years can both read "4th" and differ
+    underneath. Picking on float order alone named 2016 at 32.9% while the
+    table above showed 2015 at 32.6% on the same printed percentile."""
+    rows = [{"year": 2015}, {"year": 2016}, {"year": 2026}]
+    got = pr.heifer_spread(rows, _heif_map([(2015, 32.6, 4), (2016, 32.9, 4),
+                                            (2026, 37.8, 54)]))
+    assert got["low"]["year"] == 2015, "the lower share wins the tie"
+    assert got["low"]["pct"] == pytest.approx(32.6)
