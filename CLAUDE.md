@@ -367,6 +367,28 @@ all.
 when choosing a separate URL over one app with a toggle. A key rotation is now
 two consoles, and a push is two reboots.
 
+**Except when the client app is ASLEEP.** On 2026-10-28 a
+corrected index number had to reach both apps, and the client one was serving
+"This app has gone to sleep due to inactivity": no process, no warm caches, so
+it cold-starts on current Snowflake data the next time anyone opens it.
+Rebooting it would have achieved nothing, and waking it to prove the point
+would have left a process idling. Read the moon icon in the console, or just
+open the URL, before deciding there are two reboots to do.
+
+The distinction matters because the two cases have opposite failure modes: an
+AWAKE app keeps serving the old number behind `@st.cache_data(ttl=300)` /
+`ttl=3600` and must be restarted, while a SLEEPING one is already correct and
+restarting it only costs a cold start. A code push is still two reboots
+whenever both are awake.
+
+NOT established either way: whether WAKING a sleeping app pulls current
+`master`. A reboot provably does -- the startup log says `Cloning
+repository... Pulling code changes from Github` -- but nothing here has
+watched a wake, and a wake that resumed stale code would ship an old page to
+a client silently. Until somebody checks, reboot a sleeping app after a CODE
+push rather than trusting the wake. A DATA correction needs no such care:
+the number comes from Snowflake at run time, not from the clone.
+
 ### Verifying a change to this
 
 **Run BOTH.** `.claude/launch.json` carries `client-portal` (8601) and
@@ -1191,8 +1213,16 @@ rendered perfectly.
 
 ## Deployment facts
 
-- Branch `master`, main file `Home.py`, Python 3.14
-- Live at `jsa-livestock.streamlit.app`
+- Branch `master`, Python 3.14
+- **TWO apps off this one repo**, differing only in the main file the console
+  is pointed at. The client URL was written down nowhere until 2026-10-28,
+  although "Deploying the client app" above has described the deployment since
+  it shipped:
+
+  | main file | URL | who |
+  |---|---|---|
+  | `Home.py` | `jsa-livestock.streamlit.app` | staff |
+  | `Client.py` | `jsa-livestock-client.streamlit.app` | clients |
 - Hosted in the **`jsa-dashboards` org workspace** on Streamlit Community
   Cloud, listed as `livestock-portal ∙ master ∙ Home.py`, alongside
   basis-tracker, beef-weight-dashboard, ethanol-margin-matrix,
