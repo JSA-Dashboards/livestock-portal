@@ -780,22 +780,53 @@ NORMAL_YEARS = ("2023", "2024")
 # the page writes a sensitivity for while it is shut.
 #
 # NOT DERIVABLE FROM THE FEED, which is the whole reason it is a constant.
-# AMS does announce reopening schedules in the narrative -- on 2025-07-08 it
-# published "COLUMBUS AND SANTA TERESA, NM WILL RE-OPEN JULY 14TH AND 21ST
-# RESPECTIVELY" -- but the current narrative (2026-10-01) names only Santa
-# Teresa. The Columbus expectation comes from Ross on 2026-10-02 and has no
-# counterpart in the data, so it cannot be read off and must be maintained by
-# hand. Clear it to None once Columbus reopens, or point it at whichever
-# crossing is next.
+# AMS NEVER PRE-ANNOUNCES A REOPENING IN THIS SERIES. Every one of 2026's is a
+# same-day, past-tense note on the first day cattle crossed --
+# "*** COLUMBUS, NM LIVESTOCK PORT OF ENTRY RE-OPENED. ***" on 2026-10-26,
+# Santa Teresa on 09-24, Douglas on 08-24 -- and the only forward schedule the
+# narrative has ever carried is the 2025-07-08 notice below, which did not
+# happen. So a date here always comes from Ross and never from the feed, and it
+# must be maintained by hand. Point it at whichever crossing is next once this
+# one reopens, or clear it to None.
 #
-# AND AN ANNOUNCED DATE IS NOT A REOPENING. That same 2025-07-08 notice named
-# two ports and two dates and NEITHER happened: Columbus has not appeared in
-# the series since 2024-11-25, Santa Teresa recorded nothing at all between
-# 2025-05-12 and 2026-09-24, and the July 2025 reopening lasted four reporting
-# days of Douglas alone before the border shut again. So this date may inform
-# a reader; it must never feed a number.
-WATCH_PORT = "Columbus"
-WATCH_PORT_EXPECTED = "end of October 2026"
+# Nogales, AZ, expected 2026-11-30 -- Ross, 2026-10-29. It replaced Columbus,
+# which reopened on 2026-10-26 and is in the daily series from that date.
+#
+# AND AN ANNOUNCED DATE IS NOT A REOPENING. On 2025-07-08 AMS published
+# "COLUMBUS AND SANTA TERESA, NM WILL RE-OPEN JULY 14TH AND 21ST RESPECTIVELY"
+# and NEITHER happened: Columbus did not appear again until 2026-10-26, Santa
+# Teresa recorded nothing at all between 2025-05-12 and 2026-09-24, and that
+# July 2025 reopening lasted four reporting days of Douglas alone before the
+# border shut again.
+#
+# THE DATE MAY SIZE A WINDOW; IT MAY NEVER SIZE A FLOW. watch_window() uses it
+# to say how many reporting days a reopening could still touch, which is
+# arithmetic on the calendar and true whether or not the port opens. What crosses
+# in those days is read off restarts that actually happened -- see
+# restart_curve(). The page states the whole thing as a conditional and keeps
+# the "an announced date is not a reopening" caveat beside it.
+WATCH_PORT = "Nogales"
+WATCH_PORT_EXPECTED = "30 November 2026"
+# The same expectation as a date, for watch_window() alone. Kept separate from
+# the prose because the prose has to survive a vague expectation -- "end of
+# October 2026" was one -- while only a real date may size a window. None means
+# "expected back, no date", and the page then prices nothing.
+WATCH_PORT_EXPECTED_ON = date(2026, 11, 30)
+
+
+def state_abbr(port):
+    """'Nogales' -> 'AZ', from KNOWN_PORTS. None for a crossing not listed there.
+
+    KNOWN_PORTS already pairs each city with its state abbreviation and is what
+    ports_in() matches the narrative against, so a second map would be the
+    snowflake_db-times-five problem for the sake of three entries.
+    """
+    city = str(port or "").split(",")[0].strip().upper()
+    for p in KNOWN_PORTS:
+        c, _, st = p.partition(", ")
+        if c.strip() == city:
+            return st.strip()
+    return None
 
 
 def port_profile(conn, port, years=NORMAL_YEARS, this_year=None):
@@ -806,8 +837,24 @@ def port_profile(conn, port, years=NORMAL_YEARS, this_year=None):
         head, days, per_day   over `years`, counting only days it carried
                               cattle, so per_day is its rate while open
         share                 its share of all named-port head in those years
+        per_reporting_day     share x the normal border rate -- the SAME basis
+                              as daily_pace, see below
+        state                 the crossing's state, from the data
         last_seen             the last date it carried cattle, ever
         running               whether it has carried cattle in `this_year`
+
+    `per_day` AND `per_reporting_day` ARE NOT INTERCHANGEABLE AND THE SECOND IS
+    THE ONE THAT MULTIPLIES BY A DAY COUNT. `days` counts only the days this
+    crossing actually carried cattle -- Nogales had 234 of them across 2023-24
+    against the border's 381 reporting days, 61% coverage -- so `per_day` is
+    "head on a day it ran" and carries an implicit assumption of a head every
+    single day. Multiplied by reporting days it reads 1,118 x N where the truth
+    is 684 x N, 63% high, and the error is largest for exactly the small
+    intermittent crossings a reopening note is about (Columbus 2.05x, Presidio
+    1.94x, Santa Teresa only 1.07x).
+
+    So quote `per_day` beside another while-open rate, and use
+    `per_reporting_day` anywhere a figure is about to be multiplied by a span.
 
     Returns None for a crossing that never appears, which is the honest answer
     for a port that has no history to project from.
@@ -833,26 +880,333 @@ def port_profile(conn, port, years=NORMAL_YEARS, this_year=None):
         "WHERE is_total = 0 AND receipts_est > 0 "
         "AND crossing_point <> 'All Crossing Points' "
         f"AND TO_CHAR(report_date, 'YYYY') IN ({yrs})").fetchone()[0]
-    last = cur.execute(
-        "SELECT MAX(report_date) FROM border_receipts "
+    # MAX(crossing_state) rather than a lookup table: the state is in the feed
+    # (crossing_debuts already returns it) and a second copy here is the
+    # snowflake_db-times-five problem in miniature. One state per crossing, so
+    # MAX is just "the value" -- and it works on both backends, where ANY_VALUE
+    # does not.
+    last, state = cur.execute(
+        "SELECT MAX(report_date), MAX(crossing_state) FROM border_receipts "
         f"WHERE is_total = 0 AND receipts_est > 0 "
-        f"AND crossing_point = '{port}'").fetchone()[0]
+        f"AND crossing_point = '{port}'").fetchone()
     yr = str(this_year or date.today().year)
     now = cur.execute(
         "SELECT COUNT(*) FROM border_receipts "
         "WHERE is_total = 0 AND receipts_est > 0 "
         f"AND crossing_point = '{port}' "
         f"AND TO_CHAR(report_date, 'YYYY') = '{yr}'").fetchone()[0]
+    # The border's own reporting days over the same years -- the denominator
+    # daily_pace() and project_year_end() work in. Taken from the total row, not
+    # from this port's rows, which is the whole point: a port that reported on
+    # 234 of 381 days contributed head on 234 and nothing on the other 147, and
+    # both kinds of day are in the span a projection multiplies by.
+    rdays = cur.execute(
+        "SELECT COUNT(*) FROM border_receipts WHERE is_total = 1 "
+        f"AND TO_CHAR(report_date, 'YYYY') IN ({yrs})").fetchone()[0]
+    share = (head / total) if total else None
     return {
         "port": port,
         "head": head,
         "days": days,
         "per_day": head / days,
-        "share": (head / total) if total else None,
+        "share": share,
+        "per_reporting_day": (head / rdays) if rdays else None,
+        "state": _clean(state) or None,
+        # "AZ", not "Arizona". crossing_state is the authority for WHICH state
+        # and KNOWN_PORTS is the authority for how this page SPELLS it -- every
+        # other crossing on the screen reads "Douglas, AZ", so a lone
+        # "Nogales, Arizona" reads as a different kind of thing.
+        "state_abbr": state_abbr(port) or _clean(state) or None,
         "last_seen": str(db.iso(last)) if last else None,
         "running": bool(now),
         "years": years,
     }
+
+
+# ── Restarts: what a crossing actually does when it comes back ──────────────
+#
+# THE QUESTION A REOPENING NOTE ASKS IS NOT "WHAT DID THIS PORT USED TO DO".
+# port_profile()["per_day"] answers that, and it is the wrong answer twice: it
+# is a while-open rate about to be multiplied by elapsed days (see that
+# docstring), and it has a crossing restarting from nothing and hitting its own
+# long-run normal immediately. The page already disowns that arithmetic in the
+# 2027 scenarios block, where year_outlook() scales port CAPACITY instead and
+# the caption prints a paragraph saying why. Using it as the high end of a 2026
+# forecast would have one page publish a figure and refute it two screens down.
+#
+# WHAT THE SERIES ACTUALLY HOLDS IS SIX COMPLETED RESTARTS, and they are far
+# more alike in head per day than in percentage of their own normal. Over each
+# port's first 23 elapsed reporting days -- the length of a 30 November window:
+#
+#     Nogales      2025-02-19    515 head/day    46.1% of its own normal
+#     Douglas      2025-02-06    622            51.2%
+#     Douglas      2026-08-24    648            53.4%
+#     Santa Teresa 2025-02-05    667            27.2%
+#     Presidio     2025-02-21    698            68.9%
+#     Santa Teresa 2026-09-24    730            29.8%
+#
+# Head per day spans 515-730, a coefficient of variation of 10.6%. The same six
+# as a share of their own normal span 27.2-68.9%, CV 31.0% -- nearly three times
+# wider. A restart looks to be limited by what the crossing can process on the
+# way back rather than by how big it used to be: Santa Teresa normally moves
+# 2,455 head a day and Nogales 1,118, and on their first 23 days back they did
+# 730 and 515.
+#
+# So a reopening is priced from THE COHORT IN HEAD, never from a percentage of
+# the port's own normal -- that route takes Santa Teresa's 27.2%, which is low
+# only because Santa Teresa is huge, and lands Nogales at 304 head a day, below
+# anything any crossing has ever managed coming back.
+
+# A crossing with no row for this many days has stopped, so its next row is a
+# restart rather than a quiet week. The real gaps are 410 and 534 days and the
+# longest run of absences inside an open period is a fortnight, so anything from
+# about 30 to 300 picks out the same six.
+RESTART_GAP_DAYS = 60
+
+
+def restarts(conn, port=None):
+    """
+    [(crossing, state, restart_date)] -- every time a crossing came back after
+    being absent from the feed for more than RESTART_GAP_DAYS.
+
+    A closed crossing has NO ROW AT ALL, which is what makes this readable: a
+    zero-head row means AMS listed the port and nothing crossed, and those stay
+    in. A port's first appearance in the series is not a restart and is
+    excluded -- everything starts on 2023-05-05 because that is when AMS began
+    publishing, not because ten crossings reopened that day.
+    """
+    sql = ("SELECT crossing_point, crossing_state, report_date "
+           "FROM border_receipts WHERE is_total = 0 "
+           "AND crossing_point <> 'All Crossing Points'")
+    if port:
+        sql += f" AND crossing_point = '{port}'"
+    rows = conn.cursor().execute(
+        sql + " ORDER BY crossing_point, report_date").fetchall()
+    by_port = {}
+    for p, s, d in rows:
+        by_port.setdefault(p, (s, []))[1].append(_as_date(db.iso(d)))
+    out = []
+    for p, (s, dates) in by_port.items():
+        for prev, cur in zip(dates, dates[1:]):
+            if (cur - prev).days > RESTART_GAP_DAYS:
+                out.append((p, _clean(s) or None, str(cur)))
+    return sorted(out, key=lambda t: t[2])
+
+
+# As far forward as a restart is tracked. Long enough to cover any window the
+# page can ask for -- a reopening on the first business day of a year has about
+# 250 reporting days left and nothing on this border has run 60 since coming
+# back without the question becoming "what is its normal rate" instead.
+RESTART_MAX_AGE = 60
+
+
+def restart_ladder(conn, max_age=RESTART_MAX_AGE):
+    """
+    Every restart as a cumulative head count by elapsed reporting day.
+
+        [{"port", "state", "from", "cum": [head after day 1, after day 2, ...]}]
+
+    DATE-INDEPENDENT ON PURPOSE, so it can sit inside the page's 30-minute
+    cache while the AGE it is read at cannot -- the window a reopening still
+    has left shrinks every day whether or not Snowflake has anything new, which
+    is the same reason project_year_end() is computed outside that cache. Build
+    the ladder once, call curve_at() with today's window length.
+
+    `cum` runs out early for a restart younger than `max_age`; curve_at()
+    returns None past its end rather than reporting a short curve as a full one.
+    """
+    rows = conn.cursor().execute(
+        "SELECT crossing_point, report_date, receipts_est FROM border_receipts "
+        "WHERE is_total = 0 AND crossing_point <> 'All Crossing Points'"
+    ).fetchall()
+    head = {}
+    for p, d, v in rows:
+        head[(p, _as_date(db.iso(d)))] = v or 0
+    # THE DAYS AMS ACTUALLY PUBLISHED, not a weekday calendar. NON_REPORTING is
+    # maintained only for dates that can fall inside a projection window -- its
+    # earliest entry is 2026-10-12 -- so walking the calendar counts Presidents
+    # Day 2025-02-17 and Labor Day 2026-09-07 as reporting days on which
+    # nothing crossed. Three of the six restarts on file sit across one of
+    # those and each read about 4% low.
+    #
+    # It is also the denominator daily_pace() works in: that function averages
+    # the trailing N ROWS of the daily series, which are published days. A rate
+    # that is going to be added to that pace has to be measured the same way.
+    pub = sorted({_as_date(db.iso(d)) for (d,) in conn.cursor().execute(
+        "SELECT report_date FROM border_receipts WHERE is_total = 1").fetchall()})
+
+    out = []
+    for port, state, start in restarts(conn):
+        d0 = _as_date(start)
+        window = [d for d in pub if d >= d0][:max_age]
+        cum, total = [], 0
+        for d in window:
+            total += head.get((port, d), 0)
+            cum.append(total)
+        out.append({"port": port, "state": state, "from": start, "cum": cum})
+    return out
+
+
+def curve_at(entry, age):
+    """
+    What one restart did over its first `age` ELAPSED reporting days, or None
+    when it has not run that long.
+
+    A partial curve reported as a full one is the "across its first 3" problem
+    the Columbus note shipped with: three reporting days is not evidence about
+    a twenty-three-day window, and a reader cannot tell the two apart once both
+    are printed as "head a day".
+
+    ELAPSED, not days-it-carried-cattle. This rate gets multiplied by a span of
+    reporting days, so its denominator has to be that same span -- the unit
+    error port_profile()'s docstring describes, which this exists to stop
+    repeating.
+    """
+    if not entry or age < 1 or len(entry.get("cum") or []) < age:
+        return None
+    head = entry["cum"][age - 1]
+    return {"port": entry["port"], "state": entry.get("state"),
+            "from": entry["from"], "age": age,
+            "head": head, "rate": head / age}
+
+
+def cohort_at(ladder, age, exclude=None):
+    """
+    Every completed restart measured at the same age, slowest first.
+
+    `exclude` drops a port from the comparison -- the page passes the watch
+    port, so "what every OTHER crossing did coming back" and "what this one did
+    last time" stay separate claims rather than one averaging the other in.
+
+    Returns [] rather than None when nothing has run that long, so a caller can
+    say "no restart on file has run this far" instead of rendering a dash.
+    """
+    out = [c for c in (curve_at(e, age) for e in (ladder or [])
+                       if not (exclude and e["port"] == exclude)) if c]
+    return sorted(out, key=lambda c: c["rate"])
+
+
+def latest_restart(ladder, port):
+    """The most recent restart of one crossing, or None if it has never had one."""
+    mine = [e for e in (ladder or []) if e["port"] == port]
+    return max(mine, key=lambda e: e["from"]) if mine else None
+
+
+def shut_crossings(conn, this_year=None, years=NORMAL_YEARS):
+    """
+    [(crossing, share, last_seen)] for every crossing with history that is not
+    running this year, largest share first.
+
+    EXISTS BECAUSE "THE ONE SHUT CROSSING THAT USED TO CARRY REAL VOLUME" WAS
+    NEVER TRUE. The page said it of Columbus at 11.30% while Nogales sat shut
+    at 12.44% and Presidio at 9.48% -- wrong on the day it shipped and wrong in
+    a way no reader could check. A superlative has to be read off the data or
+    it is a claim about the day somebody wrote it.
+    """
+    sh = port_shares(conn, years=years)
+    if not sh:
+        return []
+    yr = str(this_year or date.today().year)
+    running = {p for (p,) in conn.cursor().execute(
+        "SELECT DISTINCT crossing_point FROM border_receipts "
+        "WHERE is_total = 0 AND receipts_est > 0 "
+        f"AND TO_CHAR(report_date, 'YYYY') = '{yr}'").fetchall()}
+    last = {p: str(db.iso(d)) for p, d in conn.cursor().execute(
+        "SELECT crossing_point, MAX(report_date) FROM border_receipts "
+        "WHERE is_total = 0 AND receipts_est > 0 "
+        "GROUP BY crossing_point").fetchall()}
+    out = [(p, s, last.get(p)) for p, s in sh["shares"].items()
+           if p not in running]
+    return sorted(out, key=lambda t: -t[1])
+
+
+def ramp_weeks(series, since=None):
+    """
+    [{"week", "begin", "head", "days", "complete"}] from a reopening onward.
+
+    Weeks are AMS's own Monday-to-Friday ones, numbered from 1 at the week the
+    border came back, and `complete` says whether the week has all five
+    reporting days on file yet.
+
+    EXISTS SO THE PAGE STOPS QUOTING A WEEK NUMBER IT TYPED IN. The caption
+    read "6,400 in week five this time" for nine weeks after week five, in the
+    present tense, beside figures that were updating around it. A snapshot in
+    prose is the failure this module keeps recording; the only fix is to read
+    it at render time.
+    """
+    pts = sorted((_as_date(r[0]), r[1] or 0) for r in series)
+    if since:
+        since = _as_date(since)
+        pts = [(d, h) for d, h in pts if d >= since]
+    if not pts:
+        return []
+    first = pts[0][0] - timedelta(days=pts[0][0].weekday())
+    weeks = {}
+    for d, h in pts:
+        mon = d - timedelta(days=d.weekday())
+        w = weeks.setdefault(mon, {"begin": str(mon), "head": 0, "days": 0})
+        w["head"] += h
+        w["days"] += 1
+    out = []
+    for i, mon in enumerate(sorted(weeks), start=1):
+        w = weeks[mon]
+        out.append({"week": ((mon - first).days // 7) + 1, "begin": w["begin"],
+                    "head": w["head"], "days": w["days"],
+                    "complete": w["days"] >= reporting_days(
+                        mon, mon + timedelta(days=4))})
+    return out
+
+
+def watch_window(through, expected=None, year=None):
+    """
+    Reporting days a shut crossing could still contribute to `year`.
+
+    {"start", "end", "days", "lapsed", "overdue", "stale"}, or None when there
+    is no expected date -- "expected back, no date given" prices nothing, which
+    is the honest answer and the one the rule above WATCH_PORT demands.
+
+        overdue   the date has passed and the crossing has not come back
+        stale     it passed in an EARLIER YEAR, so the constant needs re-setting
+                  by hand, and `days` is zero
+
+    STALE IS NOT A TIDINESS FLAG. Without it a 30 November 2026 expectation read
+    on 2027-02-01, with the port still shut, gives a window of 229 reporting
+    days and a caption reading "expected back 30 November 2026 -- which leaves
+    229 reporting days in 2027", pricing a hundred thousand head off a date
+    fourteen months old. WATCH_PORT_EXPECTED_ON is maintained by hand and this
+    is the one state in which nothing reminds anybody to.
+
+    START IS max(expected, the day after the last report), and that is the
+    whole correctness of it. Anchored on the announced date alone a window goes
+    on claiming 23 reporting days deep into December while the port stays shut,
+    pricing days that are already counted as actual in the projection box it is
+    being added to. This is the same anchor project_year_end() uses for
+    days_left, which is what keeps the window a subset of it and so legitimate
+    to add.
+
+    IT SIZES A WINDOW AND NOTHING ELSE. How many reporting days lie between a
+    date and 31 December is arithmetic on the calendar, true whether or not the
+    crossing opens. What crosses in them comes from restarts that actually
+    happened -- restart_curve() -- and the page states the pair as a
+    conditional.
+    """
+    if expected is None:
+        return None
+    through = _as_date(through)
+    expected = _as_date(expected)
+    yr = year or through.year
+    end = date(yr, 12, 31)
+    start = max(expected, through + timedelta(days=1))
+    overdue = expected <= through
+    if expected.year < yr:
+        return {"start": str(start), "end": str(end), "days": 0,
+                "lapsed": True, "overdue": True, "stale": True}
+    if start > end:
+        return {"start": str(start), "end": str(end), "days": 0,
+                "lapsed": True, "overdue": overdue, "stale": False}
+    return {"start": str(start), "end": str(end),
+            "days": reporting_days(start, end), "lapsed": False,
+            "overdue": overdue, "stale": False}
 
 
 # ── Pace, and the year-end projection ───────────────────────────────────────
@@ -1102,14 +1456,20 @@ def year_outlook(conn, year, series, watch=WATCH_PORT, window=PACE_WINDOW,
 
     THE WATCH SCENARIO SCALES BY SHARE, NOT BY THE PORT'S OWN OLD RATE, and
     that is the one thing in here that is easy to get wrong in a way nobody
-    would catch. Columbus ran 1,271 head on each day it was open in 2023-24,
-    so "add Columbus back" reads as +1,271/day -- about +316,000 on the year.
-    But the two ports that ARE open are managing 44% of what they normally do,
-    and a crossing that reopened last month will not instantly outrun its
-    neighbours by a factor of two. Scaling port capacity instead -- Columbus
-    is 11.3% of a normal border against the 56.8% already open, so +20% --
-    gives +67,600. The naive figure is 4.7x too high and arrives wearing the
-    same units.
+    would catch. Nogales ran 1,118 head on each day it was open in 2023-24, so
+    "add Nogales back" reads as +1,118/day -- about +278,000 on a 249-day year.
+    But the ports that ARE open are managing well under two thirds of what they
+    normally do, and a crossing that reopened last month will not instantly
+    outrun its neighbours. Scaling port capacity instead -- Nogales is 12.4% of
+    a normal border against the 68.1% already open, so +18% -- gives +99,800.
+    The naive figure is about 2.8x too high and arrives wearing the same units.
+
+    THOSE TWO MULTIPLES ARE READ OFF THE DATA AT RENDER TIME, NOT FROM HERE. An
+    earlier version of this paragraph said "+67,600" and "4.7x", computed when
+    only Douglas and Santa Teresa were open; both drifted the moment a third
+    port came back, and CLAUDE.md went on quoting the 4.7x as a standing rule.
+    Treat the figures above as an illustration of the shape and never as a
+    measurement.
 
     Returns None when the normal-year basis cannot be formed, which is correct
     rather than exceptional: without it there is nothing to be a share OF.
@@ -1130,6 +1490,24 @@ def year_outlook(conn, year, series, watch=WATCH_PORT, window=PACE_WINDOW,
     rd = reporting_days(date(year, 1, 1), date(year, 12, 31))
     open_ports = [p for p, _s, _a, _b, _h, _n
                   in crossing_debuts(conn, since=f"{this_year}-01-01")]
+    # A CROSSING THAT HAS ALREADY REOPENED IS NOT A SCENARIO, and nothing
+    # stopped it being counted as one until 2026-10-26. Columbus came back that
+    # morning, WATCH_PORT still said "Columbus", and the panel went on offering
+    # +90,679 head for an event that had happened -- on a pace that already
+    # contained its cattle, with "Columbus" twice in one tile label
+    # ("Douglas/Santa Teresa/Columbus/Columbus") and `mature` double-counting
+    # its 11.3% share for a 154,673-head error.
+    #
+    # The clincher is that `mature` describes the SAME SET OF PORTS either way,
+    # so it should not have moved at all, and it jumped 16.6% on the day the
+    # port opened. Nothing raised, nothing could: every figure stayed a
+    # plausible head count.
+    #
+    # Dropped rather than raised. Every watch port eventually opens, this is
+    # the ordinary end of its life, and the page has no try/except around this
+    # call -- a raise would take the whole dashboard down on a good-news day.
+    if watch and watch in open_ports:
+        watch = None
     open_share = sum(sh["shares"].get(p, 0.0) for p in open_ports)
     watch_share = sh["shares"].get(watch, 0.0) if watch else 0.0
     if not open_share:
@@ -1392,7 +1770,7 @@ MIN_WINDOW_DAYS = 5
 # page now reads this module's window dicts BY KEY, which is exactly that
 # shape, so it has to be passed at the call site: a default is not part of the
 # key, and neither is an argument whose name starts with an underscore.
-SCHEMA = 1
+SCHEMA = 2
 
 
 def _window_bounds(dates, gap_days=WINDOW_GAP_DAYS):

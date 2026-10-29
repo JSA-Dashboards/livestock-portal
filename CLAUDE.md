@@ -3773,6 +3773,278 @@ Everything below the switch — attribution, charts, grading, the data table —
 is the afternoon report regardless, and a caption says so. USDA publishes no
 cut-level detail for the morning report in any feed.
 
+## The watch port — the reopening forecast under the YTD boxes
+
+Asked for on 2026-10-29: *"the nogales arizona feeder cattle port is slated to
+reopen on 11/30. can we add a forecast below our 2026 year to date boxes that
+forecasts with nogales like we had with columbus before it reopened?"*
+
+The panel he is describing had not been deleted. It is guarded by
+`if _w and not _w["running"]`, **Columbus reopened on 2026-10-26**, and the
+whole block retired itself three days before he asked. That is the design and
+it is right; retiring SILENTLY was not, and the page now says so in one line
+instead of leaving a hole.
+
+`border.WATCH_PORT` is the crossing the page writes a sensitivity for while it
+is shut. It is **"Nogales"** now, with `WATCH_PORT_EXPECTED = "30 November
+2026"` for the prose and `WATCH_PORT_EXPECTED_ON = date(2026, 11, 30)` for the
+arithmetic. Nogales is also the right choice on the data rather than merely the
+next one named: at **12.44%** of a normal border it is the largest shut
+crossing, ahead of Presidio at 9.48% and bigger than Columbus ever was.
+
+### THE GUARD TEST CHECKED SPELLING, WHICH IS WHY NOBODY WAS TOLD
+
+`test_watch_port_names_a_crossing_ams_actually_reports` asserts WATCH_PORT is
+spelled like a real crossing. It passed every day from 2026-10-26 with the
+panel gone and a reopened port still named in the constant. Whether the port is
+still shut is a fact about Snowflake and cannot be asserted in an offline test,
+so **the page answers it instead**: the `elif _w and _w["running"]` branch
+names the crossing, the date it came back, and the largest one still dark. A
+source-level test pins that the branch exists.
+
+### THE 2027 PANEL WAS DOUBLE-COUNTING COLUMBUS, LIVE, FOR THREE DAYS
+
+`year_outlook()` had no membership test between `open_ports` and `watch`, so
+with Columbus open and WATCH_PORT still naming it the panel offered
+**+90,679 head** for an event that had happened, on a pace that already
+contained its cattle, under a tile label reading
+**`Douglas/Santa Teresa/Columbus/Columbus`**.
+
+**The clincher is `mature`.** That scenario is "these crossings at their normal
+rates", and Columbus reopening changed nothing about which crossings those are
+— so it must not move. It jumped **932,268 → 1,086,941**, +16.6%, on the
+morning the port opened. Every figure stayed a plausible head count and nothing
+raised.
+
+Dropped rather than raised: every watch port eventually opens, that is the
+ordinary end of its life, and there is no try/except around the call, so a
+raise would take the page down on a good-news day.
+
+**The obvious fix crashes the page on its own**, which is worth knowing before
+anyone reaches for it. With `watch=None`, `with_watch` collapses to exactly
+`as_is` (x/x is exactly 1.0), `_watch_worth` is exactly `0.0`, and
+`app.py`'s maturity caption divides by it. The line directly below already had
+an `or 'another crossing'` fallback, so the None case was anticipated and the
+division was not. It is guarded now.
+
+### THE WINDOW COMES FROM THE DATE, AND NOTHING ELSE DOES
+
+The old block hard-coded `reporting_days(1 Nov, 31 Dec)` = **41**, which was
+right for a crossing expected back at the end of October. For one expected on
+**30 November** the honest count is **23**, and the other 18 are reporting days
+the same sentence says the port is shut for. Left alone that overstates every
+figure in the caption by **78%**.
+
+`watch_window(through, expected)` returns it, and its whole correctness is
+`start = max(expected, the day after the last report)`. Anchored on the
+announced date alone the window goes on claiming 23 days deep into December
+while the port stays shut — pricing days already counted as actual in the box
+it is being added to. That is the same anchor `project_year_end()` uses for
+`days_left`, which is what makes the window a subset of it and so legitimate to
+add at all; a test asserts the subset relation at four dates.
+
+**A date may size a window; it may never size a flow.** How many reporting days
+lie between 30 November and 31 December is arithmetic on the calendar and true
+whether or not Nogales opens. What crosses in them comes from restarts that
+happened. The page states the pair as a conditional and keeps the caveat beside
+it.
+
+### AMS NEVER PRE-ANNOUNCES A REOPENING, AND THE OLD CAVEAT HAD THE WRONG LESSON
+
+The orange caption said announced dates never hold. Checked against the
+narrative, that is wrong twice.
+
+**Every 2026 reopening is announced same-day, past tense, on the first morning
+cattle cross** — `*** COLUMBUS, NM LIVESTOCK PORT OF ENTRY RE-OPENED. ***` on
+10-26, Santa Teresa on 09-24, Douglas on 08-24. Each port is mentioned **zero**
+times in the 90 days before it opened. So Columbus had no announced date to
+hit or miss, and **Nogales is not named anywhere in the 2026 report** — the
+11-30 date is Ross's and has no counterpart in the feed, exactly as the
+Columbus date had none.
+
+**And the short-horizon dates DID hold.** Five of five weekday reopenings AMS
+named in February 2025 landed on the day promised. What broke was the long
+schedule: the 2025-07-08 notice
+(`DOUGLAS, AZ RE-OPENED JULY 7TH. COLUMBUS AND SANTA TERESA, NM WILL RE-OPEN
+JULY 14TH AND 21ST RESPECTIVELY FOLLOWED BY DEL RIO AND LAREDO AT A LATER
+DATE.`) was overtaken when the border shut again two days later — Columbus came
+back **469 days** late, Santa Teresa **430**, Del Rio and Laredo never. So the
+caption now says a date holds over days and breaks over months, which is what
+the record actually shows.
+
+The old caption also interpolated `{_w['port']}` into that July notice, so
+repointing the constant alone would have had a client-facing page assert that
+USDA announced a Nogales reopening it never announced. The names are typed now
+because they are history, not a variable.
+
+### WHAT A CROSSING DOES COMING BACK, NOT WHAT IT USED TO DO
+
+The old high end was `port_profile()["per_day"]` — the port's own 2023-24 rate
+— and it is wrong twice over.
+
+**It is a unit error.** `per_day` divides head by the days the port actually
+CARRIED cattle: Nogales had 234 of the border's 381 reporting days across
+2023-24, 61% coverage. Multiplied by a span of reporting days it reads
+**1,118 × N** where the truthful figure is **687 × N**, 63% high, and the gap
+is widest for exactly the small intermittent crossings a reopening note is
+about (Columbus 2.05x, Presidio 1.94x, Santa Teresa only 1.07x).
+`port_profile` returns **`per_reporting_day`** for anything about to be
+multiplied by a span, and its docstring says which is which.
+
+**And it is the arithmetic the 2027 panel on the same page disowns.** That
+panel scales port capacity and prints an orange paragraph explaining that the
+own-rate figure is 2.8x too high. The 2026 caption was offering the same
+number as the top of a range two screens above it.
+
+**SIX COMPLETED RESTARTS ARE ON FILE AND THEY ARE ALIKE IN HEAD, NOT IN
+PERCENTAGE.** Over each port's first 23 elapsed reporting days — the length of
+a 30 November window:
+
+| restart | head/day | % of its own normal |
+|---|---|---|
+| Nogales 2025-02-19 | 515 | 46.1% |
+| Douglas 2025-02-06 | 622 | 51.2% |
+| Douglas 2026-08-24 | 648 | 53.4% |
+| Santa Teresa 2025-02-05 | 667 | 27.2% |
+| Presidio 2025-02-21 | 698 | 68.9% |
+| Santa Teresa 2026-09-24 | 730 | 29.8% |
+
+Head per day spans 515–730, **CV 10.6%**. The same six as a share of their own
+normal span 27.2–68.9%, **CV 31.0%** — nearly three times wider.
+
+**A RESTART IS MEASURED OVER THE DAYS AMS PUBLISHED, NOT A WEEKDAY CALENDAR.**
+`NON_REPORTING` is maintained only for dates that can fall inside a projection
+window — its earliest entry is 2026-10-12 — so walking the calendar counts
+Presidents Day 2025-02-17 and Labor Day 2026-09-07 as reporting days on which
+nothing crossed. Three of the six sit across one of those and each read about
+4% low. It is also the denominator `daily_pace()` works in, since that function
+averages the trailing N ROWS of the daily series; a rate that is going to be
+added to that pace has to be measured the same way. **Nogales' own window has
+no holiday in it, so no figure on the page moved** — which is how the
+correction was checked rather than argued. A restart
+looks to be limited by what the crossing can process on the way back rather
+than by how big it used to be: Santa Teresa normally moves 2,455 head a day and
+Nogales 1,118, and on their first 23 days back they did 730 and 515.
+
+**So the percentage route must not be used, and it is the obvious one.** It
+takes Santa Teresa's 27.2% — low only because Santa Teresa is huge — and lands
+Nogales at **304 head a day**, below anything any crossing has ever managed
+coming back. A test asserts the share route falls below the whole cohort, which
+is why the page does not use it.
+
+**Nogales' own February 2025 restart leads**, measured at the same age as the
+window it is applied to, and it is the slowest of the six — so the headline
+figure is the conservative one. What the page prints today:
+
+    515 head a reporting day over its own first 23  ->  +11,850  ->  164,335
+    the cohort band, 515 to 730                     ->  164,335 to 169,285
+    rejected: its own 1,118/day while open          ->  +25,713  ->  178,198
+
+against a **152,485** projection with the border as it stands.
+
+`restart_ladder()` is cumulative head by elapsed reporting day for every
+restart, and is **date-independent on purpose** so it can sit inside the page's
+30-minute cache while the AGE it is read at cannot — the same reason
+`project_year_end` is computed outside that cache. `curve_at()` returns None
+for a restart younger than the window rather than a short curve dressed as a
+full one: Columbus had three reporting days, and "517 head a day across its
+first 3" is indistinguishable from a real rate once both are printed.
+
+### Four counts that were typed in and were all false
+
+Every one of them went wrong the morning Columbus reopened, sitting beside a
+derived list of three names, and all four were client-visible:
+
+- *"those two crossings are the only ones taking cattle"* — three.
+- *"what those two crossings normally carry"* / *"Bringing just those two up to
+  normal"* — three.
+- *"all three at their normal rates"*, on a tile label slash-joining four.
+- *"a blend of a one-port border and a two-port one"* — two and three.
+
+They come from `len(_op)` through `_num_word()` now. A fifth, *"6,400 in week
+five this time"*, was a present-tense snapshot still printing in week ten:
+`ramp_weeks()` reads the latest complete week instead.
+
+**`", ".join` ON PORT NAMES IS THE `"Calhoun, GA"` TRAP AGAIN.** Every name is
+`Douglas, AZ`, so three crossings rendered as six list items — on the live page
+and in the status banner. Both are `" · ".join` now.
+
+And the state was a literal `", NM"`. Nogales is in **Arizona**.
+`port_profile` returns `state` from `crossing_state` and `state_abbr` from
+`KNOWN_PORTS`, so the page spells it `Nogales, AZ` like every other crossing on
+the screen rather than `Nogales, Arizona`.
+
+### Two counts of "how many crossings", off different bases
+
+The caption says **6** and the outlook tile says **10**, and neither named its
+basis. Six is the crossings AMS NAMED in its 2023 commentary (`ports_by_year`,
+narrative-derived, the same number the status banner shows); ten is the
+crossings that actually carried cattle in 2023-24 (`port_shares`, receipts-
+derived, the basis every share on that panel is computed on). Both are right.
+The caption takes its count and its year from the banner's own variables so the
+two cannot disagree, and the tile's sub-line names what the ten counts.
+
+### EVERY STATE OF THE BLOCK SAYS WHICH ONE IT IS IN
+
+Six states, and **four of them rendered nothing at all** before this change.
+Rendering nothing is the whole defect here: a panel that disappears without
+saying why is how a reopened crossing sat in `WATCH_PORT` for three days,
+double-counted in the scenarios below it, with a green suite.
+
+| state | what the page says |
+|---|---|
+| shut, window live, restarts on file | the forecast |
+| shut, window live, no restart that old | names the port, prices nothing |
+| shut, expected date from a PRIOR YEAR | orange: the constant is stale |
+| shut, no reporting days left this year | the window has run out |
+| shut, no expected date at all | names the port, prices nothing |
+| reopened | names the crossing, its restart date, and the next one dark |
+
+**THE STALE ONE IS THE EXPENSIVE ONE.** `WATCH_PORT_EXPECTED_ON` is maintained
+by hand, and this is the single state in which nothing reminds anybody of that.
+Left at `date(2026, 11, 30)` and read on 2027-02-01 with Nogales still shut,
+`watch_window` would otherwise return **229 reporting days** and the caption
+would read *"expected back 30 November 2026 — which leaves 229 reporting days
+in 2027"*, pricing about **+118,000 head** off a date fourteen months old.
+`stale` is true when the expected date's YEAR is behind the projection's, and
+`days` is then zero.
+
+`overdue` is the milder sibling — the date has passed inside the same year.
+The window shrinks correctly either way (that is what `max(expected, through+1)`
+is for); what has to change is the SENTENCE, because *"expected back 30 November
+— which leaves 18 reporting days from Dec 05"* reads as though the date is
+still ahead.
+
+**The reopened branch quotes the RESTART date, not `last_seen`.** For a running
+port `last_seen` is simply the last report, so the first version read
+*"Columbus has reopened on Oct 28, 2026"* when it reopened on the **26th**.
+`latest_restart()` knows the date. Verified in a browser by temporarily
+pointing `WATCH_PORT` at Columbus — these branches cannot be seen any other
+way, and the same run is what confirmed the 2027 panel drops to the honest
+**932,268** with no `ZeroDivisionError` and three names in the tile label
+instead of four.
+
+### `border.SCHEMA` went 1 -> 2
+
+`port_profile` gained `state`, `state_abbr` and `per_reporting_day`, and
+`load_all` gained `restarts` and `shut_ports`. Without the bump the deployed
+app serves a dict from before the reshape and the new keys raise — the
+`leverage.SCHEMA` trap. It is passed at the call site, which was already right
+here.
+
+### Verifying this locally
+
+**Run it through a shim that calls `set_page_config(layout="wide")`.** Run
+`apps/mexican_feeder_imports/app.py` directly and Streamlit centres it at a
+**736px** content column, where tile values wrap mid-number — `~1,102,56` over
+a lone `5`, which is exactly the defect this file records for the cutout page's
+five-tile row. `Home.py` sets `layout="wide"` and the deployed page is
+**1,430px**, where nothing wraps. The runner in `.claude/launch.json` under
+`mexican-feeder-imports` writes the shim.
+
+Measured at the real width after this change: 25 tile values, **none**
+wrapping, no horizontal overflow, zero `.katex` spans and zero stranded `**`.
+
 ## The Mexican Feeder Prices tab
 
 Added 2026-10-07. Mexican Feeder Imports is now **two tabs** — `Mexican Feeder
@@ -4091,9 +4363,17 @@ closure, so even the record is not a hard limit.
 
 ### The flow is not back yet, and the panel says so
 
-Reopening is phased — Douglas 2026-08-24, Santa Teresa 09-24 capped at 750 head
-a day, Columbus 10-26, Nogales planned 11-30 — and crossings are running near a
-third of normal. USDA's own MY2027 forecast is 625,000 head, half of 2024. So
+Reopening is phased — Douglas 2026-08-24, Santa Teresa 09-24, Columbus 10-26,
+Nogales planned 11-30 — and crossings are running near a third of normal.
+
+**THIS SAID SANTA TERESA WAS "CAPPED AT 750 HEAD A DAY" AND THAT IS NOT IN THE
+DATA.** Across all 689 `border_reports` rows the strings `750`, `CAP`, `LIMIT`,
+`PER DAY` and `HEAD PER` appear **zero** times, and Santa Teresa has run above
+750 head on **12 of its 23 crossing days** since reopening, peaking at **1,300
+on 2026-10-23**. The cap may be real and simply live in an APHIS notice this
+feed does not carry — but nothing here supports it and the daily figures
+contradict it, so do not cite it as a constraint. Only the Nogales date is a
+genuine outside fact, and it is Ross's. USDA's own MY2027 forecast is 625,000 head, half of 2024. So
 the full shortfall is a **scenario** and the head count is a control rather than
 a constant.
 

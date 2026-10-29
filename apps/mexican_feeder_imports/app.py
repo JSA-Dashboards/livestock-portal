@@ -214,6 +214,19 @@ def fmt_month(p):
     return pd.Timestamp(str(p) + "-01").strftime("%b %Y")
 
 
+# How many crossings are open is read from the data everywhere on this page,
+# and the WORD for it was typed in everywhere -- "those two crossings", "all
+# three", "a one-port border and a two-port one". Every one of them was false
+# from the morning Columbus reopened, sitting beside a derived list of three
+# names.
+_NUM_WORDS = ("no", "one", "two", "three", "four", "five", "six",
+              "seven", "eight", "nine", "ten", "eleven", "twelve")
+
+
+def _num_word(n):
+    return _NUM_WORDS[n] if 0 <= n < len(_NUM_WORDS) else f"{n:,}"
+
+
 # ── Data ────────────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -266,6 +279,15 @@ def load_all(schema=bd.SCHEMA):
                                               since=f"{date.today().year}-01-01"),
             "watch_port": (bd.port_profile(conn, bd.WATCH_PORT)
                            if bd.WATCH_PORT else None),
+            # Cumulative head by elapsed reporting day for every restart this
+            # border has had. DATE-INDEPENDENT, which is what lets it sit in
+            # this cache: the AGE it gets read at is not, and is worked out
+            # beside the projection below, outside it.
+            "restarts": bd.restart_ladder(conn),
+            # Largest shut crossing first. Read rather than written, because
+            # "the one shut crossing that used to carry real volume" was a
+            # typed-in superlative and was false the day it shipped.
+            "shut_ports": bd.shut_crossings(conn),
             "outlook": bd.year_outlook(
                 conn, date.today().year + 1,
                 bd.daily_receipts(conn), watch=bd.WATCH_PORT),
@@ -403,7 +425,10 @@ with tab_crossings:
                    "No crossings reported, and no current border report."),
     }
     headline, explain = words.get(state, ("STATUS UNKNOWN", ""))
-    ports_txt = ", ".join(S.get("active_ports") or []) or "none"
+    # ·, not a comma: every name is "Douglas, AZ", so a comma join reads
+    # as six crossings where there are three. The "Calhoun, GA" trap, which
+    # this repo has already paid for once on the southeast retention panel.
+    ports_txt = " · ".join(S.get("active_ports") or []) or "none"
 
     # The comparison is against the busiest year on record, not against every port
     # that has ever appeared: Laredo reported in 2023 and never again, so "of 6
@@ -574,23 +599,48 @@ with tab_crossings:
         # first draft of this caption said "only Douglas, AZ is open" -- true when
         # the border reopened, nine days stale by the time it shipped, and
         # contradicted by the page's own header two screens up.
-        _ports = (S or {}).get("active_ports") or []
+        _active = (S or {}).get("active_ports") or []
         _new = D.get("newest_port")
+        # EVERY PORT NAME CONTAINS A COMMA ("Douglas, AZ"), so a comma join
+        # turns three crossings into six list items -- the "Calhoun, GA" trap
+        # this repo already records for the southeast retention panel. It read
+        # "3 ... are open now (Santa Teresa, NM, Douglas, AZ, Columbus, NM)"
+        # on the live page.
+        _active_txt = " · ".join(_active)
+        # The pace window straddles the newest port's debut, so it blends an
+        # N-port border with an (N+1)-port one. Both counts are derived: they
+        # were typed in as "one" and "two" and went stale the morning Columbus
+        # opened, under a sentence naming three active crossings.
+        _before = max(0, len(_active) - 1)
+        # The latest COMPLETE week, read off the series. The clause here used
+        # to say "6,400 in week five this time" in the present tense and was
+        # still saying it in week ten, beside figures that updated around it.
+        _ramp = [w for w in bd.ramp_weeks([(d, v) for d, v, _w2 in daily])
+                 if w["complete"]]
+        _wk = _ramp[-1] if _ramp else None
         st.caption(
             f"**Read it as “if nothing changes”.** The two things that would change "
             f"it most are step changes, and a straight line sees neither. The first "
             f"is a crossing opening or shutting"
-            + (f" — **{len(_ports)} of the six crossings that ran in 2023 are open "
-               f"now** ({', '.join(_ports)})." if _ports else ".")
+            # The count AND the year are the banner's own, two screens up, so
+            # the two cannot say different things. "six" and "2023" were typed
+            # in here while the banner derived both.
+            + (f" — **{len(_active)} of the {peak_open_n} crossings that ran "
+               f"in {peak_open_year} are open now** ({_active_txt})."
+               if _active else ".")
             + (f" **{_new[0]} only joined on {fmt_date(_new[2], '%b %d')}** "
                f"and has carried {_new[3]:,} head since, so part of the "
                f"{PROJ['window']}-day window above predates it and the pace is a "
-               f"blend of a one-port border and a two-port one — which makes it "
+               f"blend of a {_num_word(_before)}-port border and a "
+               f"{_num_word(len(_active))}-port one — which makes it "
                f"read low, not high."
-               if _new else "")
+               if _new and _before else "")
             + f" After the February 2025 reopening the run-rate climbed to about "
-              f"20,000 head a week and plateaued by week six, against 6,400 in week "
-              f"five this time, so the next crossing to reopen moves this in a jump "
+              f"20,000 head a week and plateaued by week six"
+            + (f", against **{_wk['head']:,} head in week {_wk['week']}** this time "
+               f"(the week of {fmt_date(_wk['begin'], '%b %d')}, the last full one "
+               f"on file)" if _wk else "")
+            + f", so the next crossing to reopen moves this in a jump "
               f"rather than a drift. The second is a fresh screwworm detection, "
               f"which takes it to zero just as abruptly. For scale, "
             + (f"the projection is **{PROJ['projected'] / _ref_head * 100:.0f}% of "
@@ -604,47 +654,171 @@ with tab_crossings:
         # once it opens it is in the daily series, the trailing pace picks it up on
         # its own, and the caption above names it as the newest port. Nothing here
         # needs changing on the day; this paragraph simply stops appearing.
+        #
+        # WHICH IS WHAT HAPPENED ON 2026-10-26, and the self-retiring turned out to
+        # be the problem rather than the feature: Columbus came back, the block went
+        # dark, and nothing said so. The guard test checked that WATCH_PORT was
+        # SPELLED like a real crossing and never that it was still shut, so a green
+        # suite reported a healthy page with the panel gone. There is a test for the
+        # shut-ness now.
         _w = D.get("watch_port")
-        if _w and not _w["running"]:
-            _nd = bd.reporting_days(date(this_yr, 11, 1), date(this_yr, 12, 31))
-            # Low: the rate the port that most recently reopened is ACTUALLY
-            # managing, which is the only in-regime evidence of what a restarting
-            # crossing does today. High: this port's own rate when the border ran
-            # normally. The gap between them is the honest width of the question.
-            _lo = (_new[3] / _new[4]) if (_new and _new[4]) else None
-            _hi = _w["per_day"]
-            _p_lo = PROJ["projected"] + _lo * _nd if _lo else None
+        _lad = D.get("restarts") or []
+        # NOT reporting_days(1 Nov, 31 Dec). That constant was right for a crossing
+        # expected back at the end of October and counts 41 days; for one expected
+        # on 30 November the honest count is 23, and the other 18 are days the same
+        # sentence says the port is shut for. Computed outside load_all's cache
+        # beside the projection, because what is left of the year ticks down
+        # whether or not Snowflake has anything new.
+        _win = (bd.watch_window(PROJ["through"], bd.WATCH_PORT_EXPECTED_ON)
+                if _w and not _w["running"] else None)
+        _nd = (_win or {}).get("days") or 0
+        # WHAT A CROSSING DOES COMING BACK, NOT WHAT IT USED TO DO. Six restarts
+        # are on file and at this age they span 515 to 730 head a reporting day --
+        # far tighter in head than as a share of each port's own normal (CV 10.6%
+        # against 31.0%), because a restart is limited by what the crossing can
+        # process on the way back rather than by how big it used to be. The watch
+        # port's OWN last restart leads, measured at the same age as the window it
+        # is applied to; the rest give the band.
+        _own = bd.curve_at(bd.latest_restart(_lad, _w["port"]), _nd) if _nd else None
+        _peers = bd.cohort_at(_lad, _nd, exclude=_w["port"]) if _nd else []
+        _rates = sorted([c["rate"] for c in ([_own] if _own else []) + _peers])
+
+        # EVERY STATE SAYS WHICH ONE IT IS IN. Four of these rendered nothing
+        # at all, which is the defect this whole block is about: a panel that
+        # disappears without saying why is how a reopened crossing sat in
+        # WATCH_PORT for three days, double-counted in the 2027 scenarios.
+        if _w and not _w["running"] and _nd and _rates:
+            _lo, _hi = _rates[0], _rates[-1]
+            _p_lo = PROJ["projected"] + _lo * _nd
             _p_hi = PROJ["projected"] + _hi * _nd
+            # Its own old rate, kept only to be named and rejected: a WHILE-OPEN
+            # rate about to be multiplied by elapsed reporting days, and above
+            # anything any crossing has managed coming back.
+            _naive = _w["per_day"] * _nd
+            _state = _w.get("state_abbr") or _w.get("state") or "—"
+            _shut = D.get("shut_ports") or []
+            _next_shut = next((t for t in _shut if t[0] != _w["port"]), None)
             st.caption(
-                f"**The step change with a date on it: {_w['port']}, NM.** It is "
-                f"the one shut crossing that used to carry real volume — "
+                f"**The step change with a date on it: {_w['port']}, {_state}.** "
+                f"It is the largest shut crossing — "
                 f"**{_w['share'] * 100:.0f}% of every head** through the border in "
-                f"{_w['years'][0]}–{_w['years'][-1]}, at {_w['per_day']:,.0f} a day "
-                f"while open, against the {PROJ['pace']:,.0f} a day the whole "
-                f"border is managing now. It has not carried a head since "
-                f"{fmt_date(_w['last_seen'])}, and is expected back "
-                f"**{bd.WATCH_PORT_EXPECTED}**. Over the {_nd} reporting days in "
-                f"November and December that is worth "
-                + (f"**+{_lo * _nd:,.0f} head** if it restarts the way "
-                   f"{_new[0]} has ({_lo:,.0f} a day across its first {_new[4]}) "
-                   f"and " if _lo else "")
-                + f"**+{_hi * _nd:,.0f}** at its own {_w['years'][0]}–"
-                  f"{_w['years'][-1]} rate — a year-end total of "
-                + (f"roughly **{_p_lo:,.0f} to {_p_hi:,.0f}**" if _p_lo
-                   else f"roughly **{_p_hi:,.0f}**")
-                + f" rather than {PROJ['projected']:,.0f}."
+                f"{_w['years'][0]}–{_w['years'][-1]}"
+                # per_reporting_day, not per_day, so this sits on the same
+                # basis as the pace it is set against. per_day would read
+                # 1,118 against 2,195 and quietly compare a rate per day the
+                # port RAN with a rate per reporting day.
+                + (f", worth **{_w['per_reporting_day']:,.0f} head a reporting "
+                   f"day** when the border ran normally, against the "
+                   f"**{PROJ['pace']:,.0f}** the whole border is managing now"
+                   if _w.get("per_reporting_day")
+                   else f", against the {PROJ['pace']:,.0f} head a reporting day "
+                        f"the whole border is managing now")
+                + (f", with {_next_shut[0]} the next one dark behind it at "
+                   f"{_next_shut[1] * 100:.0f}%" if _next_shut else "")
+                + f". It has not carried a head since {fmt_date(_w['last_seen'])}, "
+                  f"and is expected back **{bd.WATCH_PORT_EXPECTED}**"
+                + (", which has passed, so the window below starts at the next "
+                   "reporting day:" if _win.get("overdue") else " — which leaves")
+                + f" **{_nd} reporting days** in {this_yr}, from "
+                  f"{fmt_date(_win['start'])} to year end."
+            )
+            st.caption(
+                f"**Every one of those days falls inside a restart, so the figures "
+                f"below come from restarts that happened rather than from "
+                f"{_w['port']} at full stride.** "
+                + (f"It came back once before, in "
+                   f"{fmt_date(_own['from'], '%B %Y')}, and over its own first "
+                   f"{_nd} reporting days it ran **{_own['rate']:,.0f} head a "
+                   f"reporting day** — **+{_own['rate'] * _nd:,.0f} head** here, "
+                   f"for a year-end total of "
+                   f"**{PROJ['projected'] + _own['rate'] * _nd:,.0f}** against "
+                   f"{PROJ['projected']:,.0f} with the border as it stands. "
+                   if _own else "")
+                + (f"All {_num_word(len(_rates))} restarts this border has had ran "
+                   f"**{_lo:,.0f} to {_hi:,.0f} head a reporting day** at that same "
+                   f"age, which puts {this_yr} between **{_p_lo:,.0f}** and "
+                   f"**{_p_hi:,.0f} head**. " if len(_rates) > 1 else "")
+                + f"Added instead at its own {_w['years'][0]}–"
+                  f"{_w['years'][-1]} rate of {_w['per_day']:,.0f} head on each day "
+                  f"it carried cattle, it would read +{_naive:,.0f} — more than "
+                  f"any crossing has managed coming back, and on a count of days it "
+                  f"ran rather than of reporting days."
             )
             st.caption(
                 f":orange[**None of that is in the box**, which counts only cattle "
-                f"that have crossed — and an announced reopening is not a "
-                f"reopening.] On 8 July 2025 AMS published that {_w['port']} and "
-                f"Santa Teresa would reopen on the 14th and 21st. Neither did: "
-                f"{_w['port']} has not appeared since {fmt_date(_w['last_seen'])}, "
-                f"Santa Teresa recorded nothing between May 2025 and its actual "
-                f"return on Sep 24, 2026, and that July reopening ran four "
-                f"reporting days of Douglas alone before the border shut again. "
-                f"The projection moves when cattle cross, not when a date is "
-                f"announced."
+                f"that have crossed — and the date is not AMS's.] "
+                f"{_w['port']} is not named anywhere in the {this_yr} report, and "
+                f"no {this_yr} reopening was announced in advance: Douglas, Santa "
+                f"Teresa and Columbus were each written up in the past tense on the "
+                f"morning they reopened. What the record shows is that a date holds "
+                f"over days and breaks over months. Every weekday reopening AMS "
+                f"named in February 2025 landed on the day it promised. The 8 July "
+                f"2025 notice putting Columbus on the 14th and Santa Teresa on the "
+                f"21st did not: the border shut again two days later, Columbus came "
+                f"back **469 days** late and Santa Teresa **430**"
+                + (f", and {_num_word(len(_shut) - 1)} more crossings are still "
+                   f"dark" if len(_shut) > 1 else "")
+                + f". The projection moves when cattle cross, not when a date is set."
+            )
+        elif _w and not _w["running"] and (_win or {}).get("stale"):
+            st.caption(
+                f":orange[**{_w['port']} was expected back "
+                f"{bd.WATCH_PORT_EXPECTED} and has not crossed a head since "
+                f"{fmt_date(_w['last_seen'])}.**] That date is from a previous "
+                f"year, so nothing here is priced off it. "
+                f"`border.WATCH_PORT_EXPECTED_ON` is maintained by hand: re-set "
+                f"it, or clear it to None."
+            )
+        elif _w and not _w["running"] and _nd and not _rates:
+            st.caption(
+                f"**{_w['port']}, "
+                f"{_w.get('state_abbr') or _w.get('state') or '—'} is the "
+                f"largest shut crossing** — "
+                f"**{_w['share'] * 100:.0f}% of every head** in "
+                f"{_w['years'][0]}–{_w['years'][-1]} — and is expected back "
+                f"**{bd.WATCH_PORT_EXPECTED}**, leaving **{_nd} reporting days** "
+                f"in {this_yr}. No restart on this border has run that long, so "
+                f"there is nothing measured to price it from and the box above "
+                f"is unchanged."
+            )
+        elif _w and not _w["running"] and (_win or {}).get("lapsed"):
+            st.caption(
+                f"**{_w['port']} is still shut** and {this_yr} has no reporting "
+                f"days left, so a reopening cannot move the box above. It is "
+                f"expected back **{bd.WATCH_PORT_EXPECTED}**."
+            )
+        elif _w and not _w["running"] and not bd.WATCH_PORT_EXPECTED_ON:
+            st.caption(
+                f"**{_w['port']} is the largest shut crossing** — "
+                f"**{_w['share'] * 100:.0f}% of every head** in "
+                f"{_w['years'][0]}–{_w['years'][-1]} — with no expected "
+                f"return date, so nothing here is priced. A date would size a "
+                f"window; it would not size a flow."
+            )
+        elif _w and _w["running"]:
+            # THE BLOCK RETIRING ITSELF IS RIGHT; RETIRING SILENTLY IS NOT.
+            # Columbus reopened on 2026-10-26 and this whole paragraph vanished
+            # with nothing in its place, which reads as a feature that was
+            # deleted rather than one that has done its job -- and it is what
+            # left WATCH_PORT pointed at an open crossing, double-counting it
+            # in the 2027 panel below, for three days. One line, and the next
+            # reader can see the state the page is in.
+            # THE REOPENING DATE, NOT last_seen. last_seen is the most recent
+            # day the crossing carried cattle, which for a port that is running
+            # is simply the last report -- "Columbus has reopened on Oct 28"
+            # when it reopened on the 26th. The restart ladder knows the date.
+            _back = bd.latest_restart(_lad, _w["port"])
+            st.caption(
+                f"**{_w['port']}, "
+                f"{_w.get('state_abbr') or _w.get('state') or '—'} has "
+                f"reopened"
+                + (f" on {fmt_date(_back['from'])}**" if _back else "**")
+                + f" and is in the daily series, so the pace above already "
+                  f"carries it and there is no step change left to price. The "
+                  f"next crossing to watch is set in `border.WATCH_PORT`; the "
+                + (f"largest still dark is "
+                   f"**{(D.get('shut_ports') or [('—', 0, None)])[0][0]}**."
+                   if D.get("shut_ports") else "border has none still dark.")
             )
 
     st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
@@ -698,23 +872,34 @@ with tab_crossings:
             st.markdown(tile(
                 "/".join(_op + ([_o["watch"]] if _o["watch"] else [])),
                 f"~{_s['mature']:,.0f}",
-                sub("all three at their normal rates, not today's"
-                    if _o["watch"] else "at their normal rates, not today's"),
+                # The count is derived. It was "all three" over a label that
+                # slash-joins four names the morning Columbus reopened.
+                sub(f"all {_num_word(len(_op) + 1)} at their normal rates, "
+                    f"not today's" if _o["watch"]
+                    else f"all {_num_word(len(_op))} at their normal rates, "
+                         f"not today's"),
                 "tile-scen"), unsafe_allow_html=True)
         with c[3]:
             st.markdown(tile(
                 f"All {_o['n_crossings']} Crossings",
                 f"~{_s['normal']:,.0f}",
-                sub(f"the whole border at {_o['normal_rate']:,.0f} head/day"),
+                # NAMES ITS BASIS, because the caption above counts six and
+                # this tile counts ten and nothing said why. Six is the
+                # crossings AMS NAMED in its 2023 commentary; ten is the
+                # crossings that actually carried cattle in 2023-24, which is
+                # the basis every share on this panel is computed on.
+                sub(f"every crossing that carried cattle in "
+                    f"{bd.NORMAL_YEARS[0]}–{bd.NORMAL_YEARS[-1]}, at "
+                    f"{_o['normal_rate']:,.0f} head/day"),
                 "tile-scen"), unsafe_allow_html=True)
 
         st.caption(
             f"**None of {_yr} has happened, so every figure here is a scenario.** "
             f"They are ordered, and the gaps between them are the point. "
             f"**{_slash}** carries today's {_o['pace']:,.0f} head a day "
-            f"across all {_o['reporting_days']} of {_yr}'s reporting days — those "
-            f"two crossings are the only ones taking cattle, so today's pace is "
-            f"theirs entirely. "
+            f"across all {_o['reporting_days']} of {_yr}'s reporting days — "
+            f"those {_num_word(len(_op))} crossings are the only ones taking "
+            f"cattle, so today's pace is theirs entirely. "
             f"**{_o['watch']} reopens** adds the one crossing expected back: it "
             f"carried **{_o['watch_share'] * 100:.0f}% of every head** when the "
             f"border ran normally, against the **{_o['open_share'] * 100:.0f}%** "
@@ -730,15 +915,23 @@ with tab_crossings:
         _open_at_normal = _o["open_share"] * _s["normal"]
         _maturity_worth = _open_at_normal - _s["as_is"]
         _watch_worth = _s["watch"] - _s["as_is"]
+        _n_open = _num_word(len(_op))
         st.caption(
             f"**The reopening is not the big number, and that is worth sitting "
             f"with.** {_ports} are open now and running at "
-            f"**{_o['maturity'] * 100:.0f}% of what those two crossings normally "
-            f"carry**. Bringing just those two up to normal — no new crossing at "
-            f"all — is worth **+{_maturity_worth:,.0f} head**, about "
-            f"**{_maturity_worth / _watch_worth:.0f}×** the "
-            f"+{_watch_worth:,.0f} {_o['watch'] or 'another crossing'} adds. "
-            f"A reopening is a headline; maturity is the volume."
+            f"**{_o['maturity'] * 100:.0f}% of what those {_n_open} crossings "
+            f"normally carry**. Bringing just those {_n_open} up to normal — no "
+            f"new crossing at all — is worth **+{_maturity_worth:,.0f} head**"
+            # DIVIDING BY _watch_worth IS DIVIDING BY ZERO the moment there is
+            # no watch port, which is the ordinary state between one crossing
+            # reopening and the next being named -- and year_outlook now sets
+            # watch to None on its own when the named port turns out to be
+            # open. The line below it already had an `or 'another crossing'`
+            # fallback, so the None case was anticipated and the division was
+            # not. It took the whole page down with a ZeroDivisionError.
+            + (f", about **{_maturity_worth / _watch_worth:.0f}×** the "
+               f"+{_watch_worth:,.0f} {_o['watch']} adds" if _watch_worth else "")
+            + f". A reopening is a headline; maturity is the volume."
         )
         # Derived, not written in: the naive figure has to move with the data or
         # it becomes a claim about numbers the page is no longer showing.

@@ -13,6 +13,7 @@ nothing to show it is wrong.
 """
 
 import os
+import pathlib
 import sys
 from datetime import date
 
@@ -35,10 +36,16 @@ from border import (  # noqa: E402
     PACE_WINDOW,
     WATCH_PORT,
     WATCH_PORT_EXPECTED,
+    WATCH_PORT_EXPECTED_ON,
+    cohort_at,
+    curve_at,
     daily_pace,
+    latest_restart,
     port_profile,
     project_year_end,
+    ramp_weeks,
     reporting_days,
+    watch_window,
 )
 
 # AMS daily border receipts, 2026, from the reopening of Douglas AZ on 24
@@ -208,13 +215,160 @@ def test_the_window_choice_actually_moves_the_answer():
 # ── the watch port and its sensitivity ──────────────────────────────────────
 
 def test_november_december_is_forty_one_reporting_days():
-    """The denominator of the Columbus sensitivity on the page.
+    """Thanksgiving and Christmas come out; the day after Thanksgiving does not.
 
-    Thanksgiving and Christmas come out; the day after Thanksgiving does not.
-    Pinned because the note quotes head counts built on it, and a holiday
-    added to NON_REPORTING by mistake would move them with nothing to show it.
+    NO LONGER THE PAGE'S DENOMINATOR, and the docstring used to say it was.
+    The watch-port note now sizes its window from the announced reopening --
+    see the watch_window tests below -- so this pins reporting_days itself over
+    a span the series has real coverage of, nothing more. A test whose
+    docstring claims to guard a figure the page has stopped printing is the
+    "test that holds a mistake in place" this repo already records.
     """
     assert reporting_days(date(2026, 11, 1), date(2026, 12, 31)) == 41
+
+
+def test_black_friday_is_a_reporting_day_and_thanksgiving_is_not():
+    """Read off 2023, the only Nov-Dec in this series the border ran through.
+
+    AMS published on 2023-11-24, the day after Thanksgiving. 2024 looks like a
+    counter-example and is not -- the border shut on 2024-11-25 and every
+    weekday after it is missing, which is a closure rather than a holiday.
+    """
+    assert reporting_days(date(2026, 11, 26), date(2026, 11, 26)) == 0
+    assert reporting_days(date(2026, 11, 27), date(2026, 11, 27)) == 1
+
+
+def test_the_watch_window_starts_at_the_announced_reopening():
+    """23 reporting days, not the 41 the Columbus note hard-coded.
+
+    A crossing expected back on 30 November cannot carry cattle on the 18
+    reporting days of November before it, and the same sentence that quotes
+    the window says so. Priced at the restart rates the page uses, the
+    difference is about 9,000 head on a 152,485 projection.
+    """
+    w = watch_window("2026-10-28", date(2026, 11, 30))
+    assert w["days"] == 23
+    assert w["start"] == "2026-11-30" and w["end"] == "2026-12-31"
+    assert w["lapsed"] is False
+    # the reopening day itself counts: all three 2026 reopenings carried cattle
+    # on day one (Douglas 700, Santa Teresa 400, Columbus 650 head)
+    assert reporting_days(date(2026, 12, 1), date(2026, 12, 31)) == 22
+
+
+def test_the_watch_window_never_prices_days_that_have_already_passed():
+    """The defect this function exists to stop, and the reason it takes `through`.
+
+    Anchored on the announced date alone the window stays 23 all through
+    December while the port stays shut -- adding head on days the projection
+    has already counted as actual.
+    """
+    assert watch_window("2026-12-04", date(2026, 11, 30))["days"] == 18
+    assert watch_window("2026-12-11", date(2026, 11, 30))["days"] == 13
+    assert watch_window("2026-12-30", date(2026, 11, 30))["days"] == 1
+
+
+def test_the_watch_window_is_a_subset_of_the_projections_own_days_left():
+    """What licenses adding the increment to the projected box at all.
+
+    If the window could ever exceed days_left the page would be projecting
+    beyond the year it is projecting.
+    """
+    for through in ("2026-10-28", "2026-11-27", "2026-12-04", "2026-12-24"):
+        series = SERIES_2026 + [(through, 1000)]
+        proj = project_year_end(series, today=date(2026, 12, 31))
+        assert watch_window(through, date(2026, 11, 30))["days"] <= proj["days_left"]
+
+
+def test_an_expected_date_from_a_previous_year_prices_nothing():
+    """The one state nothing reminds anybody about.
+
+    WATCH_PORT_EXPECTED_ON is maintained by hand. Left at 30 November 2026 and
+    read on 2027-02-01 with the port still shut, the window would otherwise be
+    229 reporting days -- and the caption would read "expected back 30 November
+    2026, which leaves 229 reporting days in 2027", pricing a hundred thousand
+    head off a date fourteen months old.
+    """
+    w = watch_window("2027-02-01", date(2026, 11, 30))
+    assert w["stale"] is True
+    assert w["days"] == 0 and w["lapsed"] is True
+    # the same constant one year on is ordinary, not stale
+    fresh = watch_window("2027-02-01", date(2027, 11, 30))
+    assert fresh["stale"] is False and fresh["days"] == 23
+
+
+def test_a_date_that_has_passed_is_flagged_rather_than_ignored():
+    """The window shrinks correctly either way; the SENTENCE has to change.
+
+    "expected back 30 November 2026 - which leaves 18 reporting days from
+    Dec 05" reads as though the date is still ahead.
+    """
+    assert watch_window("2026-10-28", date(2026, 11, 30))["overdue"] is False
+    assert watch_window("2026-12-04", date(2026, 11, 30))["overdue"] is True
+    assert watch_window("2026-11-30", date(2026, 11, 30))["overdue"] is True
+
+
+def test_every_watch_port_state_renders_something():
+    """A panel that disappears without saying why is the whole defect here.
+
+    Four states rendered nothing: the date gone stale, no restart old enough to
+    price from, the year's reporting days run out, and no expected date at all.
+    Source-level because they are layout facts and there is no other way to
+    assert a branch exists.
+    """
+    page = (pathlib.Path(__file__).resolve().parents[1]
+            / "apps" / "mexican_feeder_imports" / "app.py"
+            ).read_text(encoding="utf-8-sig")
+    for branch in (
+            'if _w and not _w["running"] and _nd and _rates:',
+            'elif _w and not _w["running"] and (_win or {}).get("stale"):',
+            'elif _w and not _w["running"] and _nd and not _rates:',
+            'elif _w and not _w["running"] and (_win or {}).get("lapsed"):',
+            'elif _w and not _w["running"] and not bd.WATCH_PORT_EXPECTED_ON:',
+            'elif _w and _w["running"]:'):
+        assert branch in page, f"missing branch: {branch}"
+
+
+def test_the_page_multiplies_only_the_reporting_day_rate():
+    """The silent 1.63x, pinned at the one place it could come back.
+
+    per_day is head per day the crossing CARRIED cattle. Multiplied by a span
+    of reporting days it reads 63% high for Nogales, and worse for the smaller
+    intermittent crossings a reopening note is about. The only legitimate use
+    of per_day on this page is the figure the caption names and rejects.
+    """
+    page = (pathlib.Path(__file__).resolve().parents[1]
+            / "apps" / "mexican_feeder_imports" / "app.py"
+            ).read_text(encoding="utf-8-sig")
+    uses = [l.strip() for l in page.splitlines() if '_w["per_day"]' in l]
+    assert uses, "the rejected figure should still be named on the page"
+    for line in uses:
+        assert line.startswith("_naive ="), (
+            f"per_day must only feed the figure the caption rejects: {line}")
+    assert "per_reporting_day" in page, (
+        "the like-for-like rate has to be the one on the page")
+
+
+def test_the_watch_window_lapses_rather_than_going_negative():
+    w = watch_window("2026-12-31", date(2026, 11, 30))
+    assert w["days"] == 0 and w["lapsed"] is True
+
+
+def test_no_expected_date_prices_nothing():
+    """"Expected back, no date" has to render no figure, not a figure of zero."""
+    assert watch_window("2026-10-28", None) is None
+
+
+def test_the_expected_date_and_the_prose_agree():
+    """Two spellings of one expectation, and they drifted once already.
+
+    WATCH_PORT_EXPECTED read "end of October 2026" while the page sized its
+    window from a hard-coded 1 November. Only the date may feed a number, but
+    the prose is what a reader sees, so they have to name the same month.
+    """
+    if WATCH_PORT_EXPECTED_ON is None:
+        return
+    assert WATCH_PORT_EXPECTED_ON.strftime("%B") in WATCH_PORT_EXPECTED
+    assert str(WATCH_PORT_EXPECTED_ON.year) in WATCH_PORT_EXPECTED
 
 
 def test_watch_port_names_a_crossing_ams_actually_reports():
@@ -223,12 +377,35 @@ def test_watch_port_names_a_crossing_ams_actually_reports():
     port_profile() returns None for a crossing it cannot find, and the page
     reads None as "this port is open, say nothing". So a misspelt WATCH_PORT
     looks exactly like a reopened one.
+
+    THIS TEST CHECKS SPELLING AND NOTHING ELSE, which is how the panel came to
+    vanish unnoticed on 2026-10-26: Columbus reopened, WATCH_PORT still said
+    "Columbus", the whole block stopped rendering and the suite stayed green.
+    Whether the named crossing is still SHUT cannot be asserted here -- it is a
+    fact about Snowflake, not about this module -- so the page now says so
+    itself, and test_the_page_says_so_when_the_watch_port_reopens pins that.
     """
     if WATCH_PORT is None:
         return                       # cleared once the port reopens; fine
     cities = {p.split(",")[0].strip().upper() for p in KNOWN_PORTS}
     assert WATCH_PORT.upper() in cities
     assert WATCH_PORT_EXPECTED, "a watch port with no expected date says nothing"
+
+
+def test_the_page_says_so_when_the_watch_port_reopens():
+    """The block retiring itself is right; retiring silently is not.
+
+    Source-level because it is a layout fact, and there is no other way to
+    assert that a branch exists. What it stops coming back is three days of a
+    page with a reopened crossing in WATCH_PORT, double-counted in the 2027
+    scenarios, and no sign on the page that anything had changed.
+    """
+    page = (pathlib.Path(__file__).resolve().parents[1]
+            / "apps" / "mexican_feeder_imports" / "app.py"
+            ).read_text(encoding="utf-8-sig")
+    assert 'if _w and not _w["running"]' in page
+    assert 'elif _w and _w["running"]' in page, (
+        "a watch port that has reopened must say so, not leave a hole")
 
 
 def test_normal_years_exclude_the_closure_years():
@@ -264,22 +441,43 @@ class _Conn:
 def test_port_profile_arithmetic():
     """head/days is the rate WHILE OPEN, and share is against named-port head."""
     conn = _Conn([
-        (237_600, 187),              # the port, over the normal years
-        (2_103_400,),                # all named ports, same years
-        (date(2024, 11, 21),),       # last seen, ever
-        (0,),                        # rows this year -> not running
+        (261_600, 234),                   # the port, over the normal years
+        (2_103_400,),                     # all named ports, same years
+        (date(2025, 5, 12), "Arizona"),   # last seen, ever, and its state
+        (0,),                             # rows this year -> not running
+        (381,),                           # the border's own reporting days
     ])
-    prof = port_profile(conn, "Columbus", this_year=2026)
-    assert prof["head"] == 237_600
-    assert prof["days"] == 187
-    assert prof["per_day"] == pytest.approx(237_600 / 187)
-    assert prof["share"] == pytest.approx(237_600 / 2_103_400)
-    assert prof["last_seen"] == "2024-11-21"
+    prof = port_profile(conn, "Nogales", this_year=2026)
+    assert prof["head"] == 261_600
+    assert prof["days"] == 234
+    assert prof["per_day"] == pytest.approx(261_600 / 234)
+    assert prof["share"] == pytest.approx(261_600 / 2_103_400)
+    assert prof["state"] == "Arizona"
+    # spelled the way the rest of the page spells a crossing
+    assert prof["state_abbr"] == "AZ"
+    assert prof["last_seen"] == "2025-05-12"
     assert prof["running"] is False
 
 
+def test_per_day_and_per_reporting_day_are_different_units():
+    """The silent 1.63x this page shipped, and the reason both keys exist.
+
+    `days` counts only the days the crossing carried cattle -- Nogales had 234
+    of the border's 381 reporting days across 2023-24 -- so per_day assumes a
+    head every single day when it is multiplied by a span. The caption did
+    exactly that: 1,118 x 23 where the truthful figure is 687 x 23.
+    """
+    conn = _Conn([(261_600, 234), (2_103_400,),
+                  (date(2025, 5, 12), "Arizona"), (0,), (381,)])
+    prof = port_profile(conn, "Nogales", this_year=2026)
+    assert prof["per_day"] == pytest.approx(1_117.9, abs=0.1)
+    assert prof["per_reporting_day"] == pytest.approx(686.6, abs=0.1)
+    assert prof["per_day"] / prof["per_reporting_day"] == pytest.approx(1.63, abs=0.01)
+
+
 def test_port_profile_knows_a_running_port():
-    conn = _Conn([(315_550, 260), (2_103_400,), (date(2026, 10, 1),), (22,)])
+    conn = _Conn([(315_550, 260), (2_103_400,),
+                  (date(2026, 10, 1), "Arizona"), (22,), (381,)])
     assert port_profile(conn, "Douglas", this_year=2026)["running"] is True
 
 
@@ -289,16 +487,97 @@ def test_port_profile_is_none_for_a_crossing_with_no_history():
     assert port_profile(_Conn([(0, 0)]), "Nowhere", this_year=2026) is None
 
 
-def test_columbus_sensitivity_is_material():
-    """If reopening moved the projection trivially the note would be noise.
+# The six restarts this border has had, as cumulative head by elapsed
+# reporting day -- the real figures, so the cohort arithmetic is pinned against
+# what AMS published rather than against round numbers chosen to agree. Only
+# the day-23 total matters to these tests, so the ladders are truncated there.
+_RESTARTS = [
+    {"port": "Nogales", "state": "Arizona", "from": "2025-02-19",
+     "cum": [0] * 22 + [11_850]},
+    {"port": "Douglas", "state": "Arizona", "from": "2025-02-06",
+     "cum": [0] * 22 + [14_300]},
+    {"port": "Douglas", "state": "Arizona", "from": "2026-08-24",
+     "cum": [0] * 22 + [14_900]},
+    {"port": "Santa Teresa", "state": "New Mexico", "from": "2025-02-05",
+     "cum": [0] * 22 + [15_350]},
+    {"port": "Presidio", "state": "Texas", "from": "2025-02-21",
+     "cum": [0] * 22 + [16_050]},
+    {"port": "Santa Teresa", "state": "New Mexico", "from": "2026-09-24",
+     "cum": [0] * 22 + [16_800]},
+    # three reporting days old: too young to answer a 23-day question
+    {"port": "Columbus", "state": "New Mexico", "from": "2026-10-26",
+     "cum": [650, 1_150, 1_550]},
+]
 
-    At Columbus's own normal rate over November and December it adds more
-    than half the entire projection again, which is why it gets a paragraph
-    rather than a clause.
+
+def test_a_restart_too_young_for_the_window_answers_nothing():
+    """The "across its first 3" problem, which shipped on the Columbus note.
+
+    Three reporting days is not evidence about a twenty-three-day window, and
+    once both are printed as "head a day" a reader cannot tell them apart.
+    """
+    young = latest_restart(_RESTARTS, "Columbus")
+    assert curve_at(young, 23) is None
+    assert curve_at(young, 3)["rate"] == pytest.approx(1_550 / 3)
+
+
+def test_the_restart_cohort_is_measured_at_one_age():
+    """515 to 730 head a reporting day, and Nogales' own is the slowest of them."""
+    cohort = cohort_at(_RESTARTS, 23)
+    assert [c["port"] for c in cohort] == [
+        "Nogales", "Douglas", "Douglas", "Santa Teresa", "Presidio",
+        "Santa Teresa"]
+    assert cohort[0]["rate"] == pytest.approx(11_850 / 23)
+    assert cohort[-1]["rate"] == pytest.approx(16_800 / 23)
+    assert cohort_at(_RESTARTS, 23, exclude="Nogales")[0]["port"] == "Douglas"
+
+
+def test_restarts_cluster_in_head_and_scatter_as_a_share_of_their_own_normal():
+    """The measurement the whole pricing rests on, stated as arithmetic.
+
+    A restart looks to be limited by what the crossing can process on the way
+    back rather than by how big it used to be. Scaling the cohort by each
+    port's own normal instead takes Santa Teresa's 24.9% -- low only because
+    Santa Teresa is huge -- and lands Nogales at 278 head a day, below anything
+    any crossing has managed coming back.
+    """
+    # port_profile(...)["per_day"] over NORMAL_YEARS, to a tenth
+    normal = {"Nogales": 1_117.9, "Douglas": 1_214.4,
+              "Santa Teresa": 2_454.7, "Presidio": 1_012.7}
+    rates = [c["rate"] for c in cohort_at(_RESTARTS, 23)]
+    shares = [c["rate"] / normal[c["port"]] for c in cohort_at(_RESTARTS, 23)]
+
+    def _cv(v):
+        m = sum(v) / len(v)
+        return (sum((x - m) ** 2 for x in v) / len(v)) ** 0.5 / m
+
+    assert _cv(rates) < 0.15
+    assert _cv(shares) > 0.25
+    # the ratio is the claim; the absolute above is only a sanity floor, and
+    # pinning it at the measured 0.31 would make this brittle against an AMS
+    # restatement rather than against the method changing
+    assert _cv(shares) > 2 * _cv(rates)
+    assert min(shares) * normal["Nogales"] < min(rates), (
+        "the share route must land below every restart on file, which is why "
+        "the page does not use it")
+
+
+def test_the_watch_port_sensitivity_is_material_but_not_half_the_year():
+    """Big enough for a paragraph, and nothing like the claim it replaces.
+
+    The old test asserted the step change exceeded half the whole projection,
+    which was true only of Columbus's while-open rate over a 41-day window --
+    both of which the page has stopped using. On the restart cohort over 23
+    days it is worth something between a twelfth and a sixth of the year.
     """
     base = project_year_end(SERIES_2026, today=date(2026, 10, 2))["projected"]
-    nd = reporting_days(date(2026, 11, 1), date(2026, 12, 31))
-    assert (237_600 / 187) * nd > base * 0.5
+    nd = watch_window("2026-10-28", date(2026, 11, 30))["days"]
+    cohort = cohort_at(_RESTARTS, nd)
+    lo, hi = cohort[0]["rate"] * nd, cohort[-1]["rate"] * nd
+    assert 0.08 < lo / base < 0.20
+    assert hi > lo
+    # and the rejected figure really is above every restart on file
+    assert 1_117.9 * nd > hi
 
 
 # ── next year, as scenarios ─────────────────────────────────────────────────
@@ -385,6 +664,46 @@ def test_a_closed_watch_port_adds_nothing():
     assert o["watch"] is None
     assert o["watch_share"] == 0
     assert o["scenarios"]["watch"] == pytest.approx(o["scenarios"]["as_is"])
+
+
+def test_a_watch_port_that_has_already_reopened_is_dropped():
+    """The 154,673-head error that was live from 2026-10-26.
+
+    Columbus reopened that morning and WATCH_PORT still named it, so the panel
+    offered +90,679 head for an event that had happened, on a pace that already
+    contained its cattle, under a tile label reading
+    "Douglas/Santa Teresa/Columbus/Columbus".
+    """
+    o = _outlook(watch="Columbus",
+                 open_ports=("Douglas", "Santa Teresa", "Columbus"))
+    assert o["watch"] is None
+    assert o["watch_share"] == 0
+    assert o["scenarios"]["watch"] == pytest.approx(o["scenarios"]["as_is"])
+
+
+def test_mature_describes_one_set_of_ports_either_way():
+    """The clincher, and the only thing that made the double count visible.
+
+    `mature` is "these crossings at their normal rates". Columbus reopening
+    moved nothing about which crossings those are, so the figure must not move
+    -- and it jumped 16.6% on the day, with every number still a plausible head
+    count.
+    """
+    before = _outlook(watch="Columbus", open_ports=("Douglas", "Santa Teresa"))
+    after = _outlook(watch="Columbus",
+                     open_ports=("Douglas", "Santa Teresa", "Columbus"))
+    assert before["scenarios"]["mature"] == pytest.approx(
+        after["scenarios"]["mature"])
+
+
+def test_the_ramp_week_is_read_rather_than_typed():
+    """The caption said "6,400 in week five this time" into week ten."""
+    weeks = ramp_weeks(SERIES_2026)
+    assert weeks[0]["week"] == 1 and weeks[0]["begin"] == "2026-08-24"
+    assert weeks[0]["head"] == 2_500
+    assert [w["week"] for w in weeks] == sorted(w["week"] for w in weeks)
+    # the Labor Day week has four reporting days on file and AMS published four
+    assert any(w["days"] < 5 for w in weeks)
 
 
 def test_maturity_is_against_the_open_ports_own_normal():
