@@ -615,7 +615,13 @@ with tab_crossings:
         # The latest COMPLETE week, read off the series. The clause here used
         # to say "6,400 in week five this time" in the present tense and was
         # still saying it in week ten, beside figures that updated around it.
-        _ramp = [w for w in bd.ramp_weeks([(d, v) for d, v, _w2 in daily])
+        # ANCHORED TO THE REOPENING, not to the first row of the year. They
+        # are the same date today only because nothing crossed before 24 August;
+        # the moment AMS back-fills an earlier date the week number silently
+        # starts counting from January and the sentence beside it says
+        # "after the February 2025 reopening".
+        _ramp = [w for w in bd.ramp_weeks([(d, v) for d, v, _w2 in daily],
+                                          since=(SO or {}).get("from"))
                  if w["complete"]]
         _wk = _ramp[-1] if _ramp else None
         st.caption(
@@ -700,8 +706,14 @@ with tab_crossings:
             _next_shut = next((t for t in _shut if t[0] != _w["port"]), None)
             st.caption(
                 f"**The step change with a date on it: {_w['port']}, {_state}.** "
-                f"It is the largest shut crossing — "
-                f"**{_w['share'] * 100:.0f}% of every head** through the border in "
+                # READ, not asserted. Nogales is the largest shut crossing
+                # today and the sentence names the runner-up in the same breath,
+                # so a watch port that is NOT the largest would have the page
+                # contradict itself inside one clause.
+                + (f"It is the largest shut crossing — "
+                   if _shut and _shut[0][0] == _w["port"] else
+                   f"It is a shut crossing — ")
+                + f"**{_w['share'] * 100:.0f}% of every head** through the border in "
                 f"{_w['years'][0]}–{_w['years'][-1]}"
                 # per_reporting_day, not per_day, so this sits on the same
                 # basis as the pace it is set against. per_day would read
@@ -734,15 +746,29 @@ with tab_crossings:
                    f"**{PROJ['projected'] + _own['rate'] * _nd:,.0f}** against "
                    f"{PROJ['projected']:,.0f} with the border as it stands. "
                    if _own else "")
-                + (f"All {_num_word(len(_rates))} restarts this border has had ran "
-                   f"**{_lo:,.0f} to {_hi:,.0f} head a reporting day** at that same "
-                   f"age, which puts {this_yr} between **{_p_lo:,.0f}** and "
+                # NOT "all N restarts this border has had". len(_rates) counts
+                # the restarts OLD ENOUGH to measure at this window's age, and
+                # it shrinks as the window shortens -- 6 of 7 at 23 days, 4 at
+                # 45. The seventh is Columbus, named two paragraphs further up,
+                # so the page was contradicting itself on a figure it prints.
+                + (f"{_num_word(len(_rates)).capitalize()} of the "
+                   f"{_num_word(len(_lad))} restarts this border has had are "
+                   f"old enough to measure at that age, and they ran "
+                   f"**{_lo:,.0f} to {_hi:,.0f} head a reporting day**, which "
+                   f"puts {this_yr} between **{_p_lo:,.0f}** and "
                    f"**{_p_hi:,.0f} head**. " if len(_rates) > 1 else "")
                 + f"Added instead at its own {_w['years'][0]}–"
                   f"{_w['years'][-1]} rate of {_w['per_day']:,.0f} head on each day "
-                  f"it carried cattle, it would read +{_naive:,.0f} — more than "
-                  f"any crossing has managed coming back, and on a count of days it "
-                  f"ran rather than of reporting days."
+                  f"it carried cattle, it would read +{_naive:,.0f}"
+                # COMPUTED, not asserted. "more than any crossing has managed
+                # coming back" is true of Nogales today and is a claim about
+                # the cohort directly above it -- a watch port smaller than the
+                # fastest restart on file would have the page refute itself in
+                # two adjacent sentences.
+                + (f" — more than any crossing has managed coming back, and on "
+                   f"a count of days it ran rather than of reporting days."
+                   if _naive / _nd > _hi else
+                   f", on a count of days it ran rather than of reporting days.")
             )
             st.caption(
                 f":orange[**None of that is in the box**, which counts only cattle "
@@ -765,9 +791,8 @@ with tab_crossings:
                 f":orange[**{_w['port']} was expected back "
                 f"{bd.WATCH_PORT_EXPECTED} and has not crossed a head since "
                 f"{fmt_date(_w['last_seen'])}.**] That date is from a previous "
-                f"year, so nothing here is priced off it. "
-                f"`border.WATCH_PORT_EXPECTED_ON` is maintained by hand: re-set "
-                f"it, or clear it to None."
+                f"year, so nothing here is priced off it — the expected "
+                f"date is set by hand and has not been moved on."
             )
         elif _w and not _w["running"] and _nd and not _rates:
             st.caption(
@@ -795,6 +820,23 @@ with tab_crossings:
                 f"return date, so nothing here is priced. A date would size a "
                 f"window; it would not size a flow."
             )
+        elif not _w:
+            # THE SIL–T HOLE THIS WHOLE BLOCK EXISTS TO CLOSE, left open by the
+            # branch list itself: every state above tests `_w`, so clearing
+            # WATCH_PORT to None -- which border.py tells the next reader to do
+            # once a crossing reopens -- renders nothing at all, exactly as
+            # Columbus did. Named here rather than guarded, because there is a
+            # true sentence to print.
+            _shut0 = D.get("shut_ports") or []
+            st.caption(
+                f"**No crossing is being watched for a reopening**, so nothing "
+                f"is priced into the box above beyond the cattle that have "
+                f"crossed."
+                + (f" The largest still dark is **{_shut0[0][0]}**, "
+                   f"**{_shut0[0][1] * 100:.0f}% of every head** in "
+                   f"{bd.NORMAL_YEARS[0]}–{bd.NORMAL_YEARS[-1]}."
+                   if _shut0 else "")
+            )
         elif _w and _w["running"]:
             # THE BLOCK RETIRING ITSELF IS RIGHT; RETIRING SILENTLY IS NOT.
             # Columbus reopened on 2026-10-26 and this whole paragraph vanished
@@ -815,8 +857,7 @@ with tab_crossings:
                 + (f" on {fmt_date(_back['from'])}**" if _back else "**")
                 + f" and is in the daily series, so the pace above already "
                   f"carries it and there is no step change left to price. The "
-                  f"next crossing to watch is set in `border.WATCH_PORT`; the "
-                + (f"largest still dark is "
+                + (f"largest crossing still dark is "
                    f"**{(D.get('shut_ports') or [('—', 0, None)])[0][0]}**."
                    if D.get("shut_ports") else "border has none still dark.")
             )

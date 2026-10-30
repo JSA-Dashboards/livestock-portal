@@ -324,6 +324,11 @@ def test_every_watch_port_state_renders_something():
             'elif _w and not _w["running"] and _nd and not _rates:',
             'elif _w and not _w["running"] and (_win or {}).get("lapsed"):',
             'elif _w and not _w["running"] and not bd.WATCH_PORT_EXPECTED_ON:',
+            # WATCH_PORT cleared to None is what border.py tells the next
+            # reader to do once a crossing reopens, and every branch above
+            # tests `_w` -- so it rendered nothing at all, which is the
+            # silent hole this list exists to close, left open by the list.
+            'elif not _w:',
             'elif _w and _w["running"]:'):
         assert branch in page, f"missing branch: {branch}"
 
@@ -346,6 +351,28 @@ def test_the_page_multiplies_only_the_reporting_day_rate():
             f"per_day must only feed the figure the caption rejects: {line}")
     assert "per_reporting_day" in page, (
         "the like-for-like rate has to be the one on the page")
+
+
+def test_the_page_reads_its_superlatives_rather_than_asserting_them():
+    """Three claims the page made in prose that its own data can refute.
+
+    "the largest shut crossing" sits in the same sentence as the runner-up;
+    "more than any crossing has managed coming back" sits one paragraph under
+    the cohort that would disprove it; and "All six restarts this border has
+    had" was false the day it shipped -- the border has had SEVEN, and
+    len(_rates) counts the ones old enough to measure at the window's age,
+    which falls to four as the window shortens.
+    """
+    page = (pathlib.Path(__file__).resolve().parents[1]
+            / "apps" / "mexican_feeder_imports" / "app.py"
+            ).read_text(encoding="utf-8-sig")
+    assert '_shut[0][0] == _w["port"]' in page, (
+        "the largest-shut-crossing claim must be read off shut_ports")
+    assert "_naive / _nd > _hi" in page, (
+        "the naive comparison must be computed against the cohort it sits under")
+    assert "restarts this border has had are " in page
+    assert "All {_num_word(len(_rates))} restarts" not in page, (
+        "len(_rates) is the restarts old enough to measure, not all of them")
 
 
 def test_the_watch_window_lapses_rather_than_going_negative():

@@ -4024,6 +4024,39 @@ way, and the same run is what confirmed the 2027 panel drops to the honest
 **932,268** with no `ZeroDivisionError` and three names in the tile label
 instead of four.
 
+### Four claims the page ASSERTED, and its own data refuted one
+
+Found by adversarial review the day after this shipped. Each was prose the
+page typed out where it could have read the answer, and all four are
+client-visible.
+
+**"All six restarts this border has had" WAS FALSE.** The border has had
+**seven**; `len(_rates)` counts the ones old enough to measure at the
+window's age, and it falls to four as the window shortens. The seventh is
+Columbus, named two paragraphs further up the same panel. It reads
+*"Six of the seven restarts this border has had are old enough to measure at
+that age"* now, which is both true and the thing a reader needs.
+
+The other three were true today and only by luck:
+
+- **"It is the largest shut crossing"** sits in the same sentence that names
+  the runner-up. Read off `shut_ports` now; a watch port that is not the
+  largest would have had the page contradict itself inside one clause.
+- **"more than any crossing has managed coming back"** sits one paragraph
+  under the cohort that would disprove it. Computed against `_hi` now.
+- **The week number in the ramp sentence** was anchored to the first row of
+  the year rather than to the reopening. The same date today only because
+  nothing crossed before 24 August; it is `since=` the reopening now.
+
+**AND THE BRANCH LIST LEFT THE HOLE IT WAS WRITTEN TO CLOSE.** Every state
+tests `_w`, so `WATCH_PORT = None` -- the action `border.py` tells the next
+reader to take once a crossing reopens -- rendered nothing at all, exactly as
+Columbus did. `elif not _w:` names it and the largest crossing still dark.
+
+Two maintenance sentences naming `border.WATCH_PORT` and
+`border.WATCH_PORT_EXPECTED_ON` in code spans came out: this panel goes to
+clients, and a constant name is not something to hand them.
+
 ### `border.SCHEMA` went 1 -> 2
 
 `port_profile` gained `state`, `state_abbr` and `per_reporting_day`, and
