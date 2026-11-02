@@ -1779,7 +1779,9 @@ with tab_weekly:
         if not load_ok:
             st.warning(
                 "⏳ **USDA data temporarily unavailable** — the USDA server is not responding. "
-                "This usually resolves in a few minutes. Use **Refresh now** in the sidebar to retry."
+                "This usually resolves in a few minutes."
+                + (" Use **Refresh now** in the sidebar to retry."
+                   if portal_view.is_staff() else "")
             )
             for _ in portal_view.staff_expander("Technical details"):
                 st.code(err_msg)
@@ -2131,8 +2133,9 @@ with tab_daily:
 
         if daily_err:
             st.warning(
-                "⏳ **USDA daily data unavailable** — the USDA server is not responding. "
-                "Use **Refresh now** in the sidebar to retry."
+                "⏳ **USDA daily data unavailable** — the USDA server is not responding."
+                + (" Use **Refresh now** in the sidebar to retry."
+                   if portal_view.is_staff() else "")
             )
             for _ in portal_view.staff_expander("Technical details"):
                 st.code(daily_err)
@@ -2196,8 +2199,9 @@ with tab_daily:
                     "half returned, so the week-to-date panel is missing below. Which "
                     "regions USDA is **withholding** is being read from each region's price "
                     "history instead — less direct than the head counts, and a tile reading "
-                    "*no volume data* is one the price history could not settle either. "
-                    "Use **Refresh now** in the sidebar to retry."
+                    "*no volume data* is one the price history could not settle either."
+                    + (" Use **Refresh now** in the sidebar to retry."
+                       if portal_view.is_staff() else "")
                 )
 
             st.markdown(
@@ -3594,9 +3598,23 @@ with st.sidebar:
     st.image(JSA_LOGO, width="stretch")
     st.markdown("<hr>", unsafe_allow_html=True)
 
-    st.markdown('<div class="sec-header" style="margin-top:0;">Data refresh</div>', unsafe_allow_html=True)
-    auto_refresh = st.toggle("Auto-refresh (30 min)", value=False)
-    if st.button("↺  Refresh now", width="stretch"):
+    # A CACHE CONTROL IS A WORKING TOOL, NOT A MARKET READING -- standing
+    # rule 1, and the call cattle_on_feed:986 already made.
+    #
+    # `pick` rather than deletion: `auto_refresh` is read at the bottom of this
+    # file to decide whether to sleep 1800s and rerun, and the default returned
+    # for a client is the toggle's own `value=False`, so nothing about a
+    # client's page changes except that the controls are not drawn.
+    #
+    # FIVE SENTENCES ON THIS PAGE POINT AT "Refresh now" and each is now
+    # addressed to whoever still has it -- see the outage warnings in both
+    # tabs. The comment above the tab set explains that st.stop() was dropped
+    # precisely so the sidebar renders during an outage and that advice is
+    # reachable; for a client the advice is what goes, not the sidebar.
+    if portal_view.is_staff():
+        st.markdown('<div class="sec-header" style="margin-top:0;">Data refresh</div>', unsafe_allow_html=True)
+    auto_refresh = portal_view.pick(False, lambda: st.toggle("Auto-refresh (30 min)", value=False))
+    if portal_view.pick(False, lambda: st.button("↺  Refresh now", width="stretch")):
         st.cache_data.clear()
         st.rerun()
 

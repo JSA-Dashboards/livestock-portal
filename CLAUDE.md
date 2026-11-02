@@ -217,7 +217,47 @@ it was also not what Ross asked for.
    set as it then stood and bf6bea2 inserted a tab at position two without
    touching a word of it. It names the tabs now. **Do not number tabs in a
    comment** — an insert moves every ordinal silently and nothing fails.
-2. **Raw `Data` tabs and the download panels under them.**
+
+   **A CACHE CONTROL IS A WORKING TOOL.** "Is this stale?" is a build
+   question. `cattle_on_feed:986` decided this first; on 2026-11-02 the other
+   four followed — Beef Cutout's and Cash Cattle Trade's "Auto-refresh
+   (30 min)" toggles and "↺ Refresh" buttons, and US Beef Trade's "Refresh
+   data".
+
+   **`portal_view.pick`, NEVER an `if`, and this one would only break on the
+   client deployment.** Both cutout and cash read `auto_refresh` again at the
+   bottom of the file to decide whether to sleep 1800s and rerun. Wrapped in
+   an `if`, the name is simply undefined for a client and the page raises —
+   nothing local or in the staff view would show it. `pick` returns the
+   widget's own `value=False`, so a client's page behaves exactly as before.
+
+   **HIDING THE BUTTON IS HALF THE JOB.** Seven sentences across those two
+   pages told the reader to use it ("Use **Refresh now** in the sidebar to
+   retry"), each attached to an outage warning — so a client met an alarm and
+   then hunted for a control that was not there. Five are now
+   `... if portal_view.is_staff() else ""`. **Two were deliberately left
+   alone**: cash_trade's Monday Print Forecast and Packer Leverage warnings
+   are inside tabs `hide={...}` already removes, and editing them would have
+   implied a client could reach them. `tests/test_client_exports_and_controls.py`
+   encodes that exemption, so if either tab stops being hidden it surfaces
+   there.
+2. **Raw `Data` tabs and the download panels under them.** Extended
+   2026-11-02 to the two exports that were not under a Data tab and so were
+   never carried along: Seasonal Futures' **Copy / CSV / PNG** row and Cattle
+   Weights' **Download Saturday series (Excel)**.
+
+   The seasonal row is gated **inside `export_row` with an early return**, not
+   at its eleven call sites — one line, and a twelfth call site added later is
+   covered by construction. Early return rather than an `if` around the body
+   so nothing is computed either: no frame serialised to TSV for the Copy
+   popover, no PNG rendered for a page that cannot download it.
+
+   **DO NOT ADD a repo-wide "every `st.download_button` must be enclosed by a
+   gate".** It was written and thrown away. Eleven of the portal's exports are
+   reachable only through a tab the client does not get, and two more are
+   gated by an early return rather than an enclosing block, so it rejects
+   correct code in thirteen places — which is the guard somebody deletes the
+   first time it blocks them.
 3. **Method and audit furniture** — "How this is built" tabs, "Technical
    details" expanders, provenance sidebars, "(JSA internal)" blocks.
 4. **The workbench a client-facing artefact was built on.** Cattle on Feed's
@@ -298,8 +338,20 @@ Measured on the live pages, client against staff:
 | Seasonal Futures | 5 top + 4 nested | 3 + 3 — Spread Builder, Chat, Spread matrix gone |
 | Livestock Inventory | 4 tabs | 3 — the Data tab, on all four of its tab sets |
 | Cattle Weights | 4 sidebar controls + a 90-line Data Status panel | 2 controls, no panel |
-| Beef Cutout | Data Table + Technical details | neither |
+| Beef Cutout | Data Table + Technical details | neither; also no Data Refresh block |
 | CME Feeder Cattle Index | 5 tabs | 4 — Futures Basis gone |
+| Seasonal Futures | Copy / CSV / PNG under every chart | no export row at all |
+| Cattle Weights | Saturday series export | gone; the tab and its caption stay |
+| US Beef Trade | "Refresh data" | gone; the range buttons stay |
+
+**The three `TOOLS` pages are not on this table and never need a row.** JSA
+Daily Cattle Reports, Cattle Market Board and Cattle Cycles have no
+`portal_view` call anywhere, which reads as a gap and is not one:
+`tools_visible()` returns False for a client before any other branch, so they
+are never registered on the client deployment — no tile, no nav entry, and
+their `url_path` does not route. Their four download buttons are unreachable.
+Checked rather than assumed on 2026-11-02, during a sweep that had flagged
+them as the worst exposure in the portal.
 
 **WHICH SERIES YOU ARE LOOKING AT STAYS; HOW IT IS COMPUTED GOES.** That is
 the line drawn across every sidebar. Weight basis, trend class, state,

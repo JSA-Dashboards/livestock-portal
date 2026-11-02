@@ -340,6 +340,21 @@ def figure_png(fig_json: str) -> bytes | None:
 
 
 def export_row(frame: pd.DataFrame, filename: str, key: str, fig=None):
+    # NOT DRAWN FOR A CLIENT -- standing rule 2, "the download panels". Gated
+    # HERE rather than at the eleven call sites, which is the whole reason this
+    # is one line: a twelfth call site added later is covered by construction,
+    # and there is no site to forget. The three buttons below hand over the
+    # settlement series, the seasonal overlay matrix, the yearly high/low
+    # table, the month-frequency summary and the USDA report calendar as
+    # files; this was the last ungated export panel in the portal, and every
+    # other one is already behind a staff gate (cot_report:844,
+    # beef_trade:1081, us_cow_herd:1018).
+    #
+    # An early return, not an `if` around the body: nothing here is computed
+    # for a client either, so no frame is serialised to TSV and no PNG is
+    # rendered on a page nobody can download from.
+    if portal_view.is_client():
+        return
     row = st.container(horizontal=True, vertical_alignment="center")
     with row:
         tsv = frame.to_csv(sep="\t", index=False)

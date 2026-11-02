@@ -1176,10 +1176,21 @@ with st.sidebar:
     )
     st.caption("Cutout trend always loads 2004→ in full.")
 
-    st.markdown("<hr>", unsafe_allow_html=True)
-    st.markdown('<div class="sec-header">Data Refresh</div>', unsafe_allow_html=True)
-    auto_refresh = st.toggle("Auto-refresh (30 min)", value=False)
-    if st.button("↺  Refresh Now", use_container_width=True):
+    # A CACHE CONTROL IS A WORKING TOOL, NOT A MARKET READING -- standing
+    # rule 1, and the same call cattle_on_feed:986 already made for its "Check
+    # for new data" button.
+    #
+    # `pick` rather than deletion, because `auto_refresh` is read again at the
+    # bottom of the page to decide whether to sleep and rerun. The default it
+    # returns for a client is the toggle's own `value=False`, so a client's
+    # page behaves exactly as it did before -- nobody loses a refresh they
+    # were getting, and the header above the controls goes with them rather
+    # than standing over nothing.
+    if portal_view.is_staff():
+        st.markdown("<hr>", unsafe_allow_html=True)
+        st.markdown('<div class="sec-header">Data Refresh</div>', unsafe_allow_html=True)
+    auto_refresh = portal_view.pick(False, lambda: st.toggle("Auto-refresh (30 min)", value=False))
+    if portal_view.pick(False, lambda: st.button("↺  Refresh Now", use_container_width=True)):
         st.cache_data.clear()
         st.rerun()
 
@@ -1196,7 +1207,11 @@ with st.sidebar:
         f'The morning report is published only as a PDF and USDA keeps no '
         f'archive of it, so its history is banked here one day at a time.'
         f'<br><br>'
-        f'Cache: 30 min. Use <b>Refresh Now</b> to force reload.</div>',
+        # The second sentence names a control a client no longer has, so it is
+        # addressed only to whoever still has it.
+        f'Cache: 30 min.'
+        + (f' Use <b>Refresh Now</b> to force reload.' if portal_view.is_staff() else '')
+        + f'</div>',
         unsafe_allow_html=True,
     )
 
@@ -1284,7 +1299,8 @@ st.markdown("<hr style='margin:10px 0 18px;'>", unsafe_allow_html=True)
 if not load_ok:
     st.warning(
         "⏳ **USDA data temporarily unavailable** — the USDA LMR server is not responding. "
-        "This usually resolves in a few minutes. Use **Refresh Now** in the sidebar to retry."
+        "This usually resolves in a few minutes."
+        + (" Use **Refresh Now** in the sidebar to retry." if portal_view.is_staff() else "")
     )
     for _ in portal_view.staff_expander("Technical details"):
         st.code(err_msg)

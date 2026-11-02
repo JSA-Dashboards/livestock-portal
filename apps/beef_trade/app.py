@@ -1138,6 +1138,9 @@ question. Neither is more correct; they are different measurements.
         file_name=f"us_beef_trade_ers_through_{YEAR}_{THROUGH:02d}.csv",
         mime="text/csv", key="dl_trade")
 
-if st.button("Refresh data", key="refresh"):
+# A cache control is a working tool, not a market reading -- standing rule 1,
+# and the call cattle_on_feed:986 already made. `pick` for consistency with the
+# other four refresh controls, though nothing downstream reads this one.
+if portal_view.pick(False, lambda: st.button("Refresh data", key="refresh")):
     st.cache_data.clear()
     st.rerun()

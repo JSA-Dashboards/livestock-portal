@@ -870,12 +870,18 @@ def render_saturday_slaughter() -> None:
         f"week-to-date. Cached 1 hr."
     )
 
-    st.download_button(
-        "Download Saturday series (Excel)",
-        _to_excel(shown.assign(day=shown["day"].astype(str))),
-        file_name="saturday_slaughter.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
+    # STAFF ONLY -- standing rule 2. This page's other export, under the NASS
+    # sub-tab's Data tab, is already gone for a client because the whole tab
+    # is; this one survived only because it sits in a different tab and so was
+    # never carried along. `_to_excel` is inside the gate, so a client does not
+    # build the workbook either.
+    if portal_view.is_staff():
+        st.download_button(
+            "Download Saturday series (Excel)",
+            _to_excel(shown.assign(day=shown["day"].astype(str))),
+            file_name="saturday_slaughter.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
 
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────
