@@ -2218,15 +2218,32 @@ with st.sidebar:
     default_states = [s for s in all_states if s in VALID_STATES] or all_states
     state_filter = st.multiselect("States", all_states, default=default_states, label_visibility="collapsed")
 
-    st.markdown("<hr>", unsafe_allow_html=True)
-    if st.button("↺  Refresh Data", use_container_width=True):
+    # THE FIFTH CACHE CONTROL, and it was missed on 2026-11-02 when the other
+    # four were gated. The sweep that found them refuted this one on the
+    # grounds that "three sibling pages carry the same ungated sidebar
+    # button" -- true when it was written, and false an hour later because
+    # those three were the ones being fixed. A convention argument goes stale
+    # the moment the convention moves.
+    #
+    # Safe to hide here, unlike on Beef Cutout: every loader on this page is
+    # ttl'd with no persist, so the caches genuinely expire on their own and
+    # this button only ever buys a reader the wait.
+    if portal_view.pick(False, lambda: st.button("↺  Refresh Data",
+                                                 use_container_width=True)):
         st.cache_data.clear()
         st.rerun()
 
     _SOURCE_LABELS = {
         "cme_official": "CME's own published daily settlement file — exact, not a reconstruction.",
         "workbook": "JSA-compiled workbook, CME's published index value.",
-        "workbook_precursor": "JSA reconstruction from Ross's raw per-location sale data (the same source behind the published column) — validated within about $0.20/cwt of published values where they overlap.",
+        # NAMED AN INTERNAL SOURCE TO A CLIENT: this read "from Ross's raw
+        # per-location sale data" until 2026-11-02. Every fact is kept --
+        # what it is built from, and how closely it tracks -- because the
+        # segment list is a DISCLOSURE about which dates are ours, not
+        # provenance furniture. Only the internal framing goes. It does not
+        # render on the current 2015+ coverage, which is exactly why it had
+        # not been noticed.
+        "workbook_precursor": "JSA reconstruction from the same per-location sale data that sits behind the published column — validated within about $0.20/cwt of published values where they overlap.",
         "usda_mars": "JSA's own USDA MARS/Direct/Video estimate — CME hasn't published this date yet (usually a 1-3 business day lag), so this is a genuine forecast, not a stand-in for released data.",
     }
     # Weekday-only for this range display: CME never publishes a file for
@@ -2258,11 +2275,18 @@ with st.sidebar:
         f'700–899 lbs, FOB 3% standing shrink<br><br>'
         f'Coverage: {first_date.strftime("%b %d, %Y")} – {last_date.strftime("%b %d, %Y")}<br><br>'
         + _seg_html
+        # THE PANEL STAYS; ONE SENTENCE GOES. The spec and the segment list
+        # are a market reading and a disclosure -- which dates are CME's own
+        # file and which are still JSA's estimate is the most client-relevant
+        # thing on this page, and the chart caption points here for it. Only
+        # "Run update_index.py to refresh" is addressed to whoever operates
+        # the pipeline, and a client cannot run it.
         + f'All segments are drawn as one solid line — not<br>'
         f'visually distinguished, see this panel for which<br>'
-        f'dates are which. Run <code>update_index.py</code><br>'
-        f'to refresh.'
-        f'</div>',
+        f'dates are which.'
+        + (f' Run <code>update_index.py</code><br>to refresh.'
+           if portal_view.is_staff() else '')
+        + f'</div>',
         unsafe_allow_html=True,
     )
 

@@ -231,16 +231,31 @@ it was also not what Ross asked for.
    nothing local or in the staff view would show it. `pick` returns the
    widget's own `value=False`, so a client's page behaves exactly as before.
 
-   **HIDING THE BUTTON IS HALF THE JOB.** Seven sentences across those two
-   pages told the reader to use it ("Use **Refresh now** in the sidebar to
-   retry"), each attached to an outage warning — so a client met an alarm and
-   then hunted for a control that was not there. Five are now
+   **HIDING THE BUTTON IS HALF THE JOB.** Eleven sentences across three pages
+   told the reader to use it ("Use **Refresh now** in the sidebar to retry"),
+   most attached to an outage warning — so a client met an alarm and then
+   hunted for a control that was not there. Nine are now
    `... if portal_view.is_staff() else ""`. **Two were deliberately left
    alone**: cash_trade's Monday Print Forecast and Packer Leverage warnings
    are inside tabs `hide={...}` already removes, and editing them would have
    implied a client could reach them. `tests/test_client_exports_and_controls.py`
    encodes that exemption, so if either tab stops being hidden it surfaces
    there.
+
+   **THERE WERE SEVEN CONTROLS, NOT FOUR, AND THE MISS HAD A CAUSE WORTH
+   RECORDING.** The sweep that found the first four REFUTED the index page's
+   "↺ Refresh Data" on the grounds that "three sibling pages carry the same
+   ungated sidebar button". That was true when it was written and false an
+   hour later — those three sibling pages were the ones being fixed. **A
+   convention argument goes stale the moment the convention moves**, and a
+   finding refuted by appeal to consistency has to be re-checked after the
+   thing it was compared against changes. Beef Trimmings was simply missed;
+   Seasonal Futures turned out to have been gated correctly all along and
+   was going unchecked.
+
+   So `test_the_list_of_refresh_pages_is_complete` now DERIVES the list from
+   every `apps/*/app.py` rather than trusting the hand-written one. It found
+   the seventh on its first run.
 2. **Raw `Data` tabs and the download panels under them.** Extended
    2026-11-02 to the two exports that were not under a Data tab and so were
    never carried along: Seasonal Futures' **Copy / CSV / PNG** row and Cattle
@@ -260,6 +275,32 @@ it was also not what Ross asked for.
    first time it blocks them.
 3. **Method and audit furniture** — "How this is built" tabs, "Technical
    details" expanders, provenance sidebars, "(JSA internal)" blocks.
+
+   **BUT "PROVENANCE SIDEBAR" IS NOT A LICENCE TO GATE A WHOLE PANEL**, and
+   the index page is the case that shows why. A sweep flagged its sidebar
+   panel as rule 3's literal named instance and recommended hiding it. Read
+   on screen rather than from the finding, it is three different things:
+
+   - the **spec** — 12 states, #1 & #1-2 Steers, 700–899 lb, FOB 3% shrink.
+     That is the contract definition and a market reading. It stays.
+   - the **segment list** — which date ranges are CME's own published file
+     and which are still JSA's estimate because CME has not printed yet.
+     That is a **disclosure**, and arguably the most client-relevant thing on
+     the page; the chart caption points at this panel for exactly it. It
+     stays, and `test_the_segment_disclosure_is_NOT_gated` fails if anybody
+     makes it staff-only.
+   - **"Run `update_index.py` to refresh"** — an instruction to whoever
+     operates the pipeline. A client cannot run it. That one sentence, and
+     only that one, went staff-only on 2026-11-02.
+
+   One label inside the segment list also read "from Ross's raw per-location
+   sale data". Reworded, keeping every fact and losing the internal framing.
+   It does not render on the current 2015+ coverage, which is why nobody had
+   seen it.
+
+   **The lesson is the general one**: a rule-3 finding names a CATEGORY, and
+   a panel can hold furniture and disclosure in the same `st.markdown`. Read
+   the rendered text before gating the block that contains it.
 4. **The workbench a client-facing artefact was built on.** Cattle on Feed's
    **COF Recap** tab is gone from the client view (2026-10-23: "the clients
    don't need to see the COF Recap page that I use to edit and send to

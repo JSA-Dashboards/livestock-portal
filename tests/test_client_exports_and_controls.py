@@ -34,9 +34,23 @@ WEIGHT = ROOT / "apps/beef_weight/app.py"
 CUTOUT = ROOT / "apps/beef_cutout/app.py"
 CASH = ROOT / "apps/cash_trade/app.py"
 TRADE = ROOT / "apps/beef_trade/app.py"
+FCI = ROOT / "apps/cme_feeder_cattle/app.py"
+TRIM = ROOT / "apps/beef_trimmings/app.py"
 
-# The four pages that carry a cache control, and the labels it wears on each.
-REFRESH_PAGES = [CUTOUT, CASH, TRADE]
+# EVERY page that carries a cache control. This list was three when it was
+# written and the sweep behind it had refuted a fourth on the grounds that
+# "three sibling pages carry the same ungated button" -- an argument that was
+# true when written and false an hour later, because those three were the ones
+# being fixed. A convention argument goes stale the moment the convention
+# moves, so test_the_list_of_refresh_pages_is_complete derives the list from
+# the repo instead of trusting this one.
+#
+# SEASONAL is in this list without ever having been fixed: its "Refresh
+# prices" button was already `portal_view.pick`-gated before any of this, and
+# the completeness test below is what noticed it was going unchecked. Being
+# right by accident and being right on purpose look identical until something
+# edits it.
+REFRESH_PAGES = [CUTOUT, CASH, TRADE, FCI, TRIM, SEASONAL]
 REFRESH_LABEL = "refresh"
 
 
@@ -178,6 +192,79 @@ def test_every_refresh_control_is_staff_only(path):
         )
 
 
+def test_the_list_of_refresh_pages_is_complete():
+    """
+    The half that would have hidden the fifth and sixth controls.
+
+    REFRESH_PAGES above is hand-written, and a hand-written list cannot report
+    a page nobody added to it. This derives the real set from every app in the
+    repo and fails if one is missing -- so a new page with a Refresh button is
+    caught the first time the suite runs, rather than the next time somebody
+    happens to sweep.
+    """
+    found = set()
+    for path in sorted(ROOT.glob("apps/*/app.py")):
+        if _widget_calls(_tree(path), REFRESH_LABEL):
+            found.add(path)
+    missing = found - set(REFRESH_PAGES)
+    assert not missing, (
+        "these pages carry a refresh control and are not in REFRESH_PAGES, so "
+        "nothing checks them: "
+        + ", ".join(sorted(p.parent.name for p in missing))
+    )
+
+
+def test_the_operator_instruction_is_staff_only():
+    """
+    "Run update_index.py to refresh", in the index page's sidebar panel.
+
+    ONLY THIS SENTENCE. The panel around it stays for clients: the spec is a
+    market reading, and the segment list is a DISCLOSURE -- which dates are
+    CME's own published file and which are still JSA's estimate is arguably
+    the most client-relevant thing on the page, and the chart caption points
+    at this panel for exactly that. Gating the whole panel, which is what the
+    sweep recommended, would have taken the disclosure with it.
+    """
+    tree = _tree(FCI)
+    allowed = _lines_inside_staff_ifexp(tree) | _lines_inside_staff_if(tree)
+    hits = [(n.lineno, n.value) for n in ast.walk(tree)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+            and "update_index.py" in n.value
+            and n.lineno not in _docstring_lines(tree)]
+    assert hits, "the sidebar no longer names update_index.py -- re-point this"
+    for line, text in hits:
+        assert line in allowed, (
+            f"cme_feeder_cattle:{line} tells the reader to run a script they "
+            f"cannot run -- {text.strip()[:60]!r}"
+        )
+
+
+def test_the_segment_disclosure_is_NOT_gated():
+    """
+    The other half, and the one that stops this being over-applied later.
+
+    A future tidy-up that gated the whole panel would pass every other test in
+    this file while removing the sentence telling a client that today's number
+    is JSA's estimate rather than CME's print. That is the opposite of what
+    the client view is for.
+    """
+    tree = _tree(FCI)
+    gated = _lines_inside_staff_ifexp(tree) | _lines_inside_staff_if(tree)
+    needles = ["Sample: 12-state feeder steer region",
+               "CME hasn't published this date yet"]
+    for needle in needles:
+        hits = [n.lineno for n in ast.walk(tree)
+                if isinstance(n, ast.Constant) and isinstance(n.value, str)
+                and needle in n.value
+                and n.lineno not in _docstring_lines(tree)]
+        assert hits, f"{needle!r} is gone from the page"
+        for line in hits:
+            assert line not in gated, (
+                f"{needle!r} at line {line} has been made staff-only -- read "
+                f"this test's docstring before doing that"
+            )
+
+
 def test_the_auto_refresh_value_is_still_read_after_the_gate():
     """
     The reason `pick` is not interchangeable with an `if` here, asserted rather
@@ -276,7 +363,7 @@ def _lines_inside_hidden_tabs(tree):
 
 
 # The control each page's prose points at, and the page it is on.
-DANGLERS = [(CUTOUT, "Refresh Now"), (CASH, "Refresh now")]
+DANGLERS = [(CUTOUT, "Refresh Now"), (CASH, "Refresh now"), (TRIM, "Refresh now")]
 
 
 @pytest.mark.parametrize("path,needle", DANGLERS,
