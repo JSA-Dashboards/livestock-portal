@@ -203,7 +203,20 @@ it was also not what Ross asked for.
 
 ### What comes out, as a standing rule rather than a list
 
-1. **Tabs that are a working tool rather than a market reading.**
+1. **Tabs that are a working tool rather than a market reading.** The CME
+   Feeder Cattle Index page's **Futures Basis** tab went on 2026-11-02 ("we
+   can take the futures basis tab off that dashboard — that only needs to be
+   on ross' main dashboard"). It sets the published index against the board
+   and asks what to do about the gap, which is a position question; the index
+   itself is the reading. Hiding it also skips `load_futures_basis()`, since
+   the body is behind `if tab_futures.open:`.
+
+   **That tab's own comment had already rotted, and the rot was ordinal.**
+   The block above the tab set opened "Four tabs", described the wrong ones
+   and numbered past Futures Basis, because it was written at e8ff3e6 for the
+   set as it then stood and bf6bea2 inserted a tab at position two without
+   touching a word of it. It names the tabs now. **Do not number tabs in a
+   comment** — an insert moves every ordinal silently and nothing fails.
 2. **Raw `Data` tabs and the download panels under them.**
 3. **Method and audit furniture** — "How this is built" tabs, "Technical
    details" expanders, provenance sidebars, "(JSA internal)" blocks.
@@ -286,6 +299,7 @@ Measured on the live pages, client against staff:
 | Livestock Inventory | 4 tabs | 3 — the Data tab, on all four of its tab sets |
 | Cattle Weights | 4 sidebar controls + a 90-line Data Status panel | 2 controls, no panel |
 | Beef Cutout | Data Table + Technical details | neither |
+| CME Feeder Cattle Index | 5 tabs | 4 — Futures Basis gone |
 
 **WHICH SERIES YOU ARE LOOKING AT STAYS; HOW IT IS COMPUTED GOES.** That is
 the line drawn across every sidebar. Weight basis, trend class, state,

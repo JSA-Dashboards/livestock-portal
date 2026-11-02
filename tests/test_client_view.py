@@ -393,6 +393,95 @@ def test_the_self_scoring_sections_are_staff_only(needle):
         )
 
 
+def _fci_tab_call(tree):
+    """The index page's own tab set, found by its labels and not by a name."""
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not node.args or not isinstance(node.args[0], (ast.List, ast.Tuple)):
+            continue
+        labels = [e.value for e in node.args[0].elts
+                  if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+        if "Index" in labels and "Sale Barn Basis" in labels:
+            return node, labels
+    return None, []
+
+
+def test_the_futures_basis_tab_is_staff_only():
+    """
+    Ross, 2026-11-02: "for the client view dashboard - we can take the futures
+    basis tab off that dashboard - that only needs to be on ross' main
+    dashboard."
+
+    Pinned on the CALL rather than on a `hide={...}` substring, because the two
+    ways to get this wrong both leave that substring in place: reverting to
+    `st.tabs` (which ignores a hide= it has never accepted -- it would raise,
+    but only on the deployment, and only when someone opens the page), and
+    renaming the label on the tab set without renaming it here.
+
+    The second is already loud -- portal_view.tabs raises ValueError on a hide
+    label it cannot find -- but only on the client deployment at render time,
+    which is the worst place to learn it. Here it is a unit test.
+
+    The BODY is covered by test_every_hidden_tab_has_its_body_guarded, which
+    walks every portal_view.tabs call in the repo including this one. This test
+    is only the decision: that the tab is hidden at all.
+    """
+    tree = ast.parse(_src(FCI_PAGE))
+    call, labels = _fci_tab_call(tree)
+    assert call is not None, "the index page's tab set is not where this expects"
+    assert "Futures Basis" in labels, (
+        "the Futures Basis tab is not on the page at all -- was it renamed? "
+        "rename it in the hide= below too, or this stops hiding anything"
+    )
+
+    func = call.func
+    assert isinstance(func, ast.Attribute) and func.attr == "tabs", func
+    assert isinstance(func.value, ast.Name) and func.value.id == "portal_view", (
+        "the index page's tabs must come from portal_view.tabs -- st.tabs "
+        "cannot hide anything from a client"
+    )
+
+    hide = [kw for kw in call.keywords if kw.arg == "hide"]
+    assert hide, "no hide= on the index page's tab set"
+    hidden = {e.value for e in hide[0].value.elts
+              if isinstance(e, ast.Constant)}
+    assert "Futures Basis" in hidden, sorted(hidden)
+
+
+def test_the_futures_basis_detector_fails_on_the_two_ways_back():
+    """
+    The guard above has to be able to fail, which is the rule this repo's
+    CLAUDE.md states: three checks written here could not, and each passed.
+
+    Both broken forms are the realistic ones -- a revert to st.tabs, and a
+    hide= that no longer names the tab -- and both keep every other thing the
+    test looks at intact.
+    """
+    good = ('x = portal_view.tabs(["Index", "Futures Basis", '
+            '"Sale Barn Basis"], hide={"Futures Basis"}, on_change="rerun")')
+    reverted = good.replace("portal_view.tabs", "st.tabs")
+    unhidden = good.replace('hide={"Futures Basis"}', 'hide={"Sale Barn Basis"}')
+
+    for src, why in ((good, None),
+                     (reverted, "st.tabs"),
+                     (unhidden, "hide= that misses it")):
+        call, labels = _fci_tab_call(ast.parse(src))
+        assert call is not None and "Futures Basis" in labels, why
+        func = call.func
+        from_portal = (isinstance(func, ast.Attribute) and func.attr == "tabs"
+                       and isinstance(func.value, ast.Name)
+                       and func.value.id == "portal_view")
+        hide = [kw for kw in call.keywords if kw.arg == "hide"]
+        hidden = ({e.value for e in hide[0].value.elts
+                   if isinstance(e, ast.Constant)} if hide else set())
+        passes = from_portal and "Futures Basis" in hidden
+        assert passes == (why is None), (
+            f"the detector {'accepted' if passes else 'rejected'} "
+            f"{why or 'the correct form'}"
+        )
+
+
 def test_no_competitor_is_named_anywhere_a_client_can_see():
     """
     THE TABLE WAS NOT THE ONLY MENTION, and that is the point of this test.

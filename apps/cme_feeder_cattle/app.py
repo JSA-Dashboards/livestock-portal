@@ -2316,32 +2316,52 @@ _render_barn_report()
 _render_census()
 
 
-# Four tabs. The index is the published number; the cash lookup is what the
-# cattle behind it actually brought, by weight and state; the basis lookup asks
-# what one barn's cattle bring against the index at a weight the index does not
-# itself cover. Same data source -- the AMS barn reports -- read for different
-# questions, and the cash lookup is shared with the Backgrounding Crush rather
-# than copied (see cash_calves.py).
+# Five tabs, named rather than numbered below. This comment counted four and
+# pointed at the wrong ones from bf6bea2 (2026-10-30) onward: it was written at
+# e8ff3e6 for the tab set as it then stood, and inserting Futures Basis at
+# position two moved every ordinal in it without touching a word. Names do not
+# move.
 #
-# The first three own every one of their own queries, in their own modules.
-# This file issues none, which is not tidiness: the cash series CANNOT reach
-# the index. calf_sales spans 400-900 lb where the index is 700-899,
-# recompute_fci_daily() reads mars_sales only, and
+# Index is the published number; Futures Basis sets it against the board; Cash
+# Feeder Prices is what the cattle behind it actually brought, by weight and
+# state; Sale Barn Basis asks what one barn's cattle bring against the index at
+# a weight the index does not itself cover. Those last two share the index's
+# own data source -- the AMS barn reports -- read for different questions, and
+# the cash lookup is shared with the Backgrounding Crush rather than copied
+# (see cash_calves.py).
+#
+# Index, Cash Feeder Prices and Sale Barn Basis own every one of their own
+# queries, in their own modules. This file issues none, which is not tidiness:
+# the cash series CANNOT reach the index. calf_sales spans 400-900 lb where the
+# index is 700-899, recompute_fci_daily() reads mars_sales only, and
 # tests/test_index_isolation.py in the cme-feeder-cattle-index repo enforces
 # all of that structurally rather than by convention.
 #
-# The fourth is a DIFFERENT POPULATION and not another cut of the same one.
-# It reads USDA's six state-level weekly auction summaries, which roll up every
-# reporting auction in each state -- including Arkansas, which has no barn on
-# this page's 93-barn roster at all. See six_state.py: its figures are not
-# comparable with the other three tabs' and are never averaged against them.
+# 6 State Weekly Feeder Cattle Prices is a DIFFERENT POPULATION and not another
+# cut of the same one. It reads USDA's six state-level weekly auction
+# summaries, which roll up every reporting auction in each state -- including
+# Arkansas, which has no barn on this page's 93-barn roster at all. See
+# six_state.py: its figures are not comparable with the other tabs' and are
+# never averaged against them.
 #
 # A hidden Streamlit tab still executes, so every one of these is guarded by
-# `if tab.open:` -- without that the six MARS requests behind the fourth would
-# run on every load of the first.
-tab_index, tab_futures, tab_cash, tab_basis, tab_six = st.tabs(
+# `if tab.open:` -- without that the six MARS requests behind the 6 State tab
+# would run on every load of the Index tab.
+#
+# FUTURES BASIS IS STAFF ONLY. Ross, 2026-11-02: "for the client view
+# dashboard - we can take the futures basis tab off that dashboard - that only
+# needs to be on ross' main dashboard." It is a trading read rather than a
+# market reading, which is rule 1 of what the client view hides.
+#
+# `portal_view.tabs` drops the label for a client and returns a Hidden
+# stand-in whose `open` is False, so the `if tab_futures.open:` guard further
+# down already stops the body -- and therefore the futures fetch behind it --
+# from running at all. The arity is unchanged, so this unpacking is identical
+# on both deployments.
+tab_index, tab_futures, tab_cash, tab_basis, tab_six = portal_view.tabs(
     ["Index", "Futures Basis", "Cash Feeder Prices", "Sale Barn Basis",
-     "6 State Weekly Feeder Cattle Prices"], on_change="rerun")
+     "6 State Weekly Feeder Cattle Prices"],
+    hide={"Futures Basis"}, on_change="rerun")
 
 with tab_index:
     # ── KPI Tiles ─────────────────────────────────────────────────────────────────
