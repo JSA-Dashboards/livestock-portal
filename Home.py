@@ -179,7 +179,7 @@ DASHBOARDS = [
     # app ends the Streamlit session, so a tile that replaced the tab would make
     # the reader re-enter the portal passphrase on the way back. Verified in a
     # browser, not assumed; see tests/test_risk_analyzer_tile.py.
-    {"title": "Risk Analyzer", "url": "https://jsa-risk-analyzer.streamlit.app/",
+    {"title": "JSA Risk Analyzer", "url": "https://jsa-risk-analyzer.streamlit.app/",
      "desc": "Options position risk — delta, gamma, vega and scenario P&L on a book you build. Opens in a new tab, and asks for its own password."},
 ]
 

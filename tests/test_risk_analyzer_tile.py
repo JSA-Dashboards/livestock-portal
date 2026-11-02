@@ -76,7 +76,7 @@ def test_the_risk_analyzer_is_last_and_follows_backgrounding_crush():
     Crush. The grid is one list shared by both deployments, so this fixes it in
     the client view and the staff one together."""
     titles = [d["title"] for d in _dashboards()]
-    assert titles[-1] == "Risk Analyzer"
+    assert titles[-1] == "JSA Risk Analyzer"
     assert titles[-2] == "Backgrounding Crush"
 
 
