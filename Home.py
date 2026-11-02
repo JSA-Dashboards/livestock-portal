@@ -163,6 +163,24 @@ DASHBOARDS = [
      "desc": "Feeding margin calculator — prices your cattle off the futures curve, then every number is yours to change."},
     {"title": "Backgrounding Crush", "page": "apps/backgrounding_crush/app.py", "url_path": "backgrounding-crush",
      "desc": "Buy calves, sell feeders — value of gain against cost of gain, cash calf market vs the feeder board."},
+    # THE ONLY TILE THAT IS NOT A PAGE OF THIS APP. The Risk Analyzer is its own
+    # Streamlit deployment out of JSA-Dashboards/jsa-risk-analyzer, so it carries
+    # `url` where every other entry carries `page`, and that key is what keeps it
+    # out of st.navigation below -- st.Page() on an https:// string raises at
+    # import time and takes the WHOLE portal down, both deployments, on the next
+    # reboot. Loud rather than silent, which is the one mercy, but check that
+    # filter before adding a second external tile.
+    #
+    # st.page_link renders an external URL through the same
+    # data-testid="stPageLink-NavLink" as an internal page, which is the whole
+    # reason this looks identical to the fifteen tiles beside it rather than
+    # needing its own markup -- and it sets target="_blank" rel="noreferrer" by
+    # itself. That second part is load-bearing: a full navigation away from this
+    # app ends the Streamlit session, so a tile that replaced the tab would make
+    # the reader re-enter the portal passphrase on the way back. Verified in a
+    # browser, not assumed; see tests/test_risk_analyzer_tile.py.
+    {"title": "Risk Analyzer", "url": "https://jsa-risk-analyzer.streamlit.app/",
+     "desc": "Options position risk — delta, gamma, vega and scenario P&L on a book you build. Opens in a new tab, and asks for its own password."},
 ]
 
 # Kept OUT of DASHBOARDS on purpose. It is an authoring tool rather than a
@@ -371,7 +389,9 @@ def render_home():
         for offset, d in enumerate(row):
             with cols[offset]:
                 with st.container(key=f"tile_{_n}"):
-                    st.page_link(d["page"], label=d["title"])
+                    # `url` for the one external tile, `page` for the rest --
+                    # st.page_link takes either and styles them the same.
+                    st.page_link(d.get("url") or d["page"], label=d["title"])
                     st.markdown(f"<div class='jsa-tile-desc'>{d['desc']}</div>",
                                 unsafe_allow_html=True)
             _n += 1
@@ -392,7 +412,13 @@ home_page = st.Page(render_home, title="Home", url_path="home", default=True)
 
 # TOOLS are registered only when asked for -- see the note above TOOLS. An
 # unregistered page has no nav entry and its url_path does not route.
-_pages = list(DASHBOARDS) + (list(TOOLS) if tools_visible() else [])
+#
+# An EXTERNAL tile is excluded here and must be: st.Page() on an https:// string
+# raises, and this runs at import, so the portal would not start at all. It
+# needs no nav entry either -- it is somebody else's app, and the tile is the
+# only place it belongs.
+_pages = [d for d in DASHBOARDS if not d.get("url")] + (
+    list(TOOLS) if tools_visible() else [])
 
 pg = st.navigation(
     [home_page] + [
