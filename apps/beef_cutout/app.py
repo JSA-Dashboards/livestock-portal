@@ -409,11 +409,14 @@ def cutout_recap(sections: dict, hist: pd.DataFrame, grade: str = "choice") -> l
 
 # ── Individual cuts ──────────────────────────────────────────────────────────
 #
-# THE DATA WAS ALREADY BEING DOWNLOADED AND THROWN AWAY. fetch_lmr asks for
-# allSections, which is eleven sections including "Choice Cuts" (42 items),
-# "Select Cuts" (42) and "Composite Primal Values" (7). The page used three of
-# them. So this view costs no extra request and no extra second -- it reads
-# what the existing fetch already paid for.
+# THIS VIEW COSTS REAL REQUESTS, AND THIS COMMENT SAID IT WAS FREE until
+# 2026-11-02. It read "the data was already being downloaded and thrown away
+# ... this view costs no extra request and no extra second", which was true of
+# fetch_lmr's allSections pull -- and dcf9b6e (2026-10-01) replaced that with
+# the paged fetch_cut_sections and never updated this. The deep pull is about
+# 13k rows and ~7 s PER CALENDAR YEAR, which is exactly why it happens only
+# when the reader opens Individual Cuts and why line ~1229 takes a shallow
+# one-year slice for the recap instead.
 
 # EVERY numeric column across all three sections, because they do not share a
 # schema: the cut sections carry weighted_average/total_pounds, and Composite
@@ -497,7 +500,8 @@ def cuts_panel(sections: dict, years: int = 1):
     if years:
         with st.spinner(f"Loading {years} year(s) of individual cuts…"):
             try:
-                deep = fetch_cut_sections(int(years))
+                deep = fetch_cut_sections(
+                    stamps_for(publication_stamps(), [REPORT_ID]), int(years))
             except Exception:
                 deep = {}
     choice = _cut_numbers(deep.get("Choice Cuts",
@@ -746,6 +750,88 @@ CUTOUT_FIRST_VALUE = "2004-01-05"   # composite is null before this
 FIT_WINDOW = 260
 
 
+PROBE_FAILED = "probe-unavailable"
+
+
+def _probe_session() -> requests.Session:
+    """No retries, unlike _lmr_session. A probe that stalls is worse than one
+    that fails: the fetches it guards are behind it on every rerun."""
+    s = requests.Session()
+    s.mount("https://", HTTPAdapter(max_retries=Retry(
+        total=0, status_forcelist=[], allowed_methods=["GET"])))
+    return s
+
+
+# NO persist="disk" HERE, AND THAT IS THE WHOLE POINT -- the same trap
+# cash_trade documents above its own publication_stamps(): Streamlit ignores
+# `ttl` when persist is set, so a probe written with both never expires and
+# freezes at whatever it first saw, taking every cache it keys with it.
+@st.cache_data(ttl=300, show_spinner=False)
+def publication_stamps() -> str:
+    """
+    When USDA last published this page's two reports, as one opaque string.
+
+    WHY THIS EXISTS. Until 2026-11-02 the four fetchers below were
+    `@st.cache_data(ttl=7200, persist="disk")` and keyed on nothing that
+    changes -- `fetch_thin_sections()` and `fetch_grading_weekly()` take no
+    arguments at all, and `fetch_cut_sections(1)` passes a literal. With the
+    ttl voided by persist, that is a cache with NO expiry: the page froze at
+    whatever it first loaded and moved only on "Refresh Now" or a restart,
+    rendering perfectly throughout. The same symptom cash_trade's packer
+    leverage tab had, from the same cause.
+
+    That mattered more here than the staleness of any one number. The
+    afternoon close (LM_XB403) publishes about 2:55 CT every business day, so
+    an app that had been up since morning served the PREVIOUS day's cutout to
+    anyone who opened it after the print -- on the staff deployment too, which
+    is where the daily letter is written.
+
+    The reports LIST endpoint carries published_date for every slug in a
+    single request, which is far cheaper than the section pulls it guards
+    (the thin sections alone are ~11.5 MB and ~13 s at full depth).
+
+    On failure this returns a STABLE sentinel rather than "" or a timestamp. A
+    key that varied on failure would turn every probe outage into a full
+    refetch -- the opposite of the point.
+    """
+    try:
+        resp = _probe_session().get(LMR_BASE, timeout=(3, 8))
+        resp.raise_for_status()
+        rows = resp.json()
+    except Exception:
+        return PROBE_FAILED
+    if not isinstance(rows, list):
+        return PROBE_FAILED
+    # COMPARED AS STRINGS ON BOTH SIDES. The endpoint returns slug_id as a
+    # JSON int today (checked live 2026-11-02), and an int-to-int test works
+    # -- but if that ever became a string the membership test would quietly
+    # match nothing, this would return the sentinel forever, and every cache
+    # below it would be back to a constant key with no expiry. That failure is
+    # invisible: the page renders, with old numbers. Stringifying costs
+    # nothing and cannot fail that way.
+    wanted = {str(REPORT_ID), str(GRADING_ID)}
+    stamps = {str(x.get("slug_id")): x.get("published_date") for x in rows
+              if isinstance(x, dict) and str(x.get("slug_id")) in wanted}
+    if not stamps:
+        return PROBE_FAILED
+    return "|".join(f"{k}={stamps[k]}" for k in sorted(stamps))
+
+
+def stamps_for(stamps: str, slugs) -> str:
+    """
+    The stamps for just `slugs`, as a cache key.
+
+    One probe covers both reports, but each consumer keys on only its OWN:
+    otherwise the weekly grading pull would re-run every afternoon when the
+    daily cutout published, which is the whole cost this is avoiding.
+    """
+    if not stamps or stamps == PROBE_FAILED:
+        return PROBE_FAILED
+    want = {str(s) for s in slugs}
+    keep = [p for p in stamps.split("|") if p.split("=", 1)[0] in want]
+    return "|".join(keep) if keep else PROBE_FAILED
+
+
 def _lmr_get(section: str, params: dict) -> pd.DataFrame:
     sess = _lmr_session()
     resp = sess.get(f"{LMR_BASE}/{REPORT_ID}/{section}", params=params, timeout=300)
@@ -758,14 +844,18 @@ def _lmr_get(section: str, params: dict) -> pd.DataFrame:
     return df.dropna(subset=["report_date"]).sort_values("report_date")
 
 
-@st.cache_data(ttl=7200, persist="disk", show_spinner=False)
-def fetch_thin_sections() -> dict:
+@st.cache_data(persist="disk", max_entries=8, show_spinner=False)
+def fetch_thin_sections(stamps: str) -> dict:
     """
     The one-row-per-report sections, at FULL archive depth.
 
     These are small enough that there is no reason to window them: the whole
-    25 years is 11.5 MB and about 13 seconds, once per cache period. Primal
+    25 years is 11.5 MB and about 13 seconds, once per publication. Primal
     Values is seven rows a report, so ~45k -- still inside the 100k cap.
+
+    `stamps` is unused in the body and must stay: it is LM_XB403's
+    published_date, taken as an argument so st.cache_data keys on it and this
+    re-runs when USDA publishes rather than never. See publication_stamps().
     """
     out = {}
     for name in ("Summary", "Current Cutout Values", "Current Volume",
@@ -779,10 +869,16 @@ def fetch_thin_sections() -> dict:
     return out
 
 
-@st.cache_data(ttl=7200, persist="disk", show_spinner=False)
-def fetch_cut_sections(years: int, _today=None) -> dict:
+@st.cache_data(persist="disk", max_entries=32, show_spinner=False)
+def fetch_cut_sections(stamps: str, years: int, _today=None) -> dict:
     """
     Choice and Select Cuts for the last `years` calendar years.
+
+    `stamps` keys the cache on LM_XB403's published_date; `years` is the
+    reader's choice. Both are hashed, so a reader switching depth still gets
+    their own entry and every entry refreshes on the next publication.
+    `_today` keeps its underscore deliberately -- Streamlit drops
+    underscore-prefixed arguments from the key, and this one exists for tests.
 
     PAGED BY YEAR BECAUSE OF THE 100,000-ROW CAP, not for politeness. A
     single request for everything comes back truncated and looks complete.
@@ -810,34 +906,23 @@ def fetch_cut_sections(years: int, _today=None) -> dict:
     return out
 
 
-# persist="disk" survives app sleep/wake cycles — users never hit a cold fetch
-@st.cache_data(ttl=7200, persist="disk", show_spinner=False)
-def fetch_lmr(last_n: int = 260):
-    """
-    Pull allSections for the last N reports from the USDA LMR API.
-    Returns a dict keyed by section name, each value a DataFrame.
-    """
-    url  = f"{LMR_BASE}/{REPORT_ID}/"
-    sess = _lmr_session()
-    resp = sess.get(url, params={"lastReports": last_n, "allSections": "true"}, timeout=60)
-    resp.raise_for_status()
-
-    payload = resp.json()
-    sections = {}
-    for sec in (payload if isinstance(payload, list) else [payload]):
-        name    = sec.get("reportSection", "")
-        results = sec.get("results", [])
-        if results:
-            df = pd.DataFrame(results)
-            df["report_date"] = pd.to_datetime(df["report_date"], errors="coerce")
-            df = df.dropna(subset=["report_date"]).sort_values("report_date")
-            sections[name] = df
-    return sections
+# fetch_lmr WAS HERE AND WAS DEAD. It pulled allSections for the last N
+# reports, and dcf9b6e (2026-10-01) replaced it with fetch_thin_sections plus
+# a paged fetch_cut_sections -- the change that made full history viable,
+# because allSections costs 91 MB and 30 s for a couple of years. Nothing has
+# called fetch_lmr since; the only reference left was the comment above
+# "Individual cuts", which is corrected there. Deleted 2026-11-02 rather than
+# repaired, because a dead fetcher carrying the ttl+persist trap is a trap
+# nobody can even observe being wrong.
 
 
-@st.cache_data(ttl=7200, persist="disk", show_spinner=False)
-def fetch_grading_weekly() -> pd.DataFrame:
-    """Fetch weekly Pct_Choice_CW from LMR report 2700 (lastReports=200 ≈ 4 yrs)."""
+@st.cache_data(persist="disk", max_entries=8, show_spinner=False)
+def fetch_grading_weekly(stamps: str) -> pd.DataFrame:
+    """Fetch weekly Pct_Choice_CW from LMR report 2700 (lastReports=200 ≈ 4 yrs).
+
+    `stamps` is unused in the body and must stay -- it is report 2700's own
+    published_date, narrowed by stamps_for() so this weekly pull does not
+    re-run every afternoon when the daily cutout publishes."""
     url  = f"{LMR_BASE}/{GRADING_ID}/"
     sess = _lmr_session()
     resp = sess.get(url, params={"lastReports": 200, "allSections": "true"}, timeout=60)
@@ -1207,9 +1292,14 @@ with st.sidebar:
         f'The morning report is published only as a PDF and USDA keeps no '
         f'archive of it, so its history is banked here one day at a time.'
         f'<br><br>'
+        # "Cache: 30 min" until 2026-11-02, and it was never true of anything
+        # on this page: the fetchers carried ttl=7200 with persist="disk",
+        # which voids the ttl, so they had no expiry at all. They key on
+        # USDA's own published_date now, so this says what happens.
+        #
         # The second sentence names a control a client no longer has, so it is
         # addressed only to whoever still has it.
-        f'Cache: 30 min.'
+        f'Figures refresh when USDA publishes, not on a timer.'
         + (f' Use <b>Refresh Now</b> to force reload.' if portal_view.is_staff() else '')
         + f'</div>',
         unsafe_allow_html=True,
@@ -1220,13 +1310,15 @@ with st.sidebar:
 
 with st.spinner("Loading USDA beef cutout data…"):
     try:
-        sections = fetch_thin_sections()
+        _stamps = publication_stamps()
+        sections = fetch_thin_sections(stamps_for(_stamps, [REPORT_ID]))
         # A SHALLOW slice of the cuts rides along for the Cutout view: the
         # recap's last bullet names the day's loudest cuts, and that needs
         # two reports, not two decades. The deep pull happens only when the
         # reader actually opens Individual Cuts.
         try:
-            for _k, _v in fetch_cut_sections(1).items():
+            for _k, _v in fetch_cut_sections(
+                    stamps_for(_stamps, [REPORT_ID]), 1).items():
                 sections.setdefault(_k, _v)
         except Exception:
             pass
@@ -1741,7 +1833,8 @@ st.markdown('<div class="sec-header">Beef Carcass Grading — Choice &amp; Highe
 
 # Fetch live weekly grading data (silent fail — chart still shows historical)
 try:
-    grade_wk = fetch_grading_weekly()
+    grade_wk = fetch_grading_weekly(
+        stamps_for(publication_stamps(), [GRADING_ID]))
 except Exception:
     grade_wk = pd.DataFrame()
 

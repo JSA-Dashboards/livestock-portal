@@ -267,7 +267,19 @@ def fmt(v, digits=0, suffix=""):
 
 # -- data --------------------------------------------------------------------
 
-@st.cache_data(ttl=21600, persist="disk", show_spinner=False)
+# persist="disk" DROPPED 2026-11-02. Streamlit ignores `ttl` when persist is
+# set -- verified against streamlit 1.63's source, see cash_trade's
+# publication_stamps() -- so these three had NO expiry and were keyed on a
+# SCHEMA constant that only moves when a developer edits the module. A new
+# ERS file or a new WASDE was picked up only by "Refresh data" or a restart,
+# on the staff deployment as much as the client one.
+#
+# Dropped rather than stamp-keyed, which is what beef_cutout got: ERS is one
+# CSV behind a _discover() fallback and WASDE is a file, so there is no cheap
+# published_date probe to key on. Both are MONTHLY, so the stated ttls are
+# generous and now actually apply. The cost is a cold refetch after the app
+# sleeps -- 4 MB, once.
+@st.cache_data(ttl=21600, show_spinner=False)
 def load_trade(schema: int = tf.SCHEMA) -> pd.DataFrame:
     """
     The ERS monthly file. Six hours, because it is republished monthly and is
@@ -279,7 +291,7 @@ def load_trade(schema: int = tf.SCHEMA) -> pd.DataFrame:
     return tf.fetch()
 
 
-@st.cache_data(ttl=21600, persist="disk", show_spinner=False)
+@st.cache_data(ttl=21600, show_spinner=False)
 def load_wasde(schema: int = wasde.SCHEMA) -> dict:
     """
     The newest WASDE meats table, flattened to a plain dict.
@@ -302,7 +314,7 @@ def load_wasde(schema: int = wasde.SCHEMA) -> dict:
     }
 
 
-@st.cache_data(ttl=86400, persist="disk", show_spinner=False)
+@st.cache_data(ttl=86400, show_spinner=False)
 def load_revisions(attribute: str, year: int, n: int,
                    schema: int = wasde.SCHEMA) -> list:
     """n releases, n requests -- only ever called from a button."""

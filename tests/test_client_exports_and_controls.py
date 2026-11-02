@@ -201,6 +201,34 @@ def test_the_auto_refresh_value_is_still_read_after_the_gate():
 
 # -- the sentences that pointed at a control the client no longer has ----------
 
+def _docstring_lines(tree):
+    """
+    Every line of every docstring.
+
+    A docstring is not user-facing text, and leaving it in scope made this
+    file's own sentence guard reject a docstring written to EXPLAIN the fix --
+    publication_stamps() in beef_cutout says the page "moved only on 'Refresh
+    Now' or a restart", which is a sentence about the bug, not one shown to
+    anybody. That is the fourth substring-shaped guard in this project to
+    catch correct code; the pattern is always the same, and so is the fix:
+    narrow what the guard looks at rather than loosen what it accepts.
+    """
+    out = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Module, ast.FunctionDef,
+                                 ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        body = getattr(node, "body", None)
+        if not body:
+            continue
+        first = body[0]
+        if (isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)
+                and isinstance(first.value.value, str)):
+            out.update(range(first.lineno,
+                             (first.end_lineno or first.lineno) + 1))
+    return out
+
+
 def _lines_inside_staff_ifexp(tree):
     """Every line inside the body of a `... if portal_view.is_staff() else ...`."""
     out = set()
@@ -283,7 +311,8 @@ def test_no_client_sentence_points_at_a_control_the_client_lacks(path, needle):
     tree = _tree(path)
     allowed = (_lines_inside_staff_ifexp(tree)
                | _lines_inside_hidden_tabs(tree)
-               | _lines_inside_pick(tree))
+               | _lines_inside_pick(tree)
+               | _docstring_lines(tree))
     hits = [(n.lineno, n.value) for n in ast.walk(tree)
             if isinstance(n, ast.Constant) and isinstance(n.value, str)
             and needle in n.value]

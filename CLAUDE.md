@@ -471,6 +471,59 @@ which reads exactly like a sidebar the client view removed. Set a viewport
 (1440x900) BEFORE navigating, not after — a resize applied to an
 already-rendered page leaves it collapsed.
 
+## `ttl` + `persist` is a cache that never expires — eleven of them
+
+**Streamlit ignores `ttl` when `persist` is set.** Its own
+`local_disk_cache_storage.py` warns "The cached function '%s' has a TTL that
+will be ignored." So `@st.cache_data(ttl=3600, persist="disk")` is not an
+hourly cache; it is a cache with **no time expiry at all**, invalidated only
+by its key changing, by a Refresh button calling `st.cache_data.clear()`, or
+by a restart. The page renders perfectly throughout, with old numbers.
+
+This repo had found it three times — `fetch_leverage` froze the whole Packer
+Leverage tab until 2026-10-07, `fetch_price_history` made "Cache: 1 hr"
+untrue, and `tests/test_market_board.py::test_no_loader_persists_to_disk`
+bans it for that one module. On **2026-11-02 a sweep found eleven more**,
+across six pages, and `tests/test_cache_expiry.py` now bans the combination
+repo-wide.
+
+**THE WORST OF THEM WAS BEEF CUTOUT'S WHOLE PAGE LOAD.**
+`fetch_thin_sections()` took no arguments, so its key was empty and constant.
+LM_XB403 publishes about 2:55 CT every business day, so an app that had been
+up since morning served the **previous day's cutout** to anyone who opened it
+after the print. On the staff deployment as much as the client one — which is
+where the daily letter is written. The sidebar said "Cache: 30 min".
+
+**It surfaced from a question that looked unrelated**: "so we are taking the
+refresh buttons away from the client view?" On three pages the Refresh button
+was not a convenience, it was the only invalidation that existed.
+
+### The two ways out, and which to pick
+
+- **Key on a publication stamp, keep `persist`, drop the `ttl`.** Right when
+  the probe is much cheaper than what it guards. `cash_trade` does it with
+  one ~67 KB list request covering eight Detail calls; `beef_cutout` now does
+  the same for an ~11.5 MB pull. Both read the LMR reports LIST endpoint,
+  which carries `published_date` per `slug_id`.
+- **Drop `persist` so the `ttl` works.** Right for monthly files — WASDE and
+  ERS — where the "probe" would be half the fetch: ESMIS's release list is
+  already the first of the two requests `wasde.load()` makes, so guarding
+  with it buys nothing. `beef_trimmings/app.py:488` made this call first.
+
+**Compare the slug id as a STRING on both sides.** The endpoint returns
+`slug_id` as a JSON int today, so an int test works — but if that ever
+changed, the membership test would match nothing, the probe would return its
+sentinel forever, and every cache under it would be back to a constant key
+with no expiry. The page would render, with old numbers. `beef_cutout`
+stringifies both sides; `cash_trade` does not, and should.
+
+**`fetch_lmr` was deleted in the same pass**, dead since dcf9b6e (2026-10-01)
+replaced it with `fetch_thin_sections` + a paged `fetch_cut_sections`. The
+comment above "Individual cuts" still claimed that view "costs no extra
+request and no extra second" because the data "was already being downloaded
+and thrown away" — true of `fetch_lmr`'s `allSections` pull, false since, and
+the deep pull is ~13k rows and ~7 s **per calendar year**.
+
 ## The SCHEMA cache guard has TWO halves and I got both wrong
 
 `st.cache_data` keys on the decorated function and never on the modules it

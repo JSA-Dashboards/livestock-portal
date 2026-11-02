@@ -267,7 +267,12 @@ def ordinal(p):
 
 # -- data --------------------------------------------------------------------
 
-@st.cache_data(ttl=1800, persist="disk", show_spinner="Reading CFTC positions…")
+# No persist="disk" -- it voids the ttl (Streamlit's own
+# local_disk_cache_storage.py: "has a TTL that will be ignored"). This key
+# already varies, because the call site passes cot.data_epoch(), so this one
+# was not frozen -- but the docstring below leans on the ttl three times as
+# the backstop for a late ETL, and none of that was happening.
+@st.cache_data(ttl=1800, show_spinner="Reading CFTC positions…")
 def load_cot(schema: int = cot.SCHEMA, epoch=None) -> dict:
     """
     The whole page's data, in two queries.
