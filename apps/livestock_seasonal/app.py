@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 import portal_view  # noqa: E402
 
+import snapshot_buttons  # noqa: E402
 from massive_api import MassiveApiError, get_futures_curve, get_settlement_histories
 
 # st.set_page_config removed -- the Livestock Portal shell (Home.py) makes the
@@ -330,16 +331,11 @@ def plotly_config(filename: str) -> dict:
     }
 
 
-@st.cache_data(show_spinner=False, max_entries=32)
-def figure_png(fig_json: str) -> bytes | None:
-    try:
-        import plotly.io as pio
-        return pio.from_json(fig_json).to_image(format="png", width=1400, height=700, scale=2)
-    except Exception:
-        return None
-
-
-def export_row(frame: pd.DataFrame, filename: str, key: str, fig=None):
+def export_row(frame: pd.DataFrame, filename: str, key: str, chart_key: str | None = None,
+               table: dict | None = None):
+    """Copy and PNG buttons that picture what is above, then a CSV of `frame`. Pass `chart_key`, the
+    key the chart was drawn under, or `table`, a dict with the on-screen pandas "styler" and an
+    optional "title". With neither the frame itself is pictured as a table."""
     # NOT DRAWN FOR A CLIENT -- standing rule 2, "the download panels". Gated
     # HERE rather than at the eleven call sites, which is the whole reason this
     # is one line: a twelfth call site added later is covered by construction,
@@ -351,29 +347,21 @@ def export_row(frame: pd.DataFrame, filename: str, key: str, fig=None):
     # beef_trade:1081, us_cow_herd:1018).
     #
     # An early return, not an `if` around the body: nothing here is computed
-    # for a client either, so no frame is serialised to TSV and no PNG is
-    # rendered on a page nobody can download from.
+    # for a client either, so no frame is serialised and no snapshot is
+    # drawn on a page nobody can download from.
     if portal_view.is_client():
         return
     row = st.container(horizontal=True, vertical_alignment="center")
     with row:
-        tsv = frame.to_csv(sep="\t", index=False)
-        with st.popover("Copy", width=90):
-            st.caption("Tab-separated — use the copy icon, then paste into Excel.")
-            st.code(tsv, language=None, height=260)
+        if chart_key:
+            snapshot_buttons.chart_buttons(chart_key, filename, key)
+        else:
+            table = table or {}
+            styler = table.get("styler")
+            snapshot_buttons.table_buttons(
+                frame.style if styler is None else styler, filename, key, title=table.get("title", ""))
         st.download_button("CSV", frame.to_csv(index=False).encode(), f"{filename}.csv",
                            "text/csv", key=f"csv_{key}", width=90)
-        if fig is not None:
-            if st.button("PNG", key=f"png_btn_{key}", width=90,
-                         help="Render this chart as a PNG for download."):
-                st.session_state[f"png_ready_{key}"] = True
-            if st.session_state.get(f"png_ready_{key}"):
-                data = figure_png(fig.to_json())
-                if data:
-                    st.download_button("Save PNG", data, f"{filename}.png", "image/png",
-                                       key=f"png_dl_{key}", width=120)
-                else:
-                    st.caption("PNG export unavailable — use the camera icon on the chart.")
 
 
 def _add_vline(fig, x, text, color):
@@ -489,7 +477,7 @@ def render_seasonal_futures(commodity: dict, api_key: str, as_of: date):
             st.plotly_chart(fig, width="stretch", key=f"fut_hist_{key}",
                             config=plotly_config(f"{key}_{ticker}_history"))
             export_row(shown.rename("price").reset_index().rename(columns={"index": "date"}),
-                       f"{key}_{ticker}_history", key=f"futhist_{key}")
+                       f"{key}_{ticker}_history", key=f"futhist_{key}", chart_key=f"fut_hist_{key}")
             if report_dates:
                 st.caption(report_legend_caption(code))
 
@@ -557,7 +545,7 @@ def render_seasonal_futures(commodity: dict, api_key: str, as_of: date):
         st.plotly_chart(fig, width="stretch", key=f"fut_seas_{key}",
                         config=plotly_config(f"{key}_{ticker}_seasonal"))
         export_row(pd.DataFrame(by_dte).sort_index().reset_index(),
-                   f"{key}_{ticker}_seasonal", key=f"futseas_{key}")
+                   f"{key}_{ticker}_seasonal", key=f"futseas_{key}", chart_key=f"fut_seas_{key}")
         note = (
             f"{len(by_dte)} contract year{'s' if len(by_dte) != 1 else ''} overlaid · x = 0 is "
             f"{label}'s expiration, so every year lines up at the same point in its life."
@@ -642,7 +630,7 @@ def render_seasonal_spread(commodity: dict, api_key: str, as_of: date):
             st.plotly_chart(fig, width="stretch", key=f"sp_hist_{key}",
                             config=plotly_config(f"{key}_{near}_{far}_history"))
             export_row(shown.rename("spread").reset_index().rename(columns={"index": "date"}),
-                       f"{key}_{near}_{far}_history", key=f"sphist_{key}")
+                       f"{key}_{near}_{far}_history", key=f"sphist_{key}", chart_key=f"sp_hist_{key}")
             if report_dates:
                 st.caption(report_legend_caption(code))
 
@@ -704,7 +692,7 @@ def render_seasonal_spread(commodity: dict, api_key: str, as_of: date):
         st.plotly_chart(fig, width="stretch", key=f"sp_seas_{key}",
                         config=plotly_config(f"{key}_{near}_{far}_seasonal"))
         export_row(pd.DataFrame(by_dte).sort_index().reset_index(),
-                   f"{key}_{near}_{far}_seasonal", key=f"spseas_{key}")
+                   f"{key}_{near}_{far}_seasonal", key=f"spseas_{key}", chart_key=f"sp_seas_{key}")
         note = (
             f"{len(by_dte)} contract year{'s' if len(by_dte) != 1 else ''} overlaid · x = 0 is "
             f"the near leg's expiration, so every year lines up at the same point in its life."
@@ -765,7 +753,8 @@ def render_spread_matrix(commodity: dict, api_key: str, as_of: date):
     with st.container(key=f"tablewrap_mx_{key}"):
         st.dataframe(styler, hide_index=True, width="stretch",
                      height=min(35 * (len(display) + 1) + 3, 500))
-    export_row(display, f"spread_matrix_{key}", key=f"mx_{key}")
+    export_row(display, f"spread_matrix_{key}", key=f"mx_{key}",
+               table={"styler": styler, "title": f"{commodity['label']} spread matrix, near − far ({unit})"})
 
 
 CONTINUOUS_FREQ = {"Daily": None, "Weekly": "W-FRI", "Monthly": "ME"}
@@ -817,7 +806,7 @@ def render_continuous_chart(commodity: dict, api_key: str, as_of: date):
     st.plotly_chart(fig, width="stretch", key=f"cont_chart_{key}",
                     config=plotly_config(f"{key}_continuous_{freq_label}"))
     export_row(series.rename("price").reset_index().rename(columns={"index": "date"}),
-               f"{key}_continuous_{freq_label}", key=f"cont_{key}")
+               f"{key}_continuous_{freq_label}", key=f"cont_{key}", chart_key=f"cont_chart_{key}")
 
     st.divider()
     st.caption(f"**{commodity['label']}** — historical highs & lows by calendar month (nearby continuous)")
@@ -831,7 +820,9 @@ def render_continuous_chart(commodity: dict, api_key: str, as_of: date):
     display_year["Low price"] = display_year["Low price"].map(lambda v: f"{v:.3f}")
     display_year = display_year[["Year", "High date", "High price", "Low date", "Low price"]]
     st.dataframe(display_year, hide_index=True, width="stretch")
-    export_row(display_year, f"{key}_yearly_highlow", key=f"yrhl_{key}")
+    export_row(display_year, f"{key}_yearly_highlow", key=f"yrhl_{key}",
+               table={"styler": display_year.style,
+                      "title": f"{commodity['label']}: yearly highs and lows (nearby continuous)"})
 
     if not summary.empty:
         note = f"Frequency across {len(per_year) - len(excluded)} complete calendar year"
@@ -840,7 +831,9 @@ def render_continuous_chart(commodity: dict, api_key: str, as_of: date):
             note += f" (excludes partial year{'s' if len(excluded) != 1 else ''} {', '.join(map(str, excluded))})"
         st.caption(note + ".")
         st.dataframe(summary, hide_index=True, width="stretch")
-        export_row(summary, f"{key}_month_frequency", key=f"mf_{key}")
+        export_row(summary, f"{key}_month_frequency", key=f"mf_{key}",
+                   table={"styler": summary.style,
+                          "title": f"{commodity['label']}: how often the high and low fall in each month"})
     else:
         st.info("Not enough complete calendar years yet to compute a month-frequency summary.")
 
@@ -862,7 +855,9 @@ def render_continuous_chart(commodity: dict, api_key: str, as_of: date):
     else:
         calendar = pd.DataFrame(rows).sort_values("Date", ascending=False).reset_index(drop=True)
         st.dataframe(calendar, hide_index=True, width="stretch", height=min(35 * (len(calendar) + 1) + 3, 400))
-        export_row(calendar, f"{key}_report_calendar", key=f"rptcal_{key}")
+        export_row(calendar, f"{key}_report_calendar", key=f"rptcal_{key}",
+                   table={"styler": calendar.style,
+                          "title": f"{commodity['label']}: USDA report release calendar"})
 
 
 def _init_builder_legs():
@@ -1021,7 +1016,7 @@ def render_spread_builder(api_key: str, as_of: date):
             st.plotly_chart(fig, width="stretch", key="sb_hist",
                             config=plotly_config("spread_builder_history"))
             export_row(shown.rename("spread").reset_index().rename(columns={"index": "date"}),
-                       "spread_builder_history", key="sb_hist_exp")
+                       "spread_builder_history", key="sb_hist_exp", chart_key="sb_hist")
             if report_dates:
                 st.caption("Dotted vertical lines mark USDA report release dates for the commodities "
                           "in this spread: " + ", ".join(
@@ -1091,7 +1086,7 @@ def render_spread_builder(api_key: str, as_of: date):
         st.plotly_chart(fig, width="stretch", key="sb_seas",
                         config=plotly_config("spread_builder_seasonal"))
         export_row(pd.DataFrame(by_dte).sort_index().reset_index(),
-                   "spread_builder_seasonal", key="sb_seas_exp")
+                   "spread_builder_seasonal", key="sb_seas_exp", chart_key="sb_seas")
         note = (
             f"{len(by_dte)} year{'s' if len(by_dte) != 1 else ''} overlaid · x = 0 is "
             f"leg 1's expiration, so every year lines up at the same point in its life."
