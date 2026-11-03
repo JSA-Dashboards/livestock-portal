@@ -7,6 +7,7 @@ asserting only that the right one is right.
 from __future__ import annotations
 
 import ast
+import re
 import json
 import sys
 from pathlib import Path
@@ -331,6 +332,53 @@ def test_a_filter_that_matches_nothing_raises_instead_of_returning_empty():
 
 def test_the_page_says_so_when_the_turnover_panel_is_skipped():
     assert "the turnover panel below the chart is not shown" in PAGE_SRC
+
+
+# ── the comparison names its own rule ────────────────────────────────────────
+
+def _render_src():
+    fn = next(n for n in ast.walk(PAGE_AST)
+              if isinstance(n, ast.FunctionDef) and n.name == "_render_cattle_equivalent")
+    return ast.get_source_segment(PAGE_SRC, fn) or ""
+
+
+def test_the_comparison_rule_is_stated_above_the_tiles():
+    """"To date" reads as year-over-year; this baseline is a choice.
+
+    Read off the AST rather than the raw text: an f-string split across
+    adjacent literals is one node to Python and invisible to a grep, which is
+    the mistake this repo records for the placement-records caveat.
+    """
+    # PAGE_AST, not a re-parse of the extracted function: ast.get_source_segment
+    # resolves node offsets against the text that was parsed, so re-parsing a
+    # slice and then reading segments out of the whole file returns garbage.
+    captions = [seg for n in ast.walk(PAGE_AST)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "caption"
+                for seg in [ast.get_source_segment(PAGE_SRC, n) or ""]
+                if "How this comparison works" in seg]
+    assert len(captions) == 1, "the comparison rule is stated once, or not at all"
+    caption = captions[0]
+    # it must name BOTH sides and say the weeks are matched
+    assert "{current}" in caption and "{baseline}" in caption
+    assert "{thru}" in caption and "{base_thru}" in caption
+    assert "same number of" in caption and "weeks" in caption
+    # and correct the year-over-year assumption outright
+    assert "not automatically" in caption and "last year" in caption
+
+
+def test_the_rule_is_stated_before_the_first_tile():
+    """Below the tiles it explains a number the reader has already misread."""
+    src = _render_src()
+    assert src.index("How this comparison works") < src.index("_eq_tile(")
+
+
+def test_the_caption_interpolates_the_dates_rather_than_typing_them():
+    """A typed date goes stale the week after it is written."""
+    src = _render_src()
+    i = src.index("How this comparison works")
+    block = src[i:i + 700]
+    assert not re.search(r"\b20\d\d\b", block), "a literal year in the rule caption"
 
 
 # ── no network, and the schema key ───────────────────────────────────────────

@@ -2807,7 +2807,24 @@ def _render_cattle_equivalent():
     note = cmp["baseline_note"]
     base_lbl = f"{baseline}" + (f" ({note})" if note else "")
     thru = now["through"].strftime("%b %d, %Y")
+    base_thru = base["through"].strftime("%b %d, %Y")
     span = f"{now['weeks']} weeks to {thru}"
+
+    # STATED HERE BECAUSE "TO DATE" READS AS YEAR-OVER-YEAR. That is the trade
+    # convention -- a YTD figure is normally against the same point last year --
+    # and this tab's baseline is a CHOICE that opens on 2019, so the tiles were
+    # answering a different question from the one a reader thought they had
+    # asked. Ross read the page and asked exactly that. It sits directly under
+    # the selector rather than in the section header, because the header is
+    # furniture a reader skims past on the way to the numbers.
+    st.caption(
+        f"**How this comparison works:** the first {now['weeks']} weeks of "
+        f"{current}, to {thru}, against the first {now['weeks']} weeks of "
+        f"{baseline}, to {base_thru}. Both sides are cut to the same number of "
+        f"weeks, so it is like for like — carcasses run heavier through winter, "
+        f"and a part year set against a full one would compare calendars rather "
+        f"than cattle. **The baseline is the dropdown above, not automatically "
+        f"last year** — every figure on this tab moves when you change it.")
 
     st.markdown(
         f'<div class="sec-hdr">What the carcass-weight gain is worth in cattle &nbsp;·&nbsp; '
