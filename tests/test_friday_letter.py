@@ -1313,9 +1313,30 @@ def test_a_region_with_no_test_all_week_is_named_on_friday():
 
 
 def test_friday_fetches_the_week_not_the_day():
-    src = (REPO_ROOT / "letter" / "build.py").read_text(encoding="utf-8")
-    friday = src[src.index('if kind == "friday":'):]
-    friday = friday[:friday.index("return ctx")]
+    """
+    THE BRANCH IS CUT OUT BY AST, and it used to be cut by scanning the whole
+    module from the first `if kind == "friday":` to the next "return ctx".
+
+    That passed by accident of span. The first such `if` is in a DIFFERENT
+    function a few hundred lines above gather(), and the slice ran from there
+    to gather's own `return ctx` -- so it happened to contain the branch it
+    meant to check, plus everything in between. Adding a helper that ends
+    `return ctx["change_basis"]` truncated the slice and failed the test on
+    code that was entirely correct (2026-11-03). The node is the thing being
+    asserted about, so take the node.
+    """
+    import ast
+    whole = (REPO_ROOT / "letter" / "build.py").read_text(encoding="utf-8")
+    tree = ast.parse(whole)
+    gather = next(n for n in ast.walk(tree)
+                  if isinstance(n, ast.FunctionDef) and n.name == "gather")
+    # ast.unparse NORMALISES QUOTES to single, so comparing against the
+    # source's own `kind == "friday"` matches nothing and the test fails
+    # claiming the branch is gone. Compare the normalised form.
+    friday = next((ast.get_source_segment(whole, n) for n in ast.walk(gather)
+                   if isinstance(n, ast.If)
+                   and ast.unparse(n.test) == "kind == 'friday'"), None)
+    assert friday, "gather() no longer has a friday branch -- re-point this test"
     assert "fetch_regional_cash_wtd" in friday
     assert "fetch_regional_cash(issue)" not in friday
 
@@ -1433,11 +1454,30 @@ def test_the_basis_comes_from_the_format_not_the_cache():
     data_<slug>_<date>.json stores the basis in force when it was fetched, so
     every file written before 2026-09-24 says "week". A --no-fetch re-render
     would quote week-over-week on a Monday and print [[?]] for it.
+
+    PINNED ON BEHAVIOUR SINCE 2026-11-03, where it used to be two literal
+    source lines. Those lines are gone: a per-issue override arrived and
+    needed ONE resolver rather than three separate derivations, so the rule
+    now lives in build.select_change_basis. The string match failed on
+    correct code -- and, the worse half, would have gone on passing if
+    somebody had left the line in place and stopped calling it.
+
+    The rule itself is unchanged and is what is asserted here: a cached
+    `change_basis` is not read at all. Only `change_basis_choice` is, and no
+    file written before 2026-11-03 has one.
     """
-    build_src = (REPO_ROOT / "letter" / "build.py").read_text(encoding="utf-8")
+    from letter import build
+    for kind, expected in (("tuesday", "day"), ("recap", "day"),
+                           ("am", "day"), ("friday", "week")):
+        stale = {"kind": kind, "change_basis": "week"}   # the pre-09-24 shape
+        assert build.select_change_basis(stale, kind) == expected, (
+            f"a cached week-over-week basis reached a {kind} letter")
+
+    # And the page takes the resolved value rather than deriving its own --
+    # two derivations is how the draft and the letter came to disagree.
     page_src = (REPO_ROOT / "apps" / "weekly_reports" / "app.py").read_text(encoding="utf-8")
-    assert 'ctx["change_basis"] = config.change_basis_for(kind)' in build_src
-    assert 'ctx_for_render["change_basis"] = config.change_basis_for(kind)' in page_src
+    assert "change_basis_for(" not in page_src, (
+        "the authoring page derives the basis itself again")
 
 
 # -- the CFTC block's label must follow the sign ------------------------------

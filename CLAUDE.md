@@ -6330,6 +6330,94 @@ below for the two conditions that mark it.
 re-render would otherwise quote week-over-week on a Monday and mark it `[[?]]`.
 Both `build.main` and the page re-derive it.
 
+### ...and one letter covering two days can override that — 2026-11-03
+
+Ross, writing Monday's full format on a Tuesday having not sent Monday's:
+*"i am wanting to use Monday's format today since I didn't send an email
+yesterday, but it shows the prices through the close on 11/3 as just today's
+move - not the weekly closes so far."*
+
+`CHANGE_BASIS_BY_KIND` is right for a letter covering one session and wrong
+for one letter covering two. **The gap was not cosmetic that evening**, and
+the direction of it is the thing to notice:
+
+| | session | week to date |
+|---|---|---|
+| Dec live cattle | -1.55 | **-2.80** |
+| Feb live cattle | -2.10 | -2.775 |
+| Nov feeders | -3.90 | **-3.25** |
+| Jan feeders | -4.30 | -3.40 |
+
+Feeders had rallied Monday and broken Tuesday, so the session figure
+**overstated** their week while the live cattle one **understated** theirs.
+Opposite directions, same letter — which is why "it is roughly the same
+number" is not available as an answer.
+
+**`build.select_change_basis(ctx, kind)` IS THE ONE RESOLVER**, called from
+`gather()`, from `main()` and from the page, exactly as `select_technicals`
+is and for the same reason: `hints()` writes the figure block Ross writes
+against and labels each line `(session)` or `(week to date)`, while
+`render.futures_block` prints the matching number into the letter off the
+same key. Two callers resolving it separately is how the draft comes to
+quote a different move from the letter it is the draft for.
+
+**`change_basis_choice` IS A SEPARATE KEY FROM `change_basis`, and that is
+load-bearing.** Every `data_<slug>_<date>.json` ever written stores a
+`change_basis`, and the ones from before 2026-09-24 store `"week"` for every
+format — which is exactly why `main()` used to discard the cached value and
+re-derive from the format. Honouring that old key as an override would
+resurrect the bug on every historical letter. The new key is absent from all
+of them, so absent means "follow the format" and nothing already on disk
+changes behaviour. **The 2026-09-24 decision is untouched**: the format still
+decides, and the override defaults to off on every format.
+
+**IT WAS RESOLVED AFTER `hints()` IN `main()`, AND THAT WAS ALREADY A BUG.**
+The assignment sat nine lines below the `write_template(cpath, hints(ctx,
+kind), kind)` call. On the `--no-fetch` path — the run that makes the emailed
+PDF — `ctx` comes off disk, so a file carrying the pre-09-24 `"week"` gave
+Ross a draft quoting the weekly move while the letter beside it rendered the
+session's. Both honestly computed, neither raising. Latent rather than
+reported, because the files that trigger it are old ones; the override would
+have made it an everyday occurrence.
+
+**THE LETTER ITSELF PRINTS NO LABEL.** `render.futures_block` renders
+`Dec: -2.80 at 218.15` and nothing says which move that is — true of Friday's
+week-over-week letter since it was written, and now true of any letter with
+an override on. The authoring page says which, and names the base date
+(`the move since 2026-10-30's settle`), because "week to date" on a Tuesday
+and on a Friday are different spans. **Whether the client-facing letter
+should say so is open and is Ross's call** — he rejected a parenthesis on the
+FCI line for being "noise or an excuse", so it was not added unasked.
+
+Two source-text guards in `tests/test_friday_letter.py` failed on correct
+code and were re-pointed at behaviour:
+
+- `test_the_basis_comes_from_the_format_not_the_cache` matched the two
+  literal assignment lines. It now feeds a pre-09-24 shaped ctx through the
+  resolver for all four formats. A string match would also have gone on
+  passing if somebody had kept the line and stopped calling it — the
+  `assert "wasde.SCHEMA" in page` failure, again.
+- `test_friday_fetches_the_week_not_the_day` sliced `build.py` from the first
+  `if kind == "friday":` to the next `"return ctx"`. **It was passing by
+  accident of span**: that first `if` is in a different function a few
+  hundred lines above `gather()`, so the slice ran to gather's own return and
+  merely happened to contain the branch it meant to check. A helper ending
+  `return ctx["change_basis"]` truncated it. It takes the `If` node out of
+  `gather()` by AST now — 11 lines instead of several hundred.
+
+**The ordering guard in `tests/test_change_basis.py` is PER SCOPE, and the
+per-file version could not fail.** `build.py` resolves in two places, so
+"the earliest resolver precedes the earliest `hints()`" was satisfied by
+`gather()` however late `main()`'s call sat. Found by putting `main()`'s
+resolution back after `hints()` and watching the suite stay green. It also
+parses to an AST rather than scanning lines, because the comment added to
+`app.py` explains the hazard in prose containing `hints(ctx, kind)` and a
+line scan matched that first.
+
+One more for the next person: **`ast.unparse` normalises quotes to single**,
+so comparing an unparsed test against the source's own `kind == "friday"`
+matches nothing and reads as "the branch is gone".
+
 ### The letter prints itself now
 
 Letterhead, the 50-year watermark and a hairline sage frame are generated, not
