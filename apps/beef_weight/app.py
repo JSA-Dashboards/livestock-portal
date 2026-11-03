@@ -26,6 +26,7 @@ if str(REPO) not in sys.path:
 sys.path.insert(0, str(Path(__file__).parent))
 
 import daily_slaughter
+import fed_equivalent
 import portal_view  # noqa: E402  -- repo root, like wasde; see portal_view.py
 import wasde  # noqa: E402
 
@@ -1385,12 +1386,13 @@ with hdr_r:
 st.divider()
 
 # ── Top-level page tabs ────────────────────────────────────────────────────────
-_page_summary, _page_nass, _page_ams, _page_sat, _page_prod = st.tabs([
+_page_summary, _page_nass, _page_ams, _page_sat, _page_prod, _page_equiv = st.tabs([
     "⭐  Summary",
     "📊  NASS Cattle Weights & Slaughter",
     "🗓️  AMS Weekly Slaughter",
     "📅  Saturday Slaughter",
     "🥩  Beef Production",
+    "🐄  Cattle Equivalent",
 ], on_change="rerun")
 
 
@@ -2660,6 +2662,299 @@ def _render_beef_production():
                 unsafe_allow_html=True)
 
 
+# ── Cattle Equivalent ─────────────────────────────────────────────────────────
+#
+# What the carcass-weight gain is worth in head, which is the one question this
+# portal could not answer: weights are at records while the cattle herd sits at
+# a 75-year low, so how many cattle is the weight standing in for?
+#
+# The arithmetic and every trap in it live in fed_equivalent.py -- the same
+# split as cof_recap, leverage and am_cutout. In BOTH views: it is a market
+# reading, not a workbench.
+
+# The cattle-on-feed ETL caches ONE broad unfiltered pull per series -- no year
+# bounds, no domaincat -- so these params must match apps/cattle_on_feed
+# /app.py::fetch_series VERBATIM. The cache key is a hash of the exact dict, so
+# "tidying" it to look like this page's weekly params returns nothing at all.
+_COF_PARAMS = {
+    "source_desc":    "SURVEY",
+    "sector_desc":    "ANIMALS & PRODUCTS",
+    "group_desc":     "LIVESTOCK",
+    "commodity_desc": "CATTLE",
+}
+_CAP_1000 = "CAPACITY: (1,000 OR MORE HEAD)"
+
+
+def _cof_national(short_desc: str, period: str) -> dict:
+    """National 1,000-plus-head cattle-on-feed figures, year-indexed.
+
+    THE TWO SERIES SPELL THEIR PERIOD DIFFERENTLY and nothing warns you.
+    Marketings carries bare tokens -- `YEAR`, `APR` -- while the inventory
+    carries `FIRST OF JAN`, because one is a flow over a period and the other
+    a stock at an instant. Asking the inventory for `JAN` matches zero rows,
+    and the first version of this did exactly that: no error, no empty chart,
+    the whole explanation panel simply absent from the page. Both spellings
+    are pinned in tests/test_fed_equivalent.py.
+
+    An empty payload is an outage and returns {}. Rows that arrive and then
+    filter down to nothing are a wrong filter, and that raises -- the two look
+    identical on the page and only one of them is anybody's fault.
+    """
+    try:
+        payload = fetch_cached({**_COF_PARAMS, "short_desc": short_desc})
+    except Exception:
+        return {}
+    rows = payload.get("data") if isinstance(payload, dict) else None
+    if not rows:
+        return {}
+    df = pd.DataFrame(rows)
+    for col, want in (("agg_level_desc", "NATIONAL"), ("domaincat_desc", _CAP_1000),
+                      ("reference_period_desc", period)):
+        if col not in df:
+            raise KeyError(f"{short_desc}: no {col} column in the NASS cache")
+        df = df[df[col] == want]
+        if df.empty:
+            raise ValueError(
+                f"{short_desc}: no rows left after {col} == {want!r}. "
+                f"The filter is wrong, not the feed.")
+    df = df.copy()
+    df["Value"] = pd.to_numeric(df["Value"].astype(str).str.replace(",", "", regex=False),
+                                errors="coerce")
+    df = df.dropna(subset=["Value"])
+    df["year"] = df["year"].astype(int)
+    return df.groupby("year")["Value"].max().to_dict()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _fetch_fed_equivalent(schema: int = fed_equivalent.SCHEMA) -> dict:
+    """Marketings and Jan-1 on-feed inventory, both live from the shared cache.
+
+    `schema` keys the cache, and BOTH halves matter: no leading underscore
+    (Streamlit drops underscore-prefixed arguments from the key) and the CALLER
+    must pass it (a default is never hashed).
+
+    Marketings is USDA's own YEAR row rather than twelve months summed -- one
+    published figure beats an identity we would then have to audit.
+
+    The period strings differ between the two series on purpose; see
+    _cof_national. Changing either to match the other returns nothing.
+    """
+    return {
+        "marketings": _cof_national(
+            "CATTLE, ON FEED - SALES FOR SLAUGHTER, MEASURED IN HEAD", "YEAR"),
+        "on_feed": _cof_national("CATTLE, ON FEED - INVENTORY", "FIRST OF JAN"),
+    }
+
+
+def _eq_tile(label: str, value: str, delta: str = "", sub: str = "",
+             accent: str = JSA_GREEN) -> str:
+    return (
+        f'<div style="background:{DM_SURFACE};border:1px solid {DM_BORDER};'
+        f'border-top:3px solid {accent};border-radius:8px;padding:14px 16px">'
+        f'<div style="color:{DM_MUTED};font-size:0.65rem;text-transform:uppercase;'
+        f'letter-spacing:.06em;margin-bottom:6px;line-height:1.35">{label}</div>'
+        f'<div style="color:{DM_TEXT};font-size:1.55rem;font-weight:700;'
+        f'white-space:nowrap;line-height:1.15">{value}</div>'
+        f'{f"<div style=margin-top:6px>{delta}</div>" if delta else ""}'
+        f'<div style="color:{DM_MUTED};font-size:0.7rem;margin-top:8px;'
+        f'line-height:1.4">{sub}</div></div>')
+
+
+def _render_cattle_equivalent():
+    frozen, live_from = fed_equivalent.load_history()
+    weekly = fed_equivalent.fed_weekly(raw)
+    if weekly.empty:
+        st.warning("No steer/heifer carcass weights in the NASS cache for this window.")
+        return
+
+    try:
+        cof = _fetch_fed_equivalent(fed_equivalent.SCHEMA)
+        cof_err = ""
+    except Exception as exc:          # a wrong filter, not an outage
+        cof, cof_err = {"marketings": {}, "on_feed": {}}, str(exc)
+    current = int(weekly["year"].max())
+    try:
+        history = fed_equivalent.annual_history(weekly, frozen, live_from)
+    except ValueError as exc:
+        # The frozen/live seam is broken. Say so rather than drawing a chart
+        # whose shape depends on which source happened to win.
+        st.error(f"Fed history is inconsistent — {exc}")
+        return
+
+    offerable = fed_equivalent.baseline_years(history, live_from, current)
+    if not offerable:
+        st.warning("Not enough live weekly history to set a baseline against.")
+        return
+
+    default = 2019 if 2019 in offerable else offerable[0]
+    baseline = st.selectbox(
+        "Compare today's carcass against", offerable,
+        index=offerable.index(default),
+        format_func=lambda y: (f"{y} — {fed_equivalent.BASELINE_NOTES[y]}"
+                               if y in fed_equivalent.BASELINE_NOTES else str(y)),
+        help="Only years inside the live weekly window can be compared week for "
+             "week. Earlier years carry the chart below, where both sides are "
+             "complete years.",
+    )
+
+    cmp = fed_equivalent.compare(weekly, frozen, live_from, baseline,
+                                 cof["marketings"], cof["on_feed"], current=current)
+    now, base, equiv = cmp["current"], cmp["baseline_like"], cmp["equivalent"]
+    if not (now and base and equiv is not None):
+        st.warning(f"No like-for-like {baseline} weeks to compare {current} against.")
+        return
+
+    note = cmp["baseline_note"]
+    base_lbl = f"{baseline}" + (f" ({note})" if note else "")
+    thru = now["through"].strftime("%b %d, %Y")
+    span = f"{now['weeks']} weeks to {thru}"
+
+    st.markdown(
+        f'<div class="sec-hdr">What the carcass-weight gain is worth in cattle &nbsp;·&nbsp; '
+        f'<span style="color:{DM_MUTED};font-size:0.65rem;font-weight:400">'
+        f'{current} against {base_lbl}, {span}</span></div>', unsafe_allow_html=True)
+
+    d_wt = now["fed_carcass_lb"] - base["fed_carcass_lb"]
+    d_hd = now["fed_head"] / base["fed_head"] - 1
+    share = fed_equivalent.offset_share(equiv, now["fed_head"], base["fed_head"])
+    up, dn = COL_POS, COL_NEG
+
+    def _d(txt, good):
+        return (f'<span style="color:{up if good else dn};font-size:0.85rem;'
+                f'font-weight:600">{txt}</span>')
+
+    # ONE CSS GRID, NOT st.columns. The four feet wrap to different line counts,
+    # and as columns the row renders ragged -- the defect this repo records for
+    # the daily cash tiles, which py_compile, the suite and get_page_text all
+    # pass. Grid items stretch to their row by default. st.html also skips the
+    # markdown parser, where a pair of dollar signs becomes inline LaTeX.
+    st.html(
+        '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;'
+        'align-items:stretch;margin-bottom:6px">'
+        + _eq_tile(
+            f"Head the weight gain stands in for, {current} to date",
+            f"+{equiv:,.0f}",
+            _d(f"{cmp['equivalent_pct']:+.1f}% on top of the kill", equiv > 0),
+            f"{now['fed_head']:,.0f} fed cattle killed carry the beef of "
+            f"{now['fed_head'] + equiv:,.0f} at {base_lbl} carcass weights",
+            accent="#c98a56")
+        + _eq_tile(
+            f"Fed carcass weight, {current} to date",
+            f"{now['fed_carcass_lb']:,.1f} lb",
+            _d(f"{d_wt:+.1f} lb vs {baseline}", d_wt > 0),
+            f"steers and heifers, head-weighted · {base_lbl} ran "
+            f"{base['fed_carcass_lb']:,.1f} lb over the same {now['weeks']} weeks")
+        + _eq_tile(
+            f"Fed cattle killed, {current} to date",
+            f"{now['fed_head'] / 1e6:,.2f}M head",
+            _d(f"{d_hd * 100:+.1f}% vs {baseline}", d_hd > 0),
+            f"{base_lbl} killed {base['fed_head'] / 1e6:,.2f}M over the same "
+            f"{now['weeks']} weeks")
+        + _eq_tile(
+            f"Share of the cattle lost since {baseline} the weight gives back",
+            f"{share:.0f}%" if share is not None else "—",
+            "",
+            ((f"{base['fed_head'] - now['fed_head']:,.0f} fewer head than {baseline} "
+              f"over the same {now['weeks']} weeks; the heavier carcass carries back "
+              f"{equiv:,.0f} of them"
+              + ("" if share is None or share <= 100 else
+                 " — more than all of them, so this year makes MORE fed beef than "
+                 f"{baseline} on fewer cattle"))
+             if share is not None else
+             f"the kill is not smaller than {baseline}, so there is nothing to give back"))
+        + '</div>')
+
+    st.caption(
+        "Carcass (dressed) basis throughout, and that is not the sidebar's choice "
+        "to make — a head-equivalent is a statement about beef produced, and NASS "
+        "publishes no live-weight series for steers or heifers at all. "
+        "**Fed means steers and heifers**: cows and bulls are excluded, so this "
+        f"weight runs above the all-cattle figure on the other tabs.")
+
+    # ── the long view ────────────────────────────────────────────────────────
+    by_year = {y: v for y, v in cmp["by_year"].items() if v["equivalent"] is not None}
+    if by_year:
+        lo, hi = min(by_year), max(by_year)
+        st.markdown(
+            f'<div class="sec-hdr" style="margin-top:22px">Head-equivalents by year, '
+            f'against {base_lbl} &nbsp;·&nbsp; <span style="color:{DM_MUTED};'
+            f'font-size:0.65rem;font-weight:400">complete years only, {lo}–{hi}</span>'
+            f'</div>', unsafe_allow_html=True)
+
+        years = sorted(by_year)
+        vals = [by_year[y]["equivalent"] / 1e6 for y in years]
+        fig = go.Figure(go.Bar(
+            x=[str(y) for y in years], y=vals,
+            marker_color=[JSA_GREEN_LT if v >= 0 else "#c98a56" for v in vals],
+            customdata=[[by_year[y]["fed_carcass_lb"], by_year[y]["fed_head"] / 1e6]
+                        for y in years],
+            hovertemplate=("%{x}: %{y:+,.2f}M head-equivalents<br>"
+                           "fed carcass %{customdata[0]:,.1f} lb<br>"
+                           "%{customdata[1]:,.2f}M fed head<extra></extra>"),
+        ))
+        fig.add_hline(y=0, line=dict(color=DM_MUTED, width=1))
+        _apply(fig, f"Head the weight gain stands in for, vs {baseline}", 420,
+               "Million head-equivalents")
+        # LOAD-BEARING. Plotly type-sniffs the axis and "1996".."2025" are all
+        # numeric strings, so without this it builds a LINEAR axis -- the trap
+        # beef_trade.annual_figure records, where a bar was never drawn at all.
+        fig.update_xaxes(type="category")
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption(
+            f"The part year above is deliberately not on this chart: a "
+            f"{now['weeks']}-week bar beside twelve-month bars is a true number "
+            f"telling a false story. Years before {baseline} sit below zero "
+            f"because cattle were lighter then.")
+
+    # ── why the weight is there ──────────────────────────────────────────────
+    rows = [(y, v) for y, v in sorted(by_year.items())
+            if v["turnover"] and v["per_marketed_head"]]
+    if len(rows) < 2:
+        # SAY SO RATHER THAN RENDERING NOTHING. A panel that disappears
+        # without explaining itself is how a wrong reference-period string
+        # sat here unnoticed with a green suite -- the page simply ended
+        # after the chart and looked finished.
+        st.info("Feedlot marketings and on-feed inventory are unavailable, so "
+                "the turnover panel below the chart is not shown."
+                + (f" ({cof_err})" if cof_err else ""))
+    else:
+        st.markdown(
+            f'<div class="sec-hdr" style="margin-top:22px">Where the extra pounds '
+            f'come from &nbsp;·&nbsp; <span style="color:{DM_MUTED};font-size:0.65rem;'
+            f'font-weight:400">days on feed, read through the feedlot</span></div>',
+            unsafe_allow_html=True)
+        pick = [rows[0]] + [r for r in rows if r[0] in (2015, 2019, 2022)] + [rows[-1]]
+        seen, show = set(), []
+        for y, v in pick:
+            if y not in seen:
+                seen.add(y)
+                show.append((y, v))
+        body = "".join(
+            f'<tr><td>{y}</td><td style="text-align:right">{v["fed_carcass_lb"]:,.0f}</td>'
+            f'<td style="text-align:right">{v["turnover"]:.2f}</td>'
+            f'<td style="text-align:right">{v["per_marketed_head"]:,.0f}</td></tr>'
+            for y, v in show)
+        st.html(
+            f'<table class="sum-table" style="max-width:640px"><thead><tr>'
+            f'<th>Year</th><th style="text-align:right">Fed carcass, lb</th>'
+            f'<th style="text-align:right">Feedlot turns per year</th>'
+            f'<th style="text-align:right">Fed beef per head marketed, lb</th>'
+            f'</tr></thead><tbody>{body}</tbody></table>')
+        first, last = show[0], show[-1]
+        d_turn = last[1]["turnover"] / first[1]["turnover"] - 1
+        st.caption(
+            f"Turnover has run {d_turn * 100:+.1f}% since {first[0]} while the fed "
+            f"carcass gained {last[1]['fed_carcass_lb'] - first[1]['fed_carcass_lb']:,.0f} lb. "
+            "Those are one fact seen twice — cattle standing longer come out heavier "
+            "— which is why **cattle on feed is not the denominator here**. Dividing "
+            "beef by the on-feed inventory multiplies turnover by weight, the two "
+            "cancel, and a decade of carcass gain prints as a flat line. Marketings "
+            "is a flow, so each head is counted once. Note the last column is a "
+            "ratio, not a carcass weight: it counts beef from every federally "
+            "inspected steer and heifer against marketings from 1,000-head-plus "
+            "feedlots only, so it sits above the carcass figure beside it.")
+
+
 # ── Render pages ──────────────────────────────────────────────────────────────
 
 with _page_summary:
@@ -2681,6 +2976,12 @@ with _page_sat:
 with _page_prod:
     if _page_prod.open:
         _render_beef_production()
+
+with _page_equiv:
+    # `.open` and not portal_view.shown(): this tab set is lazy
+    # (on_change="rerun"), and the body costs a Snowflake fetch.
+    if _page_equiv.open:
+        _render_cattle_equivalent()
 
 # ── Disclaimer Footer ──────────────────────────────────────────────────────────
 _yr = datetime.now().year

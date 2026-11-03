@@ -5710,6 +5710,151 @@ looks like a slightly different market. `tests/test_daily_slaughter.py` pins
 all of it.
 
 
+## The Cattle Equivalent tab
+
+Added 2026-11-03, after Ross: *"with carcass weights at record high levels- is
+there a way to track about how many more cattle this equates to? trying to look
+through the lenses of the us cow herd being at 75 year lows- but with weights
+being record large, we are able to produce more beef with less cattle- but how
+do you look at the math of this?"* Sixth tab on Cattle Weights. Arithmetic in
+`apps/beef_weight/fed_equivalent.py`, layout in `app.py` — the same split as
+`cof_recap`, `leverage` and `am_cutout`. **In both views**: a market reading,
+not a workbench.
+
+    head-equivalents = fed head x (carcass weight / baseline carcass - 1)
+
+2026 through week 42: 17.83M fed head at **944.2 lb** carry the beef of
+**19.87M** at 2019's 847.6 lb — **+2,033,043 head**, which gives back **63%**
+of the 3.22M head the kill has lost since 2019.
+
+### THE DENOMINATOR IS FED MARKETINGS, AND ON-FEED INVENTORY CANNOT BE ONE
+
+Ross's correction, and it was right as far as it went: *"it's not necessarily
+beef cows that we need to compare to. it's the all cattle & calves on feed
+which is the number that drives beef production."* The cow herd is breeding
+stock two years upstream of the kill. But **cattle on feed does not work
+either, and it fails in the one way nothing reports**:
+
+    beef / on-feed inventory  =  (marketings / on-feed)  x  (beef / marketings)
+                                  turnover                   weight
+
+2015 → 2025: turnover **−6.5%**, weight **+5.2%**, net **−1.6%**. On-feed is a
+STOCK and it is inflated by the very thing that makes a carcass heavy — an
+animal standing three more weeks is counted three more weeks AND comes out
+heavier. Dividing beef by it subtracts the effect the tab exists to measure and
+prints a flat line across a decade that gained 54 lb of carcass. A test asserts
+the cancellation and asserts the module never divides beef by an inventory.
+
+The symptom is on the page: on-feed (1,000+) is **13.29% of all cattle, 3rd
+highest of 32 years**, while all cattle sit at a 75-year low. On-feed therefore
+earns a place in the explanation panel and **never under a division line**.
+
+**The premise checks out, but name the series.** 86.16M all cattle on Jan 1 is
+the smallest since **1951 — 75 years exactly**. Beef cows at 27.61M is the
+smallest since **1961**, 65 years. Both true, different series, and the
+75-year figure is the all-cattle one.
+
+### CARCASS BASIS, AND NASS SETTLES IT RATHER THAN THE SIDEBAR
+
+A head-equivalent is a statement about beef produced, so it must be a carcass
+figure. It is also not a choice: **NASS publishes no live-weight series for
+steers or heifers at all** — only `GE 500 LBS` and `CALVES` carry
+`LB / HEAD, LIVE BASIS`. The page's Live/Dressed toggle does not reach this
+tab and the caption says so, because silently ignoring a sidebar control reads
+as a bug.
+
+**Fed means steers and heifers, never `GE 500 LBS`.** The all-cattle class
+folds in cows at ~658 lb, so it runs ~45 lb under the fed carcass and moves
+with the cull mix rather than the feeding. The two classes are head-weighted
+together: steers outnumber heifers about 3:2 at an 80-plus pound heavier
+carcass, so an unweighted mean of the two class figures runs ~15 lb light.
+
+**Mix is not the story, which was checked before any of this was built.** Of
+the +49.1 lb all-class move 2015→2025, mix is **−1.4 lb** and within-class is
+**+50.5** — steers +63, heifers +53, even cow carcasses +14.
+
+### THE OFFSET TILE DIVIDED TWO PERCENTAGES AND SHIPPED AT 75%
+
+"Share of the cattle lost the weight gives back" was
+`(+11.4% a head) / (−15.3% head)` = **75%**. The answer is **63%**. The two
+percentages have different bases — one is per head, one is of the kill — and
+both land in the sixties-to-seventies, so neither looks wrong.
+
+`offset_share()` is **head-equivalents ÷ head lost**, which is exact: multiply
+both sides by the baseline carcass and it is beef-added over beef-forgone, off
+one weight. **Not capped at 100%** — over 100 means beef is HIGHER than the
+baseline on fewer cattle, which is the whole question, so clipping it would
+hide the headline result on exactly the years that have one.
+
+Found by reading the rendered tile. `py_compile` and 2,051 tests passed it.
+
+### THE TWO CATTLE-ON-FEED SERIES SPELL THEIR PERIOD DIFFERENTLY
+
+Marketings carries bare tokens (`YEAR`, `APR`); the inventory carries
+**`FIRST OF JAN`** — one is a flow over a period, the other a stock at an
+instant. Asking the inventory for `JAN` matches zero rows, and the first
+version did exactly that: **no error, no empty chart, the entire turnover panel
+simply absent**, with the page ending after the chart looking finished. Both
+spellings are pinned by AST.
+
+Two things changed because of it. `_cof_national` now **raises when rows arrive
+and then filter down to nothing** — an outage and a wrong filter look identical
+on the page and only one is anybody's fault — and the panel **says when it is
+skipped** instead of rendering nothing.
+
+Its params must match `apps/cattle_on_feed/app.py::fetch_series` VERBATIM: that
+ETL caches one broad unfiltered pull per series, and the cache key is a hash of
+the exact dict, so tidying it to look like this page's weekly params returns
+nothing at all.
+
+### TWO SOURCES, ONE PER YEAR, AND THE SEAM IS ASSERTED
+
+The shared NASS cache holds this page's weekly slaughter for eight years only
+(`LOAD_YEARS` is `current_year - 7`), so baselines older than that have
+nowhere to come from. `data/fed_equivalent.json` freezes **1996–2018** —
+complete years, which never move again — built by
+`scripts/build_fed_equivalent.py` from the **keyless** QuickStats bulk dump.
+Same shape as `southeast_legacy.json`.
+
+**Fed marketings is deliberately NOT frozen.** The cattle-on-feed ETL caches it
+unfiltered and in full, 1995 to date, so it is read live for every year. A
+frozen copy would be a second number for one quantity.
+
+**The overlap guard checks the INPUTS, not the two filtered halves.** Slicing
+each side at `live_from` and then testing for an intersection is a guard that
+can never fire — the slices are disjoint by construction — so it would sit
+there looking like protection while the real misconfigurations went through: a
+JSON rebuilt with a different `LIVE_FROM`, or the ETL window widening backwards
+under a file nobody regenerated. Both now raise. The first version had the
+unreachable form and a test caught it by failing to trigger it.
+
+**`check_years` in that JSON is for tests alone and the page must never read
+it.** The frozen history stops exactly where the live window begins, so there
+is no overlap anywhere to check the two sources against each other; that block
+is NASS's own annual figure for the live years, and a test asserts the page
+does not touch it.
+
+### Baselines are live-window only, and the chart is where the old years live
+
+Carcasses are seasonal, so 42 weeks of this year against a full year of 2015 is
+a comparison of calendars — worth about 6 lb here, ~7% of a headline
+head-equivalent. `baseline_years()` therefore offers **2019–2025 only**, where
+`ytd(weeks=)` can truncate both sides to the same week count. The frozen years
+are not wasted: they carry the annual chart, where both sides are complete
+years. The part year is kept off that chart entirely.
+
+`xaxis type="category"` is load-bearing — "1996".."2025" are numeric strings
+and Plotly would build a linear axis, the trap `beef_trade.annual_figure`
+records. Verified in a browser: 30 bars for 30 categories.
+
+**Measured at 1440 and 1280**: four tiles level (181px / 197px), no value
+wrapping, no overflow, zero `.katex` spans, zero stranded `**`.
+
+`fed_equivalent.SCHEMA` exists because the cache serves shape, not freshness —
+the `leverage.SCHEMA` trap — and is passed at the call site, because a default
+is never hashed.
+
+
 ## The daily letter generator (`letter/`)
 
 `python -m letter.build [--session am|pm] [--day monday..friday] [--kind ...]
