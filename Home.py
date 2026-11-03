@@ -137,7 +137,7 @@ DASHBOARDS = [
     # Beside Seasonal rather than at the end of the list: the two futures-market
     # pages belong together, and the grid is 4/4/4/2 at fourteen either way.
     {"title": "Commitment of Traders", "page": "apps/cot_report/app.py", "url_path": "commitment-of-traders",
-     "desc": "Managed money net futures position in Live Cattle and Feeder Cattle — CFTC's weekly Disaggregated report, with twenty years of context."},
+     "desc": "Managed money net futures position in live cattle, feeder cattle, hogs, corn, soybeans and the three wheat classes — CFTC's weekly Disaggregated report, each market and the eight combined."},
     {"title": "Cash Cattle Trade", "page": "apps/cash_trade/app.py", "url_path": "cash-trade",
      "desc": "Combined Steer/Heifer FOB & Dressed prices, plus national negotiated cash trade volume."},
     {"title": "Beef Cutout", "page": "apps/beef_cutout/app.py", "url_path": "beef-cutout",

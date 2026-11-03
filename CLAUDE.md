@@ -4755,12 +4755,194 @@ a basis this page neither audits nor leads with.
   in four batches six minutes apart, so its lag to `REPORT_DATE` runs 9 to 7,422
   days and means nothing. Nothing on the page reads it.
 
+### Eight markets and a combined total — added 2026-11-03
+
+Ross: *"can we add a hogs, corn, bean, and wheat toggle on this dashboard, and
+then a total managed money AG position showing their combined positions across
+all ag products?"*, then, narrowing it an hour later: *"lets only show live
+cattle, feeder, hogs, corn, soybeans, wheat classes for the combined ag
+length."*
+
+`cot_positions.BASKET` is those eight — live cattle, feeder cattle, lean hogs,
+corn, soybeans and **all three wheat classes**. A toggle (`st.pills`, multi)
+picks which get hero tiles and detail tabs; a ninth tab sums the eight.
+
+**THE TOGGLE OPENS ON THE TWO CATTLE MARKETS, so the page a reader meets is the
+page that was here before it.** Everything else is opt-in, and nothing is
+remembered across sessions.
+
+**THE COMBINED DOES NOT FOLLOW THE TOGGLE.** Select two markets or eight and
+the total is identical. A "total" that changed meaning with the view would be
+uninterpretable the moment anybody screenshotted it — and the toggle is the one
+control guaranteed to be in a different state for the next reader.
+
+### IT IS A GRAIN NUMBER, AND THAT IS THE WHOLE RISK OF SHIPPING IT
+
+Weekly change in the combined against weekly change in each member, all 1,063
+adjacent weeks:
+
+| | r | moves the opposite way |
+|---|---|---|
+| Corn | **+0.897** | 16% of weeks |
+| Soybeans | +0.711 | 25% |
+| Wheat SRW | +0.645 | 27% |
+| Wheat HRW | +0.588 | 32% |
+| Wheat HRS | +0.433 | 34% |
+| Lean Hogs | +0.171 | 44% |
+| Live Cattle | +0.118 | 46% |
+| **Feeder Cattle** | **−0.028** | **50%** |
+
+Feeder cattle moves the other way in **half of all weeks** — a coin flip. So
+"managed money cut its ag length" carries no information whatsoever about the
+market this portal exists for.
+
+**Live on the week it shipped**: the total fell **145,446** contracts while
+**both** cattle markets ROSE — live +5,471, feeders +3,284. Corn alone was
+−83,310 and the other six were 106% of the fall. A reader given the headline
+and nothing else would have concluded funds were liquidating cattle in a week
+they bought them.
+
+So the panel **never prints the total without the breakdown**, and
+`cattle_vs_basket()` makes it say so in the open when the cattle moved the
+other way. That sentence is computed, not written down, so it keeps describing
+the market rather than the market of the day it was built.
+
+### Contracts are not a common unit, and the bias has a DIRECTION
+
+The total is a sum of NET CONTRACTS, quoted in contracts, never as exposure,
+money or head. Corn, soybeans and all three wheats are 5,000-bushel contracts;
+live cattle and lean hogs are 40,000 lb and feeder cattle 50,000 lb.
+
+**"A contract is not a common unit" is true and useless on its own** — it does
+not tell a cattle trader whether his market is flattered or buried. It is
+buried: a feeder cattle contract is worth roughly eight times a corn one, so a
+sum counting them equally **understates the cattle**, on a cattle dashboard.
+The panel says which way it runs and gives the share (32.9% of the net total,
+14.9% of the gross positioning on 2026-10-27).
+
+**A notional-dollar version would be the dimensionally sound one and is not
+built**, because it needs a settlement price per market and the portal has no
+source covering both the grains and the cattle — this file records that
+Snowflake holds no CME cattle futures at all and that Massive's cattle series
+has gone dark for a fortnight at a time. A total that silently lost its cattle
+leg would be worse than one honestly labelled in contracts.
+
+`net_pct_oi` is the dimensionless companion and needs no new data: 4.9% on
+2026-10-27. It carries its own weighting, by open interest rather than money,
+so it is shown beside the contract count and not instead of it.
+
+### A WIRE FIGURE WILL NOT MATCH THIS, and the page says so
+
+Researched rather than assumed. Reuters/Karen Braun publishes a combined
+managed-money figure weekly and it is **seven grain and oilseed markets with no
+livestock in it at all**, on **futures AND OPTIONS combined**. Other desks
+publish their own baskets — one runs 20 markets including live cattle and lean
+hogs but **not feeder cattle**. Saxo quotes notional dollars beside the
+contract count.
+
+So: the method (a raw sum of net contracts) is the published convention and is
+defensible. **There is no industry-standard basket and no standard NAME.** That
+is why nothing on the page may say "all ag" or "total ag" — those are claims
+rather than names, and a test greps for them. The tile names its eight members
+instead, and a caption says a wire figure will differ because it is a different
+basket on a different report type.
+
+### Things that look wrong and are not
+
+- **"Share of the positioning" divides by GROSS, not by the total.** The
+  members point both ways, so dividing by the total would give soybeans a 90%
+  share and Chicago wheat a negative one. Dividing by the sum of absolute nets
+  keeps every share positive and summing to 100.
+- **A share over 100% in the week's move is not an error.** When the cattle
+  move against the total, the rest has to move further than the total did to
+  get there — so it exceeds 100 exactly when the disagreement warning fires.
+  The sentence says why, because printed bare it reads as a bug.
+- **No trader count on the basket, and no dash either.** The same fund trades
+  corn and cattle, so summing MM_LONG_TRADERS over eight markets counts it
+  eight times, and CFTC publishes nothing that would de-duplicate. A dash would
+  say "CFTC did not publish it"; the panel says it cannot be summed.
+- **The five categories still sum to zero across the basket**, because each
+  market's five do. So "who is on the other side" works unchanged and
+  `categories_balance()` is a free audit over the whole complex — producers and
+  merchants −916,033 against swap dealers +664,441 and managed money +215,179.
+- **Soybean meal and oil are fetched, shown, and deliberately NOT in the
+  total.** They are what a reader expects to find inside "soybeans", so the
+  across-the-markets table carries an **In the combined total** column rather
+  than leaving somebody to add ten rows and get a number the page never prints.
+- **The reconciliation panel stayed cattle-only** and its heading now NAMES the
+  two markets. It can sit under a set of tiles that excludes them, so a bare
+  "the same week, quoted three ways" would be a claim about whatever the reader
+  had selected.
+
+### The skip rule, and the one thing it must not do silently
+
+**All eight or the week is skipped.** A total over seven markets is a different
+measurement wearing the same label and a chart cannot show which weeks were
+which — the rule `herd.py` already applies to the receipts channels.
+
+**It is pure insurance: all eight report in all 1,064 weeks since 2006-06-13,
+zero incomplete.** CFTC backfilled both the 2018-19 and the 2025 shutdowns.
+Canola and oats were excluded from the basket partly for this — canola starts
+only 2018-07-31 and oats has 148 missing weeks and is routinely a week late.
+
+**The first time it fires the basket will date a Tuesday behind the tiles above
+it**, and two dates on one page with nothing explaining is the staleness
+failure this file keeps recording. The panel compares its own as-of against the
+page's and says so.
+
+### `market_panel` takes an ENTRY now, not a series name
+
+That one change is what gives the combined basket the identical panel rather
+than a second implementation of it. `basket_frame()` builds the basket with a
+MARKET's own column names, so `latest()`, `context()`, `why()`, `decompose()`
+and `series_frame()` all return the same shapes for it — every tile, chart,
+percentile and record works on the basket unchanged.
+
+Ross asked to "keep the format the same". The cheapest way to be sure of that
+is for there to be only one format.
+
+### The tabs are LAZY now, and `.open` and `on_change` must stay together
+
+Eight panels at three plotly figures each is twenty-four charts on every rerun,
+and a rerun is every click of the toggle. So `st.tabs(..., on_change="rerun")`
+and every market body is behind `if tab.open:`.
+
+**`.open` is None on a set that was NOT given `on_change="rerun"`, and None is
+falsy** — so guarding an eager set with it renders empty tabs nobody notices
+until they open one. The two go together or neither. Nothing here depends on a
+hidden sibling executing, unlike the crush pages, so laziness is safe. The
+across-the-markets tab is left eager and unguarded: it is one chart and two
+tables, and guarding it would have meant re-indenting a block full of
+multi-line strings for nothing.
+
+### Verifying this page locally now needs a shim
+
+`Home.py` gates every page on `PORTAL_PASSPHRASE` and **Claude may not type into
+that form**, so the page cannot be reached through the portal shell. The page
+itself carries no gate — it is a market reading, in both views — so a shim that
+calls `set_page_config(layout="wide")` and `runpy.run_path`s the page renders
+exactly what a signed-in reader sees. `layout="wide"` matters for the same
+reason it does on Mexican Feeder Imports: a bare run centres at 736px where
+tile values wrap mid-number.
+
+Nothing new is gated from clients. Fund positioning in corn, beans, hogs and
+wheat is a market reading exactly as the cattle positions are — not a
+workbench, not a competitor comparison, not method furniture. The CSV download
+inside each panel stays staff-only, as it already was.
+
 ### Tabs are allowed here
 
 A hidden Streamlit tab still executes, so a tab is the right shape only when its
-hidden body is cheap. All three tabs read the **same two cached queries**
-`load_cot()` already made, so the second and third cost rendering and no network
-at all. Nothing on this page fetches from inside a tab.
+hidden body is cheap. Every tab reads the **same cached queries** `load_cot()`
+already made, so they cost rendering and no network at all. Nothing on this page
+fetches from inside a tab.
+
+**That stopped being sufficient at eight markets** — see the lazy-tabs note in
+the basket section above. Cheap-per-tab is not the same as cheap in aggregate
+once a toggle can open eight panels of three charts each.
+
+**The header also names the markets now**: the page intro reads "cattle, hog and
+grain futures", and `Home.py`'s tile names all eight rather than the two.
 
 ### The SCHEMA cache guard — it never worked anywhere, and the fix has TWO halves
 

@@ -521,9 +521,23 @@ def test_the_reconciliation_renders_above_the_tabs():
     Trade's outage guard.
     """
     src = _page_source()
-    recon = src.index("The same week, quoted three ways")
-    tabs = src.index("tab_live, tab_feeder, tab_compare = st.tabs")
+    recon = src.index("quoted three ways")
+    tabs = src.index("_tabs = st.tabs(_tab_labels")
     assert recon < tabs
+
+
+def test_the_reconciliation_heading_names_the_two_markets_it_covers():
+    """
+    It stayed cattle-only when the page gained a market toggle, so it can now
+    sit under a set of tiles that does not include either cattle market. A
+    heading reading only "the same week, quoted three ways" would then be a
+    claim about whatever the reader had selected. The standing
+    headline-reads-on-its-own rule, applied to a section header.
+    """
+    src = _page_source()
+    i = src.index("quoted three ways")
+    head = src[max(0, i - 260):i]
+    assert "Live Cattle" in head and "Feeder Cattle" in head
 
 
 def test_the_as_of_line_renders_before_the_headline_figures():
@@ -532,7 +546,11 @@ def test_the_as_of_line_renders_before_the_headline_figures():
     dateline has to be met first.
     """
     src = _page_source()
-    assert src.index('class="asof"') < src.index("hero_cols = st.columns(2)")
+    src_i = src.index('class="asof"')
+    # The heroes are rendered by a loop over the selected markets now, not by a
+    # single hard-coded two-column call.
+    assert src_i < src.index("for _i in range(0, len(shown), 2)")
+    assert src_i < src.index("def hero(series: str)")
 
 
 def test_the_cache_key_argument_is_not_underscore_prefixed():
@@ -622,3 +640,340 @@ def test_the_market_board_passes_its_schema_through_the_thread_pool():
     """
     src = (REPO / "apps" / "market_board" / "loaders.py").read_text(encoding="utf-8")
     assert "ex.submit(f, SCHEMA)" in src
+
+
+# -- the eight-market basket and the combined total ---------------------------
+#
+# Real figures for 2026-10-27 and 2026-10-20, the week the basket shipped. The
+# combined total is +215,179 against a 10-20 reading of +1,053,408 on a wider
+# set, so these are the eight and only the eight.
+
+BASKET_ROWS = [
+    # series,        net,      long,     short,   long_chg, short_chg,      OI
+    ("LIVE_CATTLE",   56573,    77397,    20824,     5660,      189,    288757),
+    ("FEEDER_CATTLE", 14194,    21830,     7636,     3186,      -98,     64999),
+    ("LEAN_HOGS",    -51646,    71391,   123037,    -2100,     2733,    307296),
+    ("CORN",          81113,   249351,   168238,   -31000,    52310,   1859085),
+    ("SOYBEANS",     193781,   226215,    32434,   -20000,     7544,    979414),
+    ("WHEAT_SRW",    -74606,    79627,   154233,   -10000,    12601,    525558),
+    ("WHEAT_HRW",      -517,    50936,    51453,    -4000,     4007,    325051),
+    ("WHEAT_HRS",     -3713,    14981,    18694,    -3900,     4006,     78471),
+]
+# The published week-over-week for each, which must sum to the basket's own.
+BASKET_WOW = {s: lc - sc for s, _n, _l, _sh, lc, sc, _oi in BASKET_ROWS}
+BASKET_NET = sum(r[1] for r in BASKET_ROWS)          # +215,179
+
+
+def basket_frame_fixture(drop=(), week="2026-10-27"):
+    """
+    One week of the eight. `drop` removes members, to exercise the skip rule.
+
+    Category columns are filled so the five nets sum to zero per market the way
+    CFTC's do: producer/merchant carries the whole of the opposite side.
+    """
+    recs = []
+    for s, net, lng, shrt, lc, sc, oi in BASKET_ROWS:
+        if s in drop:
+            continue
+        recs.append(dict(
+            series=s, report_date=week, mm_net=net, mm_long=lng, mm_short=shrt,
+            mm_spread=0, mm_long_chg=lc, mm_short_chg=sc,
+            open_interest=oi, open_interest_chg=0,
+            mm_long_traders=40, mm_short_traders=20, traders_total=200,
+            prod_merc_long=0, prod_merc_short=net, prod_merc_net=-net,
+            swap_long=0, swap_short=0, swap_spread=0, swap_net=0,
+            other_long=0, other_short=0, other_spread=0, other_net=0,
+            nonrept_long=0, nonrept_short=0, nonrept_net=0,
+        ))
+    df = pd.DataFrame(recs)
+    df["report_date"] = pd.to_datetime(df["report_date"])
+    return df
+
+
+def test_the_basket_is_the_eight_markets_that_were_asked_for():
+    """
+    Live cattle, feeder cattle, hogs, corn, soybeans and the wheat CLASSES --
+    plural, all three of them. Pinned by name because the basket is the
+    definition of the headline figure, and a member added or dropped silently
+    changes what the number means with nothing raising.
+    """
+    assert cot.BASKET == (
+        "LIVE_CATTLE", "FEEDER_CATTLE", "LEAN_HOGS",
+        "CORN", "SOYBEANS", "WHEAT_SRW", "WHEAT_HRW", "WHEAT_HRS")
+
+
+def test_all_three_wheat_classes_are_in_it_not_just_chicago():
+    """
+    "Wheat classes" was the ask and the three genuinely disagree -- on
+    2026-10-27 Chicago SRW is 74,606 short while KC HRW is 517 short and
+    Minneapolis HRS 3,713 short. A basket carrying only SRW would be a
+    different number under the same label.
+    """
+    wheats = [s for s in cot.BASKET if s.startswith("WHEAT_")]
+    assert sorted(wheats) == ["WHEAT_HRS", "WHEAT_HRW", "WHEAT_SRW"]
+
+
+def test_the_soy_products_are_fetched_and_deliberately_excluded():
+    """
+    Meal and oil are what a reader expects to find inside "soybeans". They are
+    on the page with their own figures and NOT in the total, so the page has to
+    carry them rather than leave somebody to add them in and get a number it
+    never prints.
+    """
+    assert "SOYBEAN_MEAL" in cot.NEIGHBOURS and "SOYBEAN_OIL" in cot.NEIGHBOURS
+    assert not set(cot.NEIGHBOURS) & set(cot.BASKET)
+
+
+def test_the_combined_is_the_sum_of_its_members():
+    bf = cot.basket_frame(basket_frame_fixture())
+    assert len(bf) == 1
+    assert bf.iloc[0]["mm_net"] == BASKET_NET == 215179
+
+
+def test_the_published_change_columns_sum_too():
+    """
+    The basket's week-over-week is CFTC's own change columns added, not a diff
+    of two sums -- the same choice `latest()` makes for one market, so the
+    combined cannot reach its figure by a different route from the tiles.
+    """
+    bf = cot.basket_frame(basket_frame_fixture())
+    head = cot.latest(bf)
+    assert head["wow"] == sum(BASKET_WOW.values())
+
+
+def test_a_week_missing_any_member_is_skipped_entirely():
+    """
+    A total over seven markets is a different measurement wearing the same
+    label, and a chart cannot show which weeks were which. The rule `herd.py`
+    already applies to the receipts channels.
+    """
+    bf = cot.basket_frame(basket_frame_fixture(drop=("CORN",)))
+    assert bf.empty
+    assert cot.skipped_weeks(basket_frame_fixture(drop=("CORN",))) == [
+        date(2026, 10, 27)]
+
+
+def test_a_complete_week_skips_nothing():
+    assert cot.skipped_weeks(basket_frame_fixture()) == []
+
+
+def test_trader_counts_are_not_summed_across_markets():
+    """
+    The same fund trades corn and cattle, so adding MM_LONG_TRADERS over eight
+    markets counts it eight times. CFTC publishes nothing that would let the
+    duplicates be removed, so the basket carries NO trader count rather than a
+    wrong one -- and the page says why instead of printing a dash.
+    """
+    bf = cot.basket_frame(basket_frame_fixture())
+    assert "mm_long_traders" not in bf.columns
+    assert cot.latest(bf)["long_traders"] is None
+
+
+def test_the_five_categories_still_sum_to_zero_across_the_basket():
+    """
+    Each market's five net to zero by construction, so eight markets' forty do
+    as well. That keeps "who is on the other side" working on the basket and
+    keeps the balance a free audit over the whole complex.
+    """
+    bf = cot.basket_frame(basket_frame_fixture())
+    assert cot.categories_balance(cot.decompose(bf)) == 0
+
+
+def test_contributions_sum_to_the_headline():
+    rows = cot.contributions(basket_frame_fixture())
+    assert sum(r["net"] for r in rows) == BASKET_NET
+
+
+def test_the_share_is_of_gross_so_it_is_never_negative_or_over_a_hundred():
+    """
+    Dividing by the TOTAL would give soybeans 90% and Chicago wheat a negative
+    share, because the members point both ways. Dividing by the sum of absolute
+    nets answers the question actually being asked and the shares behave.
+    """
+    rows = cot.contributions(basket_frame_fixture())
+    shares = [r["share"] for r in rows]
+    assert all(0 <= s <= 100 for s in shares)
+    assert sum(shares) == pytest.approx(100.0)
+
+
+def test_lean_hogs_counts_as_the_REST_and_not_as_cattle():
+    """
+    The split is the two cattle markets against everything else. Lean hogs is
+    livestock and sits with the grains, so calling that side "grain" was wrong
+    by one market -- it reported 106% of a week's move under a grain label when
+    the grains alone were 103%.
+    """
+    rows = cot.contributions(basket_frame_fixture())
+    cv = cot.cattle_vs_basket(rows, sum(BASKET_WOW.values()))
+    assert {r["series"] for r in cv["cattle"]} == set(cot.CATTLE)
+    assert "LEAN_HOGS" in {r["series"] for r in cv["rest"]}
+    assert cv["n_rest"] == 6
+
+
+def test_the_cattle_moving_the_other_way_is_detected():
+    """
+    THE CASE THE WHOLE PANEL EXISTS FOR, and it is live on the week it shipped:
+    the total fell 145,446 while both cattle markets rose. A reader given the
+    headline alone would have concluded funds were liquidating cattle in a week
+    they bought them.
+    """
+    rows = cot.contributions(basket_frame_fixture())
+    total_wow = sum(BASKET_WOW.values())
+    cv = cot.cattle_vs_basket(rows, total_wow)
+    assert total_wow < 0                      # the basket fell
+    assert cv["cattle_wow"] > 0               # the cattle rose
+    assert cv["disagrees"] is True
+
+
+def test_agreement_is_not_reported_as_disagreement():
+    rows = cot.contributions(basket_frame_fixture())
+    for r in rows:
+        if r["series"] in cot.CATTLE:
+            r["wow"] = -1000.0
+    cv = cot.cattle_vs_basket(rows, -50000)
+    assert cv["disagrees"] is False
+
+
+def test_the_cattle_share_is_computed_both_ways():
+    """
+    Two different questions with two different answers -- 33% of the net total
+    and 15% of the gross positioning on 2026-10-27 -- so the page names which
+    it is quoting rather than saying "share".
+    """
+    rows = cot.contributions(basket_frame_fixture())
+    cs = cot.cattle_share(rows)
+    assert cs["net"] == 56573 + 14194
+    assert cs["net_share"] == pytest.approx(100 * 70767 / 215179, abs=0.01)
+    gross = sum(abs(r["net"]) for r in rows)
+    assert cs["gross_share"] == pytest.approx(100 * 70767 / gross, abs=0.01)
+    # And the two really do differ, which is why both exist.
+    assert cs["net_share"] > cs["gross_share"] + 10
+
+
+# -- what the page may and may not say ----------------------------------------
+
+def test_the_page_never_calls_it_all_ag():
+    """
+    CFTC's disaggregated table carries eighteen ag markets and this is eight of
+    them -- sugar, cocoa, coffee, cotton, canola, rice, milk, oats, soybean
+    meal and oil are all absent. There is also no industry-standard basket to
+    appeal to: every published combined figure uses its own. So "all ag" and
+    "total ag" are claims rather than names, and the tile has to name its
+    members instead.
+    """
+    src = _page_source().lower()
+    for claim in ("all ag", "total ag", "every ag market", "all agricultural"):
+        assert claim not in src, claim
+
+
+def test_the_combined_tile_names_its_members():
+    """
+    A reader cannot check a basket they cannot see, and two plausible baskets
+    disagree in sign often enough to matter. The member list is ON the tile,
+    not in a caption underneath it.
+    """
+    src = _page_source()
+    i = src.index("Managed money, eight markets combined")
+    j = src.index("What a contract is")
+    assert "SHORT_LABELS[s] for s in b[\"members\"]" in src[i - 900:j]
+
+
+def test_the_combined_does_not_follow_the_toggle():
+    """
+    Select two markets or eight and the total is identical. A "total" that
+    changed meaning with the view would be uninterpretable the moment anybody
+    screenshotted it -- and the toggle is the one control guaranteed to be in
+    a different state for the next reader.
+    """
+    src = _module_source()
+    assert "def load(series=BASKET" in src
+    page = _page_source()
+    # the panel reads the loaded basket, never the selection
+    i = page.index("def basket_panel()")
+    body = page[i:i + 2600]
+    assert 'data.get("basket")' in body
+    assert "shown" not in body
+
+
+def test_the_contract_caveat_names_the_direction_of_the_bias():
+    """
+    "A contract is not a common unit" does not tell a cattle trader whether his
+    market is flattered or buried by it. It is buried: a feeder cattle contract
+    is ten times a corn one by weight. The page says which way it runs.
+    """
+    src = _page_source()
+    assert "understates the cattle" in src
+    assert "5,000 bushel" in src and "50,000 lb" in src
+
+
+def test_the_page_says_a_wire_figure_will_not_match():
+    """
+    The published combined figures are futures AND OPTIONS over their own
+    baskets -- Reuters' is seven grain and oilseed markets with no livestock in
+    it. This page is futures-only. Both are right and they are different
+    numbers, which a reader holding both needs told.
+    """
+    src = _page_source()
+    assert "will not match this one" in src
+    assert "futures **and options**" in src
+
+
+def test_the_basket_warns_when_it_dates_behind_the_rest_of_the_page():
+    """
+    An incomplete week is skipped, so a late member moves this panel back a
+    Tuesday while the tiles above stay on the newest. Two dates on one page
+    with nothing explaining is the staleness failure this repo keeps recording.
+    """
+    src = _page_source()
+    assert 'if b.get("as_of") and as_of and b["as_of"] != as_of:' in src
+
+
+# -- the toggle ---------------------------------------------------------------
+
+def test_the_toggle_opens_on_the_two_cattle_markets():
+    """
+    The page a reader meets is the page that was here before the toggle
+    existed. Everything else is opt-in.
+    """
+    src = _page_source()
+    assert "DEFAULT_PICK = list(cot.CATTLE)" in src
+    assert "default=DEFAULT_PICK" in src
+
+
+def test_an_empty_selection_falls_back_rather_than_blanking_the_page():
+    """
+    st.pills lets a reader deselect everything. A blank page reads as broken;
+    substituting a selection silently is the other half of the same fault, so
+    the caption says what happened.
+    """
+    src = _page_source()
+    i = src.index("if not picked:")
+    assert "picked = list(DEFAULT_PICK)" in src[i:i + 400]
+    assert "No market selected" in src[i:i + 400]
+
+
+def test_the_market_tabs_are_lazy_and_guarded_by_open():
+    """
+    Eight panels at three plotly figures each is twenty-four charts on every
+    rerun, and a rerun is every click of the toggle. So the set is lazy --
+    and `.open` is **None** on a set that was not given on_change="rerun",
+    which is falsy, so guarding an eager set with it renders empty tabs nobody
+    notices. The two must stay together.
+    """
+    src = _page_source()
+    assert 'st.tabs(_tab_labels, on_change="rerun")' in src
+    i = src.index("for _tab, _s in zip(_market_tabs, shown)")
+    assert "if _tab.open:" in src[i:i + 200]
+    j = src.index("with tab_basket:")
+    assert "if tab_basket.open:" in src[j:j + 120]
+
+
+def test_the_reconciliation_panel_stays_on_the_cattle():
+    """
+    It exists to stop a client ringing about a CATTLE figure that disagrees
+    with his broker's screen. Nothing on this page quotes a legacy grain
+    number, so widening it would add six markets of noise to the one panel
+    that has earned its place at the top.
+    """
+    src = _module_source()
+    assert "reconcile=CATTLE" in src
