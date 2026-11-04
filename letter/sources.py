@@ -1067,8 +1067,8 @@ def fetch_regional_cash_wtd(as_of: date) -> dict:
 # Massive returns no contracts for DX.
 # "eighths" quotes in whole cents and eighths -- 531.25 prints as 531'2, the way
 # the grain trade writes it and the way Ross writes it ("5'4 lower at 531'2").
-# Corn, wheat, oats and soybeans trade in eighths; meal, equities and crude are
-# plain decimals.
+# Corn, wheat, oats and soybeans trade in eighths; crude is a plain decimal.
+# "points" is a whole-number index -- see render.points and the Dow below.
 OUTSIDE_MARKETS = [
     ("ZC", "Corn", "eighths"),
     # Directly under corn, because the order here IS the order on the page and
@@ -1076,6 +1076,24 @@ OUTSIDE_MARKETS = [
     # next year's corn crop, and the meal side of the board is a feed cost.
     ("ZS", "Soybeans", "eighths"),
     ("ES", "S&P", "decimal"),
+    # DIRECTLY UNDER THE S&P, for the same reason beans sit under corn: the two
+    # equity lines are one reading and a reader compares them. Added 2026-11-04
+    # on Ross's "lets add the nearby Dow Jones price like we have the SP and
+    # Crude oil for outside markets".
+    #
+    # YM IS THE CODE AND THE OTHERS DO NOT EXIST HERE. Probed against Massive
+    # the day it was added: `DJ` and `ZD` return no contracts at all -- the
+    # same silent nothing the Dollar Index gives, which is why DX is absent
+    # above. `MYM`, the Micro, returns the IDENTICAL price on the identical
+    # index; YM is the standard E-mini and the one the trade means by "the
+    # Dow".
+    #
+    # "points" RATHER THAN "decimal" BECAUSE YM TICKS IN WHOLE INDEX POINTS.
+    # money() would print 53,025.00 and +1,130.00 -- two characters of noise
+    # on the longest number in the block, directly above an S&P whose .25
+    # ticks make its decimals mean something. Ten consecutive settles were
+    # checked and every one is integral.
+    ("YM", "Dow", "points"),
     ("CL", "Crude", "decimal"),
 ]
 

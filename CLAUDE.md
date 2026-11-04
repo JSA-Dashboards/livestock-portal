@@ -6937,6 +6937,57 @@ Three places where the obvious simplification is the bug that was just fixed.
   where "squash **beef** after Cold War video" and "China's clean tech
   **exports**" both pass the looser one. A test pins the difference.
 
+### The Dow joined Outside Markets — 2026-11-04
+
+Ross: *"lets add the nearby Dow Jones price like we have the SP and Crude oil
+for outside markets."* One entry in `sources.OUTSIDE_MARKETS`, morning brief
+only (`render.am_blocks`), which is where the S&P and crude already print.
+
+**`YM` IS THE CODE AND THE ALTERNATIVES DO NOT EXIST ON THIS FEED.** Probed
+before writing anything, because this file already records that **Dollar
+Index is absent only because Massive returns no contracts for DX** — a wrong
+code is a row that silently never renders, since `am_blocks` drops any market
+whose price is None. `DJ` and `ZD` return no contracts at all. `MYM`, the
+Micro, returns the IDENTICAL price on the identical index; `YM` is the
+standard E-mini and what the trade means by "the Dow". It priced first try:
+front `YMZ6`, prior settle dated to the previous session exactly as the S&P's
+is, so the change computes off the same dated base.
+
+**A THIRD QUOTING STYLE, `points`.** YM ticks in one whole index point, so
+`money()` would print `53,025.00` and `+1,130.00` — two characters of noise
+on the longest number in the block, directly above an S&P whose 0.25 ticks
+make its decimals mean something. Ten consecutive settles were checked and
+every one is integral. `render.points` is `f"{v:,.0f}"`; the separator earns
+its place too, because an unseparated five-digit index is a run a reader has
+to count.
+
+    Dec S&P: +86.75 at 7,683.50
+    Dec Dow: +1,133 at 53,028
+
+**`render.points` is NOT `render.head`** even though the arithmetic is
+identical. That one is named for a head count and reads as one at the call
+site; a price formatter borrowing it survives until somebody changes `head()`
+for head counts and moves the Dow with it.
+
+**`_OUTSIDE_FMT` HAS TO BE DEFINED BELOW THE FUNCTIONS IT NAMES**, and the
+first attempt put it above them — `NameError` at import, so the whole module
+failed to load. Script order, the trap this file records for the WASDE panel
+and for `app.py`'s chart label, arriving in a dict literal. A test renders
+the block end to end for exactly that reason: the formatter being right and
+the block reaching for it are different claims.
+
+**It is NOT in the chart rotation**, the same decision soybeans already
+carries: `build.chart_movers` maps only codes with a `CHART_POOL` entry, so a
+mover key with no pool entry can never be picked. Ross asked for a price
+line, not a chart. A test pins it for YM beside the one that pins it for ZS.
+
+One existing test was renamed rather than extended.
+`test_the_grains_quote_in_eighths_and_the_rest_do_not` said "equities and
+crude are plain decimals", which went half false the moment an equity index
+quoted in points. **The rule is not grain-versus-the-rest; it is that each
+market is quoted the way its own contract ticks**, and the test is named for
+that now.
+
 ### The `[[?]]` on the deployed app — FIXED 2026-09-26/28
 
 **Both halves of this are now in Snowflake and the section is kept for the

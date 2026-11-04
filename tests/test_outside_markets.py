@@ -180,17 +180,113 @@ def test_soybeans_sit_directly_under_corn():
     assert codes.index("ZS") == codes.index("ZC") + 1, codes
 
 
-def test_the_grains_quote_in_eighths_and_the_rest_do_not():
+def test_each_market_quotes_the_way_its_contract_ticks():
     """
     1283.75 must print as 1283'6, not 1283.75. Corn, wheat, oats and soybeans
-    trade in eighths; equities and crude are plain decimals, and giving beans
-    the wrong style would print a grain quote in a shape nobody at a desk
-    reads.
+    trade in eighths; giving beans the wrong style would print a grain quote
+    in a shape nobody at a desk reads.
+
+    THREE STYLES SINCE 2026-11-04, not two. This test was named "...and the
+    rest do not" and its docstring said "equities and crude are plain
+    decimals" -- half false the moment an equity index arrived that ticks in
+    whole points. The rule is not grain-versus-the-rest; it is that each
+    market is quoted the way its own contract ticks.
     """
     style = {code: st for code, _label, st in sources.OUTSIDE_MARKETS}
-    assert style["ZS"] == "eighths"
+    assert style["ZS"] == "eighths"          # 1/8 cent
     assert style["ZC"] == "eighths"
-    assert style["ES"] == "decimal" and style["CL"] == "decimal"
+    assert style["ES"] == "decimal"          # 0.25 index points
+    assert style["CL"] == "decimal"          # $0.01
+    assert style["YM"] == "points"           # 1 whole index point
+
+
+def test_the_dow_sits_directly_under_the_sp():
+    """
+    The order of OUTSIDE_MARKETS IS the order on the page -- there is no sort
+    anywhere downstream -- and the two equity lines are one reading. Same
+    reasoning that puts Soybeans under Corn, and Ross asked for the Dow
+    "like we have the SP".
+    """
+    codes = [c for c, _label, _style in sources.OUTSIDE_MARKETS]
+    assert codes.index("YM") == codes.index("ES") + 1, codes
+
+
+def test_every_style_has_a_formatter():
+    """
+    A style with no entry in render._OUTSIDE_FMT falls back to decimals, so
+    it prints a plausible number in the wrong shape rather than raising --
+    the failure nobody reports. Adding a market with a new style and
+    forgetting the formatter is the obvious way to do that.
+    """
+    from letter import render
+
+    declared = {st for _c, _l, st in sources.OUTSIDE_MARKETS}
+    assert declared <= set(render._OUTSIDE_FMT), (
+        f"no formatter for {sorted(declared - set(render._OUTSIDE_FMT))}")
+
+
+def test_an_index_prints_in_whole_points():
+    """
+    YM ticks in one index point, so money()'s two decimals are always ".00"
+    -- two characters of noise on the longest number in the block, directly
+    above an S&P whose .25 ticks make its decimals mean something.
+
+    The separator is the other half: 53025 unseparated is a five-digit run a
+    reader has to count.
+    """
+    from letter import render
+
+    assert render.points(53025.0) == "53,025"
+    assert render.points(-1130.0) == "-1,130"
+    assert render.points(None) == render.MISSING
+    # Rounds rather than truncating, if Massive ever serves a fractional one.
+    assert render.points(53025.6) == "53,026"
+
+
+def test_the_dow_row_carries_no_decimal_point():
+    """
+    End to end through the real renderer, because the formatter being right
+    and the block reaching for it are different claims -- the dispatch table
+    was defined ABOVE the functions it names on the first attempt and the
+    module would not import at all.
+    """
+    from datetime import date
+
+    from letter import render
+
+    ctx = {"kind": "am", "issue_date": date(2026, 11, 4), "change_basis": "day",
+           "commentary": {}, "live_cattle": [], "feeder_cattle": [], "cash": {},
+           "cutout": {}, "slaughter": {}, "fci": {}, "calendar": [], "chart": {},
+           "outside": [
+               {"code": "ES", "label": "S&P", "style": "decimal", "month": "Dec",
+                "price": 7686.0, "change": 89.25},
+               {"code": "YM", "label": "Dow", "style": "points", "month": "Dec",
+                "price": 53025.0, "change": 1130.0},
+           ]}
+    block = render.build_html(ctx, disclaimer=False).split("Overnight Markets")[1]
+    block = block.split("<h2>")[0]
+    assert "Dec Dow: +1,130 at 53,025" in block, block
+    assert "53,025.00" not in block
+    # ...and the S&P beside it KEEPS its decimals.
+    assert "+89.25 at 7,686.00" in block, block
+
+
+def test_the_dow_stays_out_of_the_chart_rotation():
+    """
+    Adding a market to the overnight block does NOT add it to the chart of
+    the day, exactly as for soybeans above: chart_movers maps only codes with
+    a CHART_POOL entry, and a mover key with no pool entry can never be
+    picked. Ross asked for a price line, not a chart.
+    """
+    import inspect
+
+    from letter import build as letter_build
+    from letter import config
+
+    pool_keys = {e["key"] for e in config.CHART_POOL}
+    src = inspect.getsource(letter_build.chart_movers)
+    assert '"YM"' not in src, "YM was mapped into chart_movers without a pool entry"
+    assert "dow" not in pool_keys
 
 
 def test_soybeans_stay_out_of_the_chart_rotation():
