@@ -6988,6 +6988,93 @@ quoted in points. **The rule is not grain-versus-the-rest; it is that each
 market is quoted the way its own contract ticks**, and the test is named for
 that now.
 
+### The Dollar Index needed a second host — 2026-11-04
+
+Ross: *"Lets add the dollar index also and set it below crude."*
+
+**THE FUTURES FEED CANNOT SERVE IT, AND THE OLD NOTE UNDERSTATED WHY.**
+`sources.py` said "Dollar Index is deliberately absent: Massive returns no
+contracts for DX", which reads like a wrong code somebody could fix — the
+same shape as this file's `marsapi` correction. So it was re-probed rather
+than inherited, and the reason is structural: **Massive carries four trading
+venues and all four are CME Group** — XNYM 18,902 products, XCME 4,016, XCBT
+1,530, XCEC 552. **Zero ICE.** DX is an ICE Futures U.S. contract. `DX`,
+`DXY`, `USDX` and `ZDX` all return 200 with no results, and the catalogue's
+whole `currency` sub-class is CME FX futures (6E, 6J, 6B, 6C, 6S, SEK…) with
+nothing resembling an index. **No spelling will ever work.**
+
+**TWO KEYLESS SOURCES EXIST AND THEY ARE DIFFERENT INDICES**, which is the
+thing to get right before reaching for one:
+
+| | what it is | on 2026-11-04 |
+|---|---|---|
+| Yahoo `DX-Y.NYB` | the **ICE Dollar Index**, the figure on a trading screen | 101.45, intraday |
+| FRED `DTWEXBGS` | the Fed's **broad trade-weighted** index | 121.67, dated **10/30** |
+
+FRED is official, stable and keyless, and was **rejected**: a different
+basket on a different scale, and three sessions stale in a block headed
+"Overnight Markets". Ross chose Yahoo knowing it is an undocumented endpoint
+with no SLA.
+
+A synthetic DXY from CME's 6E/6J/6B/6C/6S/SEK was considered and **not
+offered**. It is computable, and it would be a JSA construction carrying
+someone else's index name, futures-based where the published index is spot,
+and it would not match his screen — the two-surfaces-one-name failure this
+file records five times over.
+
+**`chartPreviousClose` IS NOT YESTERDAY'S CLOSE, and that caution caught a
+real error on the first live day.** On a ranged request it is the close
+BEFORE THE WINDOW BEGINS: it read **102.17** on 2026-11-04, which is the
+**2026-10-04** close, while the real 11-03 close in the same payload was
+**101.87**. Trusting it prints the dollar down **0.73** where the overnight
+move is **0.43** — a 70% overstatement, every day, and never on a day anyone
+would notice.
+
+So `fetch_dollar_index` takes its base from the **dated daily series in the
+same response**, last close strictly before `as_of`, exactly as
+`_prior_settle` does for the futures after the 2026-09-24 crude miss, and
+records Yahoo's figure in `vendor_prior_close` behind a `vendor_disagrees`
+flag. **That flag is True in the ordinary case here, not the exceptional
+one.**
+
+**DATES COME FROM `meta.gmtoffset`, NEVER UTC.** Yahoo stamps a daily bar at
+the session open — 13:00–14:00 UTC for New York — so reading it as UTC gives
+the right day with only hours of margin, and a DST shift or a half-day eats
+it. A bar stamped 00:30 UTC is the PREVIOUS day in New York: read wrongly it
+becomes today's in-progress bar and is excluded, read correctly it is the
+base. One bar, two different letters.
+
+Three more, each pinned by a test:
+
+- **A null close is skipped.** Yahoo serves Saturday 2026-10-31 with
+  `close: null`. Read as a number, the base is 0.00 and the change +101.45.
+- **A stale base yields no change but keeps the price.** The level is still
+  true; `MAX_PRIOR_SETTLE_AGE_DAYS` governs the move, as on the futures path.
+- **Any failure returns the row priced None**, which `am_blocks` drops — so
+  an outage at a host nothing else in the brief uses costs that one line and
+  never the letter.
+
+**It is APPENDED after the `OUTSIDE_MARKETS` loop rather than listed in it**,
+which is also what puts it below crude. It has no product code, no month and
+no settlement history, and keeping that tuple list to things the Massive loop
+can actually fetch is what stops the loop growing a special case. The row
+comes out in the same shape, so `am_blocks` needs none either — beyond
+`.strip()`ing the `"<month> <label>"` join, because an index has no month and
+the bullet would otherwise open with a space.
+
+One bug worth recording because of how it presented: the first version
+unpacked `(date, close)` into `(prior_close, prior_date)`, so the staleness
+check did date-minus-float, raised `TypeError`, **the bare `except`
+swallowed it**, and the row came back priced None — which renders as the
+Dollar Index line simply not being there, indistinguishable from Yahoo being
+down. Found by running it, not by reading it.
+
+**STILL TO VERIFY ON THE DEPLOYED APP:** whether Streamlit Community Cloud's
+IPs can reach `query1.finance.yahoo.com`. `marsapi.ams.usda.gov` is already
+blocked from those IPs, so this is a live question and it cannot be answered
+from this machine. **The tell is the Dollar Index line being absent from the
+morning brief** — it fails exactly the way an outage does, by design.
+
 ### The `[[?]]` on the deployed app — FIXED 2026-09-26/28
 
 **Both halves of this are now in Snowflake and the section is kept for the

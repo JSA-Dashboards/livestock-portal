@@ -829,8 +829,11 @@ def am_blocks(ctx: dict, c: dict) -> list:
             # Change BEFORE the price, joined by "at" -- the same shape the
             # evening letter uses for cattle ("Oct: +1.025 at 220.70") and the
             # shape Ross asked for: "Dec Corn -8'6 at 528".
-            rows.append(f"{_esc(m.get('month') or '')} {_esc(m['label'])}: "
-                        f"{chg_txt} at {fmt(m['price'])}")
+            # .strip() because the Dollar Index has NO contract month -- it
+            # is an index, not a curve -- and the f-string would otherwise
+            # open the bullet with a space.
+            name = f"{m.get('month') or ''} {m['label']}".strip()
+            rows.append(f"{_esc(name)}: {chg_txt} at {fmt(m['price'])}")
         out.append("<h2>Overnight Markets</h2>" + _bullets(rows))
 
     # 4. Yesterday, for anyone who did not read the evening letter. One line

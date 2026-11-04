@@ -305,3 +305,184 @@ def test_soybeans_stay_out_of_the_chart_rotation():
     src = inspect.getsource(letter_build.chart_movers)
     assert '"ZS"' not in src, "ZS was mapped into chart_movers without a pool entry"
     assert "beans" not in pool_keys
+
+
+# -- The Dollar Index, which is not a contract --------------------------------
+#
+# Massive carries four venues and all four are CME Group (XNYM, XCME, XCBT,
+# XCEC, ~25,000 products, zero ICE), so DX -- an ICE Futures U.S. contract --
+# can never come from it. The index comes from Yahoo's DX-Y.NYB instead, and
+# the payload below is the real one, trimmed, as served on 2026-11-04.
+
+NY = -18000                       # meta.gmtoffset, EST
+
+
+def _bar(y, m, d, hour=9):
+    """A daily bar stamped at the session open, in EXCHANGE-local terms."""
+    from datetime import datetime, timezone
+    local = datetime(y, m, d, hour, tzinfo=timezone.utc)
+    return int(local.timestamp()) - NY
+
+
+# 10-31 is a Saturday and Yahoo serves it with a null close; 11-04 is today's
+# bar, in progress. Both have to be handled and neither is hypothetical.
+DXY_STAMPS = [_bar(2026, 10, 29), _bar(2026, 10, 31), _bar(2026, 11, 2),
+              _bar(2026, 11, 3), _bar(2026, 11, 4)]
+DXY_CLOSES = [101.88, None, 101.75, 101.87, 101.451]
+
+
+def _dxy_payload(stamps=None, closes=None, **meta):
+    base = {"gmtoffset": NY, "regularMarketPrice": 101.451,
+            # NOT yesterday's close -- the close before the window began.
+            "chartPreviousClose": 102.17}
+    base.update(meta)
+    return {"chart": {"result": [{
+        "meta": base,
+        "timestamp": list(DXY_STAMPS if stamps is None else stamps),
+        "indicators": {"quote": [{"close": list(DXY_CLOSES if closes is None
+                                                else closes)}]},
+    }]}}
+
+
+class _Resp:
+    def __init__(self, payload, status=200):
+        self._payload, self.status_code = payload, status
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+    def json(self):
+        return self._payload
+
+
+class _Sess:
+    def __init__(self, payload, status=200):
+        self._payload, self._status = payload, status
+
+    def get(self, *_a, **_kw):
+        return _Resp(self._payload, self._status)
+
+
+def _fetch(monkeypatch, payload, status=200, when=date(2026, 11, 4)):
+    monkeypatch.setattr(sources, "_session", lambda *a, **k: _Sess(payload, status))
+    return sources.fetch_dollar_index(when)
+
+
+def test_the_dollar_index_prices_off_the_dated_series(monkeypatch):
+    row = _fetch(monkeypatch, _dxy_payload())
+    assert row["price"] == 101.451
+    assert row["prior_settle"] == 101.87
+    assert row["prior_settle_date"] == "2026-11-03"
+    assert row["change"] == round(101.451 - 101.87, 4)
+
+
+def test_chart_previous_close_is_not_yesterdays_close(monkeypatch):
+    """
+    THE TRAP, WITH THE REAL NUMBERS, and it fired on the first live day.
+
+    On a ranged request Yahoo's `chartPreviousClose` is the close BEFORE THE
+    WINDOW BEGINS, not the prior session: it read 102.17 on 2026-11-04, which
+    is the 2026-10-04 close, while the real 11-03 close in the same payload
+    was 101.87.
+
+    Trusting it prints the Dollar Index down 0.73 where the overnight move is
+    0.43 -- a 70% overstatement, every day, and never on a day anyone would
+    notice. Exactly the shape of the crude miss above, from a different
+    vendor.
+    """
+    row = _fetch(monkeypatch, _dxy_payload())
+    assert row["change"] == -0.419                      # against 101.87
+    assert round(101.451 - 102.17, 3) == -0.719         # what the field gives
+    assert row["vendor_prior_close"] == 102.17
+    assert row["vendor_disagrees"] is True
+
+
+def test_todays_own_bar_is_not_the_base(monkeypatch):
+    """Strictly before, the same rule _prior_settle applies to the futures."""
+    row = _fetch(monkeypatch, _dxy_payload())
+    assert row["prior_settle"] != 101.451
+    assert row["prior_settle_date"] == "2026-11-03"
+
+
+def test_a_null_close_is_skipped_not_read_as_zero(monkeypatch):
+    """
+    Yahoo serves 2026-10-31, a Saturday, with close null. Reading it as a
+    number would make the base 0.00 and the change +101.45.
+    """
+    row = _fetch(monkeypatch, _dxy_payload(), when=date(2026, 11, 2))
+    assert row["prior_settle"] == 101.88                # 10-29, skipping 10-31
+    assert row["prior_settle_date"] == "2026-10-29"
+
+
+def test_the_date_comes_from_the_exchange_offset_not_utc(monkeypatch):
+    """
+    A bar stamped 00:30 UTC is the PREVIOUS day in New York. Read as UTC it
+    is 11-04 and becomes today's in-progress bar, excluded; read correctly it
+    is 11-03 and is the base. One bar, two different letters.
+    """
+    from datetime import datetime, timezone
+    midnight_utc = int(datetime(2026, 11, 4, 0, 30, tzinfo=timezone.utc).timestamp())
+    row = _fetch(monkeypatch, _dxy_payload(stamps=[midnight_utc], closes=[101.87]))
+    assert row["prior_settle_date"] == "2026-11-03", "the UTC date was used"
+    assert row["change"] == round(101.451 - 101.87, 4)
+
+
+def test_a_stale_base_yields_no_change_but_keeps_the_price(monkeypatch):
+    """
+    MAX_PRIOR_SETTLE_AGE_DAYS, the rule the futures path already applies: a
+    multi-session move printed as an overnight one is a wrong number that
+    looks right. The level is still true, so it still prints.
+    """
+    row = _fetch(monkeypatch, _dxy_payload(stamps=[_bar(2026, 10, 20)],
+                                           closes=[99.0]))
+    assert row["price"] == 101.451
+    assert row["change"] is None
+    assert row["prior_settle"] is None
+
+
+def test_yahoo_failing_costs_one_line_and_never_the_letter(monkeypatch):
+    """
+    am_blocks drops any market whose price is None, so an outage at a host
+    the rest of the brief does not use must not raise into gather().
+    """
+    for payload, status in ((_dxy_payload(), 503), ({"chart": {"result": []}}, 200),
+                            ({}, 200), ({"chart": None}, 200)):
+        row = _fetch(monkeypatch, payload, status)
+        assert row["price"] is None and row["change"] is None
+        assert row["label"] == "Dollar Index"
+
+
+def test_the_dollar_index_sits_below_crude(monkeypatch):
+    """
+    Where Ross asked for it. It is appended after the OUTSIDE_MARKETS loop
+    rather than listed in it -- there is no product code to fetch -- so the
+    thing to pin is that the appended row lands last.
+    """
+    monkeypatch.setattr(sources, "front_contracts", lambda *a, **k: [])
+    monkeypatch.setattr(sources, "fetch_dollar_index",
+                        lambda _as_of: {"code": "DXY", "label": "Dollar Index",
+                                        "style": "decimal", "price": 101.45})
+    rows = sources.fetch_outside_markets("k", date(2026, 11, 4))
+    codes = [r["code"] for r in rows]
+    assert codes[-1] == "DXY", codes
+    assert codes.index("DXY") == codes.index("CL") + 1, codes
+
+
+def test_the_index_row_carries_no_contract_month(monkeypatch):
+    """
+    It is an index, not a curve. The bullet is built as "<month> <label>" and
+    would open with a stray space if the renderer did not strip it.
+    """
+    from letter import render
+
+    row = _fetch(monkeypatch, _dxy_payload())
+    assert row["month"] is None
+    ctx = {"kind": "am", "issue_date": date(2026, 11, 4), "change_basis": "day",
+           "commentary": {}, "live_cattle": [], "feeder_cattle": [], "cash": {},
+           "cutout": {}, "slaughter": {}, "fci": {}, "calendar": [], "chart": {},
+           "outside": [row]}
+    block = render.build_html(ctx, disclaimer=False).split("Overnight Markets")[1]
+    block = block.split("<h2>")[0]
+    assert "Dollar Index: -0.42 at 101.45" in block, block
+    assert "<li> Dollar" not in block, "a month-shaped space opened the bullet"
