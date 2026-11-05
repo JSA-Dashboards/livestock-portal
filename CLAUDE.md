@@ -107,10 +107,15 @@ Measured on the live app, 2026-10-26:
 | browser, `document.cookie` | `proxy-tracking-id`, `_ga`, `jsa_portal_PORTAL_PASSPHRASE`, `jsa_portal_probe`, … |
 | server, `st.context.cookies` | `[]` |
 
-**THE DEPLOYED STREAMLIT IS 1.66.1, NOT 1.64** — the comment in `Home.py` that
-names 1.64 is stale, and `requirements.txt` pins only `streamlit>=1.40.0`, so
-Cloud installs whatever is current. Any claim here about deployed DOM or widget
-behaviour is a claim about a version nobody pinned.
+**THE DEPLOYED STREAMLIT VERSION MOVES ON ITS OWN AND HAS TWICE.** The
+comment in `Home.py` names **1.64**; it read **1.66.1** when this section was
+written on 2026-10-26, and the reboot of 2026-11-05 installed **1.67.0**, read
+off the startup log's own `+ streamlit==1.67.0` line. `requirements.txt` pins
+only `streamlit>=1.40.0`, so Cloud installs whatever is current at the moment
+of the reboot — which means **two reboots a fortnight apart can run different
+Streamlits off one commit.** Any claim here about deployed DOM or widget
+behaviour is a claim about a version nobody pinned, and the install log is the
+cheap way to read the one actually running.
 
 **HOW TO ASK THE DEPLOYED APP A QUESTION WITHOUT A PASSPHRASE**, which is the
 reusable part: put a panel behind a query param (`?probe=1`, the `?tools=1`
