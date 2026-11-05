@@ -6170,6 +6170,43 @@ already excludes a year that does not span Jan 10 to Dec 20, so it reports
 "excludes partial years 2001, 2006, 2026" on its own. The daily chart draws a
 straight line across that month; nothing is invented, but it is there.
 
+### THE SPREAD TABS CANNOT BE EXTENDED, AND BOTH FEEDS WERE RE-PROBED
+
+Ross asked for the deep history "for spreads also" on 2026-11-05. It is not
+available from either source, for two INDEPENDENT reasons, both measured that
+day rather than reasoned about.
+
+A calendar spread needs two delivery months priced on the SAME day, so it needs
+per-contract history. A continuous series carries one price per day and can
+never yield one -- which is why the 2001 history above buys the spread tabs
+nothing at all.
+
+- **Massive has no bars before 2021-11-08 for ANY contract.** This is a data
+  floor, not the symbology problem: even a perfectly addressed `LEZ15` returns
+  zero bars, and `/contracts` with `date=2015-06-01` (with `active=false`)
+  returns zero results. A deeper entitlement is the only thing that could
+  change it, and that is a question for the vendor.
+- **Yahoo serves only CURRENTLY LISTED contracts.** `LEZ26.CME` works and is
+  unambiguous -- a four-digit year, so no decade collision -- but every expired
+  month 404s: `LEZ25`, `LEZ24`, `LEZ23`, `LEZ22`, `LEZ21`, `LEZ20`, `LEZ18`,
+  `LEZ15`, `LEZ10`, `LEZ05`, and the same for `GFX*` and `HEZ*`. Sixteen
+  symbols across three products and ten years, all 404. Yahoo purges on expiry.
+
+**There is no second-month continuous either**, which kills the obvious
+fallback of charting a front-versus-deferred spread: `LE2=F`, `LEc2`, `LE=F2`
+and `LEM=F` all 404, and Massive serves no continuous series at all.
+
+Nasdaq Data Link's CHRIS continuous datasets answer **403** to an unkeyed
+request. So the remaining routes are all paid -- Nasdaq Data Link, Barchart, or
+CME DataMine -- and that is a purchasing decision, not an implementation one.
+
+**Do not "extend" the spread tabs by pairing continuous series.** Front-month
+minus second-month is a real analytic and is NOT what those tabs show: they
+overlay one specific calendar spread (Dec/Feb, say) across successive contract
+years, aligned on expiration. Substituting a rolling nearby spread under the
+same label would be a different measurement wearing the existing caption --
+the failure this file records five times over.
+
 ## The daily letter generator (`letter/`)
 
 `python -m letter.build [--session am|pm] [--day monday..friday] [--kind ...]
