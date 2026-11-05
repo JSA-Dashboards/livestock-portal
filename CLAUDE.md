@@ -6207,6 +6207,65 @@ years, aligned on expiration. Substituting a rolling nearby spread under the
 same label would be a different measurement wearing the existing caption --
 the failure this file records five times over.
 
+#### What a paid feed would take — priced 2026-11-05
+
+**BUY ONCE, DO NOT SUBSCRIBE, and that is the whole shape of it.** An expired
+contract's settlement history is CLOSED: it will never gain a row or change a
+value. Massive already covers 2021-11-08 onward and is paid for. So what is
+missing is a fixed, static block of the past, and the right move is a one-time
+extraction into Snowflake with the portal reading that — the frozen-half
+pattern `southeast_legacy.json` and `data/fed_equivalent.json` already use.
+A recurring data subscription would be paying monthly for a number that cannot
+move.
+
+That also removes the deployment risk: no new runtime dependency, no second
+host for Community Cloud to be blocked from, no key in two secrets consoles.
+
+**THE DATA IS TINY, which is what makes this cheap.** Daily bars only, three
+products, standard contract months:
+
+    2010-06 -> 2021-11 (the Databento floor)   251 contracts   ~5.3 MB
+    a full 20 years                            440 contracts   ~9.2 MB
+    25 years, matching the nearby chart        550 contracts  ~11.6 MB
+
+Anyone quoting enterprise money is selling tick data. This is megabytes.
+
+| | depth | cost | delivery |
+|---|---|---|---|
+| **Databento** | CME Globex from **2010-06-06** (~16 yr) | metered $/GB — **~$0.10**, against **$125** of free signup credit | REST API, `ohlcv-1d` |
+| **Norgate** | individual contracts "to ~1980" | **$148.50 / 6 mo**, $270 / 12 | desktop updater + Python package, **no REST API** |
+| **FirstRate Data** | individual contracts from **LEZ08** (Dec 2008, ~18 yr) | one-time file purchase, price not published; updates $99.95/yr single ticker, $59.95/mo bundle | direct download |
+| **Barchart OnDemand** | deep | quote only; one third-party listing says from **$500/mo** | REST API |
+| **CME DataMine** | official, deepest | enterprise quote | S3 / SFTP / API |
+
+**Databento is the recommendation if 16 years is enough** — the free credit
+covers this job about a thousand times over, it is a real API rather than a
+desktop app, and `ohlcv-1d` is exactly the schema wanted. Its floor of
+2010-06-06 is the catch: it misses the 2003 BSE collapse, which the nearby
+chart now shows and which is one of the more interesting things in the record.
+
+**Norgate is the route to a true 20+ years**, and the subscription is not a
+recurring cost here: take the 6-month term, extract every contract once, load
+it, let it lapse. It has no REST API, so the extraction is a local script
+against their Python package rather than something the portal calls.
+
+**NOT VERIFIED, AND IT IS THE ONE THING TO CHECK BEFORE PAYING:** Norgate's
+own page says "around 1980 or the first day of trading" as a general statement
+and does not break coverage out by market. Their livestock start dates live in
+the Data Content Tables, which would not load. **Confirm Live Cattle, Feeder
+Cattle and Lean Hogs individually before buying** — depth is the only reason to
+choose Norgate over a free Databento pull, so if livestock turns out shallower
+than the headline the whole case for it goes.
+
+Prices were read on 2026-11-05 and rot; re-read them rather than quoting this
+table.
+
+**The data is the small half of the job.** The spread tabs build their analogs
+by shifting Massive's single-digit ticker (`shift_ticker_year`), so a second
+per-contract source means a contract-level splice with its own symbol mapping
+across two conventions, not the one-line date handover `long_history.splice`
+does for the nearby series. Budget real work for the page, not just the fetch.
+
 ## The daily letter generator (`letter/`)
 
 `python -m letter.build [--session am|pm] [--day monday..friday] [--kind ...]
