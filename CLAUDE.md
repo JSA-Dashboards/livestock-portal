@@ -6042,6 +6042,134 @@ the `leverage.SCHEMA` trap — and is passed at the call site, because a default
 is never hashed.
 
 
+## Seasonal Futures reaches 2001 — two feeds, one series
+
+Added 2026-11-05 on Ross's *"we currently only go back 5 years for chart
+history- can we add 20 years worth of data?"* The Nearby continuous chart and
+the two tables under it now run **2001-03-01 → today** for live cattle,
+2001-04-03 for feeders and 2000-12-15 for hogs — about 6,450 daily settles
+each. `apps/livestock_seasonal/long_history.py` fetches the deep half,
+`build_continuous_series` splices it on.
+
+**MASSIVE CANNOT DO IT AND NO ENTITLEMENT WOULD FIX IT**, which is the thing
+to know before anyone tries again. Re-probed the day this shipped:
+
+    LEZ1   38 bars  2021-11-08 -> 2021-12-31      the floor, and it is sharp
+    LEZ0   0 bars         LEZ8  0 bars            LEZ9  0 bars
+
+Contracts expiring before the floor answer **HTTP 200 with an empty result
+set** — the "200 that means nothing here" trap recorded for MARS slug 2452 —
+and `/contracts` for an as-of date in 2010 or 2016 returns zero results. Worse,
+the symbology is **decade-ambiguous**: `LEZ7` is both Dec 2017 and Dec 2027 and
+`/aggs` resolves to the live contract, so it answers with 2026 data rather than
+failing. `LEZ21`, `LEZ06`, `LEZ2021` and `LEZ16` all return zero bars. The old
+contracts are therefore not merely absent, they are **unaddressable**, and a
+deeper data tier would still need a different symbology to reach them.
+
+### IT IS THE SAME SERIES, MEASURED, AND THAT IS WHAT LICENSES THE SPLICE
+
+Yahoo's continuous front month (`LE=F`, `GF=F`, `HE=F`) against this page's own
+Massive-spliced nearby series, over the whole 1,255-day overlap:
+
+| | identical to the thousandth |
+|---|---|
+| Live cattle | 1,254 / 1,255 |
+| Feeder cattle | 1,254 / 1,255 |
+| Lean hogs | 1,254 / 1,255 |
+
+The one disagreement on each is the SAME day — the session in progress when the
+check ran, two live quotes minutes apart. So the roll convention, the settles
+and the roll dates all agree; this is not a near-enough series being calibrated
+onto ours.
+
+**Even so the two are kept strictly apart by date, and Massive wins every date
+it covers.** The handover is Massive's own earliest date rather than a constant,
+so it travels as the vendor's retention window rolls — the shape
+`herd.CHANNEL_LEGACY_THROUGH` and the southeast retention build already use.
+Two consequences worth stating:
+
+- **Nothing already on the page can move.** The Massive region of the spliced
+  series is byte-identical to what it was, asserted rather than assumed.
+- **The seam is invisible, and the chart proves it.** The step across the
+  handover is 0.175–0.300 on the three products, against ordinary **roll gaps
+  of 11–18 points** already on the same unadjusted chart. The splice is fifty
+  times smaller than the discontinuities the caption already warns about.
+
+Summing the two instead would double-count 1,255 days. They agree, so a
+duplicated index would not look wrong — it would quietly give those five years
+twice the weight in every mean and every high/low count.
+
+### THREE TRAPS IN THE FEED, AND THE SECOND ONE IS THE EXPENSIVE ONE
+
+- **`range=max` SILENTLY RETURNS MONTHLY BARS.** `range=max&interval=1d` is the
+  obvious spelling and answers 200 with `dataGranularity: 1mo` — **264 bars
+  spanning 25 years**, which charts perfectly and turns every seasonal statistic
+  into twelve observations a year. An explicit `period1`/`period2` pair returns
+  the real **6,438**. A test asserts `range` is not sent.
+
+- **`meta.gmtoffset` IS RIGHT ON THE OTHER YAHOO CALLER AND WRONG ON THIS ONE.**
+  `letter/sources.fetch_dollar_index` dates its bars off the offset, correctly,
+  and this file says to — so this module copied it, and that cost **792 bars
+  dated to a Sunday** and dropped agreement with Massive from 1,254/1,254 to
+  **440 of 1,081, worst case 16.38 out**.
+
+  The two symbols are stamped differently. `DX-Y.NYB` is stamped at the session
+  OPEN (13:00–14:00 UTC), hours from the date boundary, so the offset is the
+  safe correction. These futures are stamped at **midnight New York** — 04:00
+  UTC on an EDT date, 05:00 on an EST one — so subtracting five hours lands
+  04:00 back on 23:00 the PREVIOUS day through EDT and is a **no-op through
+  EST**. It misdates eight months of the year and comes right in winter, which
+  is exactly the shape of defect that survives a spot check.
+
+  Read as plain UTC: zero weekend bars across all 6,524 stamps, every one
+  Mon–Fri. **Do not "fix" this back to the offset.** A test pins both the
+  accepted and the rejected arithmetic.
+
+- **The newest bar is the session in progress**, not a settlement — the
+  `completed_only` rule, and the one day in the overlap check where the two
+  feeds disagreed. Dropped in `fetch_nearby` rather than left to the caller.
+
+### What it does and does not extend
+
+**The per-contract tabs are NOT extended and cannot be.** The seasonal overlays,
+calendar spreads and the spread matrix overlay individual contract months
+aligned on days-to-expiration, so they need per-contract history, which only
+Massive has. They stay at `MAX_YEARS_BACK = 5`. `DATA_START_NOTE` — a caption
+above *every* tab — used to say the history starts in 2021; that was true of the
+overlays and became false as a statement about the page, so it now names which
+depth belongs to which, per the standing headline rule.
+
+What the deep history actually buys, beyond a longer line: **the month-frequency
+table under the chart is a seasonality statistic and it was running on four
+complete years.** It now runs on **23–25**, and the hog seasonal reads properly
+for the first time — highs in May–Aug on 76% of years, lows Dec–Feb.
+
+**The release calendar no longer follows the chart.** It was
+`since = series.index.min()`, a ~5-year window only because that was all the
+feed had; against a 2001 start it is four reports × 25 years of ESMIS
+pagination — 25 releases a page, 29 pages for WASDE alone — for a table of some
+900 rows. `REPORT_CALENDAR_YEARS` bounds it and the caption states the window
+instead of claiming the chart's span.
+
+### Two things that are genuinely open
+
+- **Whether Streamlit Community Cloud can reach `query1.finance.yahoo.com` is
+  NOT established**, and cannot be from this machine — the same open question
+  `letter/sources.py` carries for the Dollar Index. `marsapi.ams.usda.gov` is
+  already blocked from those IPs, so it is a live risk. **It fails soft by
+  construction**: any error returns an empty series, the splice returns the
+  Massive half alone, and the page is exactly what it was. The tell is the chart
+  starting in 2021 on the deployed app and 2001 locally.
+- **Yahoo is an undocumented endpoint with no SLA.** It is a convenience for
+  chart depth, not a feed anything is computed from — every figure the rest of
+  the portal quotes still comes from Massive.
+
+**One real hole: Yahoo has no live cattle bars for January 2006** (2005-12-30 →
+2006-02-01, 33 days). The page needs no special case — `highs_lows_by_month`
+already excludes a year that does not span Jan 10 to Dec 20, so it reports
+"excludes partial years 2001, 2006, 2026" on its own. The daily chart draws a
+straight line across that month; nothing is invented, but it is there.
+
 ## The daily letter generator (`letter/`)
 
 `python -m letter.build [--session am|pm] [--day monday..friday] [--kind ...]
