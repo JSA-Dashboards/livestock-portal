@@ -189,15 +189,40 @@ def _settle_stamp(ctx: dict) -> str:
     return f"{d.month}/{d.day}/{d.strftime('%y')}"
 
 
-def _pm_label(report_date) -> str:
-    """' Tues PM.' from the cutout's own report date, or '' if unknown."""
+def _cut_label(report_date, session="PM", *, bare=False) -> str:
+    """
+    ' Tues AM.' / ' Tues PM.' -- WHICH boxed beef report this reading is.
+
+    Was _pm_label and hard-coded " PM." until 2026-11-06, which was true for
+    as long as the letter read only LM_XB403. It reads the morning report too
+    when that one is newer (sources.pick_cutout), so the word has to follow
+    the data like the weekday already does.
+
+    BOTH HALVES COME FROM THE REPORT, NEVER FROM THE LETTER. The day is the
+    report's own date, because LM_XB403 publishes about 3pm Central and a
+    letter written earlier carries the previous session -- calling that "Tues
+    PM" on a Tuesday is a false claim about which print it is. The session is
+    the report's own too: deriving it from `kind == "am"` would stamp "AM" on
+    an afternoon figure, which is the same false claim one level along.
+
+    '' when the date is missing or unreadable, and every caller drops its own
+    punctuation with it -- see rundown_block, where interpolating an empty
+    stamp used to leave a dangling hyphen on a client letter.
+
+    `bare` gives "Tues PM" with no leading space and no full stop, for the
+    morning brief, where the stamp qualifies a line rather than ending one.
+    """
     if not report_date:
         return ""
     try:
         d = date.fromisoformat(str(report_date)[:10])
     except ValueError:
         return ""
-    return f" {_PM_DAYS[d.weekday()]} PM."
+    # A literal rather than sources.AM_SESSION: render.py has no import path
+    # to the fetchers and a test asserts it.
+    word = "AM" if str(session or "").upper() == "AM" else "PM"
+    core = f"{_PM_DAYS[d.weekday()]} {word}"
+    return core if bare else f" {core}."
 
 
 # -- Sections -----------------------------------------------------------------
@@ -333,14 +358,18 @@ def rundown_block(fci: dict, slaughter: dict, cutout: dict,
                 f"{head(weights.get('year_ago'))}# LY")
 
     ch, se = cutout.get("choice", {}), cutout.get("select", {})
-    # The "Tues PM" tag comes from the DATA's report date, not the issue date.
-    # LM_XB403 PM publishes about 3pm Central, so a letter written earlier
-    # carries the PREVIOUS session's cutout -- and labelling that "Tues PM" on a
-    # Tuesday would be a false claim about which print it is. Deriving the day
-    # from the report makes it say "Mon PM" instead, which is true.
-    pm = _pm_label(cutout.get("report_date"))
-    rows.append(f"Choice cutout- {updown(ch.get('change'))} at {money(ch.get('value'))}-{pm}")
-    rows.append(f"Select cutout- {updown(se.get('change'))} at {money(se.get('value'))}-{pm}")
+    # The "Tues PM" tag comes from the DATA's report date and the DATA's own
+    # session, never from the letter -- see _cut_label.
+    #
+    # THE HYPHEN BELONGS TO THE STAMP. It used to be interpolated separately,
+    # as `at {money}-{pm}`, so a cutout with no report_date rendered
+    # "Choice cutout- Up 0.77 at 376.08-" on a client letter: a trailing dash
+    # leading nowhere. No test saw it and every recap render in the suite was
+    # in that state.
+    stamp = _cut_label(cutout.get("report_date"), cutout.get("session"))
+    tail = f"-{stamp}" if stamp else ""
+    rows.append(f"Choice cutout- {updown(ch.get('change'))} at {money(ch.get('value'))}{tail}")
+    rows.append(f"Select cutout- {updown(se.get('change'))} at {money(se.get('value'))}{tail}")
     rows.append(f"5-day averages- Choice {money(ch.get('avg5'))}. Select {money(se.get('avg5'))}.")
 
     g = cutout.get("grading", {})
@@ -403,8 +432,16 @@ def friday_rundown_block(fci: dict, slaughter: dict, cutout: dict,
     rows.append(f"Choice grading: {pct(g.get('pct'))}% versus {pct(g.get('pct_last_week'))}% LW")
 
     ch, se = (cutout or {}).get("choice", {}), (cutout or {}).get("select", {})
-    rows.append(f"Choice cutout: {signed2(ch.get('change'))} at {money(ch.get('value'))}")
-    rows.append(f"Select cutout: {signed2(se.get('change'))} at {money(se.get('value'))}")
+    # SEPARATED BY A MIDDLE DOT, NOT THE RECAP'S TRAILING DASH. The comment at
+    # the head of this section keeps Friday's colons and signed numbers apart
+    # from Tuesday's dashes and words deliberately, because clients read both
+    # every week -- so copying `-{stamp}` in here would import exactly the
+    # convention that note forbids. The dot is already this letter's own
+    # separator (wtd_cash_rows).
+    stamp = _cut_label((cutout or {}).get("report_date"), (cutout or {}).get("session"))
+    tail = f" &middot;{stamp}" if stamp else ""
+    rows.append(f"Choice cutout: {signed2(ch.get('change'))} at {money(ch.get('value'))}{tail}")
+    rows.append(f"Select cutout: {signed2(se.get('change'))} at {money(se.get('value'))}{tail}")
     rows.append(f"5-day averages: Choice {money(ch.get('avg5'))}. Select {money(se.get('avg5'))}")
 
     return "<h2>Cattle market rundown:</h2>" + _bullets(rows)
@@ -855,7 +892,15 @@ def am_blocks(ctx: dict, c: dict) -> list:
     cut = ctx.get("cutout") or {}
     ch, se = cut.get("choice", {}), cut.get("select", {})
     if ch.get("value") is not None:
-        rows.append(f"Cutout: Choice {money(ch['value'])} {signed(ch.get('change'), 2)} "
+        # THE STAMP LEADS HERE AND TRAILS ON THE EVENING LETTERS, because this
+        # line is shaped differently: one line carrying BOTH grades, already
+        # joined by a middle dot. A third dot on the end would read as though
+        # it qualified Select alone. In front it qualifies the line, and a
+        # reader knows which print he is looking at before he reads a number
+        # -- which is the standing rule about a headline reading on its own.
+        when = _cut_label(cut.get("report_date"), cut.get("session"), bare=True)
+        lead = f"Cutout ({when})" if when else "Cutout"
+        rows.append(f"{lead}: Choice {money(ch['value'])} {signed(ch.get('change'), 2)} "
                     f"&middot; Select {money(se.get('value'))} {signed(se.get('change'), 2)}")
     dsl = ctx.get("daily_slaughter") or {}
     if dsl.get("current_day") is not None:

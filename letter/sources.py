@@ -444,7 +444,19 @@ def fetch_cash_trade() -> dict:
 # -- Boxed beef: LM_XB403 cutout + LSWFEDCC grading ---------------------------
 
 def fetch_cutout() -> dict:
-    """Choice/Select PM cutout, the session change, 5-day averages, grading %."""
+    """
+    Choice/Select PM cutout, the session change, 5-day averages, grading %.
+
+    THIS STAYS LM_XB403 ONLY, and that is a decision rather than an
+    oversight now that fetch_am_cutout sits beside it.
+    `apps/market_board/loaders.py` calls this function directly, and every
+    cutout tile on that board carries a FIXED basis string naming
+    "LM_XB403 PM close" -- the registry's own docstring argues that a tile
+    without a fixed basis invites the wrong comparison. A value that
+    silently alternated between two USDA reports would make that label a
+    lie and the tile incomparable with its own history. The letter chooses
+    between the two in pick_cutout; the board does not choose at all.
+    """
     sess = _session()
     r = sess.get(f"{LMR_BASE}/{XB403_ID}/",
                  params={"lastReports": 30, "allSections": "true"}, timeout=60)
@@ -496,6 +508,7 @@ def fetch_cutout() -> dict:
                          if len(s) >= 6 else None),
             }
         out["report_date"] = cut["report_date"].max().date().isoformat()
+        out["session"] = PM_SESSION
 
     r = sess.get(f"{LMR_BASE}/{GRADING_ID}/",
                  params={"lastReports": 10, "allSections": "true"}, timeout=60)
@@ -535,6 +548,140 @@ def fetch_cutout() -> dict:
                 }
             break
     return out
+
+
+# -- Boxed beef: the MORNING read, LM_XB402 -----------------------------------
+#
+# Added 2026-11-06 on Ross's "use the morning cutout too when it's fresher".
+#
+# THEY ARE TWO REPORTS, NOT ONE REPORT PUBLISHED TWICE. LM_XB402 is priced as
+# of 9:30am and published around 10:55 CT; LM_XB403 is the close, out about
+# 3pm. So an evening letter written before 3pm has today's morning read
+# available and today's close not yet -- and until now it printed YESTERDAY's
+# close instead. Measured 2026-11-06: the PM in hand was the 11-05 session at
+# Choice 361.56, while the morning report for 11-06 said 360.73.
+#
+# WHAT MAKES SUBSTITUTING IT LEGITIMATE is that the two chain exactly. The AM
+# report's own printed change is its value less the PREVIOUS PM close, to the
+# cent on both grades -- 360.73 - 361.56 = -0.83 and 353.39 - 352.32 = +1.07,
+# which is what ams_2452.pdf prints. So this is not a change of basis: a
+# reader holding two letters can still subtract the printed figures and get
+# the printed move. Its 5-day average is the same excluding-today window
+# fetch_cutout uses, verified to the cent in tests/test_cutout_five_day.py.
+#
+# NO NEW SECRET AND NO NEW HOST: www.ams.usda.gov/mnreports/ is the directory
+# AMS_3208_PDF already reads from the deployed app with the same pypdf, which
+# is why this path works on Community Cloud where marsapi does not.
+
+AM_SESSION = "AM"
+PM_SESSION = "PM"
+
+
+def _load_am_cutout():
+    """
+    Load apps/beef_cutout/am_cutout.py under a PRIVATE module name.
+
+    Same reasoning as _load_fci_db, and the same reasoning deploy/
+    bank_am_cutout.py gives for taking this route: THE PARSER IS NOT COPIED.
+    A second copy of a PDF parser, running where nobody would watch it drift,
+    is the snowflake_db-times-five problem -- and it would let the letter and
+    the Beef Cutout page disagree about what one report says. The portal
+    imports that file as bare `am_cutout`, so the private name keeps this out
+    of the collision when both run in one process, which on the staff
+    deployment they do.
+    """
+    path = APPS / "beef_cutout" / "am_cutout.py"
+    spec = importlib.util.spec_from_file_location("_letter_am_cutout", path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["_letter_am_cutout"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def fetch_am_cutout() -> dict:
+    """
+    LM_XB402 in fetch_cutout's own shape, or {} if it cannot be had.
+
+    IT NEVER RAISES AND NEVER WARNS, because it is an upgrade rather than a
+    dependency: the close is always there, so a failed morning fetch leaves
+    the letter exactly as good as it was before this existed. A warning here
+    would fire every weekend and every holiday, which is the banner nobody
+    reads on the morning it matters.
+
+    ALL THREE FIGURES COME FROM THIS REPORT OR NONE DO. Taking the level from
+    the morning and the 5-day average from the close would put two reports on
+    one line, and both halves would look perfectly reasonable.
+    """
+    try:
+        am = _load_am_cutout().fetch_am()
+    except Exception:                                   # noqa: BLE001
+        return {}
+    if not am or am.get("error"):
+        return {}
+    ch, se, when = am.get("choice"), am.get("select"), am.get("report_date")
+    if ch is None or se is None or not when:
+        return {}
+    return {
+        "choice": {"value": ch, "change": am.get("change_choice"),
+                   "avg5": am.get("avg5_choice")},
+        "select": {"value": se, "change": am.get("change_select"),
+                   "avg5": am.get("avg5_select")},
+        "report_date": str(when)[:10],
+        "session": AM_SESSION,
+    }
+
+
+def pick_cutout(pm: dict, am: dict) -> dict:
+    """
+    The fresher of the two boxed beef reports, labelled with which one it is.
+
+    THE MORNING READ WINS ONLY WHEN ITS DATE IS STRICTLY LATER. On a tie the
+    close supersedes the morning of the same day, which is the whole reason
+    the test is strict: they describe one session and the close is the
+    finished one.
+
+    IT NEEDS NO CLOCK, and that is the point -- every date here comes from the
+    reports themselves, the rule _cut_label and _settle_stamp already follow,
+    because "yesterday" is wrong on a Monday and wrong after a holiday. It
+    falls out correctly at every hour with no special case:
+
+        07:30, before the morning release -- ams_2452.pdf still serves
+        YESTERDAY's morning report, which ties yesterday's close, so the close
+        keeps it and the brief prints what it has always printed.
+
+        1pm -- today's morning read exists and today's close does not, so the
+        morning wins and the stamp reads "Fri AM."
+
+        4pm -- today's close has landed and ties today's morning, so the close
+        takes it back.
+
+    IT IS DELIBERATELY NOT `am_cutout.default_session()`, which answers a
+    different question: that one picks which PANEL the dashboard opens on,
+    with both reports in hand, and needs today's date to do it. This picks the
+    newer of two for one line.
+
+    Grading is untouched either way -- LSWFEDCC is a weekly report on its own
+    date and has no morning edition.
+    """
+    out = dict(pm or {})
+    if out.get("report_date"):
+        out.setdefault("session", PM_SESSION)
+    am = am or {}
+    am_d = _iso_date(am.get("report_date"))
+    pm_d = _iso_date(out.get("report_date"))
+    if am_d is None:
+        return out
+    if pm_d is not None and am_d <= pm_d:
+        return out
+    out.update({k: am[k] for k in ("choice", "select", "report_date", "session")})
+    return out
+
+
+def _iso_date(s):
+    try:
+        return date.fromisoformat(str(s)[:10])
+    except (TypeError, ValueError):
+        return None
 
 
 # -- Slaughter and carcass weights: AMS SJ_LS712 ------------------------------

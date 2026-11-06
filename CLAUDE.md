@@ -7304,6 +7304,168 @@ blocked from those IPs, so this is a live question and it cannot be answered
 from this machine. **The tell is the Dollar Index line being absent from the
 morning brief** — it fails exactly the way an outage does, by design.
 
+### The cutout names its own report now, and can be the morning one — 2026-11-06
+
+Ross: *"can we have every am and pm email show when the choice/select cutouts
+are updated? some of them will say, Tuesday PM or Tuesday AM- I want that for
+every email version"*, then, asked whether he wanted the morning report wired
+in or only the label: *"yes, use the morning cutout too when it's fresher"*.
+
+**TWO OF THE FOUR FORMATS CARRIED NO DATE ON THE CUTOUT AT ALL.** The Monday
+full letter and the Tue/Wed/Thu recap stamped it; the **morning brief** and the
+**Friday letter** printed a Choice/Select figure with nothing saying which
+session it was. All four do now, and the word can say AM.
+
+### LM_XB402 IS A SECOND REPORT, AND IT CHAINS EXACTLY ONTO THE CLOSE
+
+The morning read is priced as of 9:30am and published about **10:55 CT**; the
+close is out about **3pm**. So an evening letter written before 3pm has today's
+morning read available and today's close not yet — and it printed YESTERDAY's
+close instead. Live on the day this shipped:
+
+| | report date | Choice | Select |
+|---|---|---|---|
+| PM, what the letter had | 2026-11-05 | 361.56 | 352.32 |
+| AM, newer and unused | **2026-11-06** | **360.73** | **353.39** |
+
+**WHAT LICENSES THE SUBSTITUTION IS THAT IT IS NOT A CHANGE OF BASIS.** The AM
+report's own printed change is its value less the PREVIOUS PM close, to the
+cent on both grades — 360.73 − 361.56 = **−0.83** and 353.39 − 352.32 =
+**+1.07**, which is exactly what `ams_2452.pdf` prints. So a client holding two
+letters can still subtract the printed figures and get the printed move. Its
+5-day average is the same excluding-today window `fetch_cutout` uses, already
+verified to the cent in `tests/test_cutout_five_day.py`. Check that chaining
+again before trusting any future substitution; it is the whole argument.
+
+No new secret and no new host: `www.ams.usda.gov/mnreports/` is the directory
+`AMS_3208_PDF` already reads from the deployed app with the same `pypdf`.
+
+### THE RULE IS STRICTLY LATER, AND IT NEEDS NO CLOCK
+
+`sources.pick_cutout(pm, am)` — the morning read wins **only when its report
+date is strictly later**. On a tie the close supersedes the morning of the same
+day, because they describe one session and the close is the finished one.
+
+Every date comes from the reports themselves, the rule `_settle_stamp` and the
+weekday half of the stamp already follow. It therefore takes no `today` and a
+test pins that signature, because the three cases fall out with no special
+casing:
+
+    07:30   ams_2452.pdf still serves YESTERDAY's morning report, which ties
+            yesterday's close -> the close keeps it, and the brief prints what
+            it always printed. THE 07:30 BRIEF CAN NEVER SAY "AM".
+    1pm     today's morning read exists, today's close does not -> "Fri AM."
+    4pm     the close has landed and ties the morning -> the close takes it back
+
+**It is deliberately NOT `am_cutout.default_session()`**, which answers a
+different question — which PANEL the dashboard opens on, with both in hand, and
+needs today's date to do it.
+
+### `fetch_cutout` STAYS LM_XB403 ONLY, AND THAT IS THE BLAST-RADIUS DECISION
+
+`apps/market_board/loaders.py` calls `letter.sources.fetch_cutout()` **directly**,
+and every cutout tile on that board carries a FIXED basis string naming
+`"LM_XB403 PM close"` — the registry's own docstring argues a tile without a
+fixed basis invites the wrong comparison. A value that silently alternated
+between two USDA reports would make that label a lie and the tile incomparable
+with its own history.
+
+So the fetcher is unchanged and the morning report is a SECOND fetcher that
+`build.gather()` picks between. The Market Board and the Beef Cutout dashboard
+are untouched.
+
+**THE CONSEQUENCE, WHICH IS ACCEPTED RATHER THAN OVERLOOKED:** on a pre-3pm
+afternoon the letter and the board now quote different Choice cutouts. Both
+NAME their report — the letter stamps "Fri AM.", the board's basis says
+"LM_XB403 PM close" and its tile carries `as of 11/5/26` — so this is the
+ESR-versus-ERS case on US Beef Trade, not the FCI case. **Do not "reconcile"
+them.**
+
+### THREE PLACES HAD THE WORD "PM" HARD-CODED, AND TWO ARE CLIENT-FACING
+
+- `render._pm_label` is `_cut_label(report_date, session)` now. **Both halves
+  come from the report, never from the letter.** The day already did; the
+  session is the easier one to get wrong, because deriving it from
+  `kind == "am"` would stamp "AM" on the morning brief, which quotes an
+  AFTERNOON report every day of its life. A test checks both directions.
+- **`letter/rundown.py` — the client one-pager — is built from the SAME ctx**,
+  so without this it would have printed "Friday PM." over a morning number.
+  This is the half that would have been missed by reading only the letter.
+- `rundown.freshness()` named "PM cutout" in three messages.
+
+**A MORNING READ IS STALE FOR THAT BANNER even though it is today's**, and so
+is the authoring page's warning. Before this, a 1pm build held yesterday's
+close, `got < expected`, and both warned. Letting today's morning read satisfy
+the date test would have **silenced the only thing that tells Ross to re-run
+after the close** — on exactly the builds that still need it. Both now fire on
+an AM reading and say which report they have.
+
+### Four smaller things, each with a test
+
+- **The dangling hyphen is gone.** The stamp was interpolated as
+  `at {money}-{pm}`, so a cutout with no `report_date` rendered
+  `Choice cutout- Down 0.94 at 361.56-` on a client letter. No test saw it and
+  **every recap render in the suite was in that state**. The hyphen belongs to
+  the stamp now.
+- **Friday keeps its own punctuation.** The note at the head of that section
+  keeps Friday's colons and signed numbers apart from Tuesday's dashes and
+  words deliberately, so the stamp joins with the letter's own middle dot
+  there — `Choice cutout: -0.83 at 360.73 · Fri AM.` — never with the recap's
+  dash, which is the tidy-up that note forbids.
+- **The morning brief's stamp LEADS**, `Cutout (Fri AM): Choice ... · Select
+  ...`, where the three evening formats trail. That line is one line carrying
+  both grades already joined by a middle dot; a third dot on the end would read
+  as qualifying Select alone.
+- **The two surfaces keep their own day spelling** — the letter abbreviates
+  ("Thurs"), the slide spells it out ("Thursday"). That predates this and
+  `tests/test_rundown.py` pins the slide's form by exact row equality, so
+  merging the helpers would quietly restyle a client deck.
+
+### The parser is loaded by path, never copied
+
+`sources._load_am_cutout()` loads `apps/beef_cutout/am_cutout.py` under a
+private name — the route `deploy/bank_am_cutout.py` already takes, and the
+`_load_fci_db` shape. A second copy of a PDF parser is the
+`snowflake_db`-times-five problem and would let the letter and the Beef Cutout
+page disagree about what one report says. `fetch_am_cutout` **never raises and
+never warns**: the close is always there, so a failed morning fetch leaves the
+letter exactly as good as it was, and a warning would fire every weekend.
+
+**ALL THREE FIGURES COME FROM ONE REPORT OR NONE DO.** Taking the level from
+the morning and the 5-day average from the close would put two reports on one
+line and both halves would look perfectly reasonable.
+
+The guard against copying is **by AST with docstrings dropped**, because
+`sources.py`'s own prose names `ams_2452.pdf` while explaining that it does not
+hold that URL — a substring search matches the comment documenting the rule.
+Fifth time in this repo.
+
+### Fourteen mutations, every one caught
+
+`tests/test_cutout_session.py` was run against a deliberately broken form of
+each claim: the stamp hard-coded to PM, the session taken from the format, the
+day taken from the issue date, each format's stamp removed, Friday importing
+the recap's dash, the dangling hyphen restored, the tie rule loosened to `<`,
+the level and the average taken from different reports, grading dropped, the
+slide left saying PM, the banner silenced, the operator warning silenced, and
+`sources.py` growing its own copy of the URL.
+
+**One survived the first run and the hole is worth keeping.** The slide test
+substring-matched across the Choice and Select rows JOINED, so reverting only
+the Choice row still passed. Every cutout assertion is per-LINE now, with the
+expected line count asserted — because a joined match also passes vacuously
+against an empty list.
+
+### Two things left open, both Ross's call
+
+- **The "5-day averages" line is still undated**, on all three evening formats.
+  It sits directly under a stamped line and describes the five sessions BEFORE
+  that print, so the stamp above it is not its date. Unchanged because he asked
+  about the cutouts; worth a decision rather than a drift.
+- **The day name is abbreviated in the letter** ("Fri AM") where he wrote
+  "Tuesday AM". The three stamped letters have shipped "Tues PM" for weeks and
+  clients read them, so the existing spelling was kept.
+
 ### The `[[?]]` on the deployed app — FIXED 2026-09-26/28
 
 **Both halves of this are now in Snowflake and the section is kept for the
