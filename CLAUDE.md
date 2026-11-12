@@ -4245,8 +4245,11 @@ wrapping, no horizontal overflow, zero `.katex` spans and zero stranded `**`.
 
 ## The Mexican Feeder Prices tab
 
-Added 2026-10-07. Mexican Feeder Imports is now **two tabs** — `Mexican Feeder
-Crossings | Mexican Feeder Prices` — `st.tabs`, the Cash Cattle Trade shape.
+Added 2026-10-07. Mexican Feeder Imports is **four tabs** now — `Mexican Feeder
+Crossings | Mexican Feeder Prices | Corn Demand | New World Screwworm` —
+`st.tabs`, the Cash Cattle Trade shape. It read "two tabs" until 2026-11-12,
+having gone stale twice; the count is in the tab construction in `app.py` and
+that is the thing to read rather than this line.
 The first is the whole page as it was; the second answers what a Mexican feeder
 calf is worth **inside Mexico** against the border quote the page has always
 shown. Arithmetic and every read are in `apps/mexican_feeder_imports/
@@ -4584,6 +4587,245 @@ sides of the border, and they agree to **99%** in 2024 and to the thousand in
 `leverage.SCHEMA` trap — and is passed at the call site, because a default is
 not part of the key. `tests/test_corn_demand.py` pins the basis rule, both PSD
 traps, the substitution check, the grading, the cap and the client gate.
+
+## The New World Screwworm tab
+
+Added 2026-11-12, after Ross: *"i would like to add a tab on the mexican feeder
+cattle dashboard that is titled, New World Screwworm cases ... how many cases
+there are, active cases, inactive cases. I would like to show WoW changes. The
+map. Anything that is important"*, linking APHIS's US confirmed-detections
+page. Fourth tab on Mexican Feeder Imports. Arithmetic and both fetches are in
+`apps/mexican_feeder_imports/screwworm.py`; the layout is in `app.py`, the same
+split as `mx_prices` and `corn_demand`. **In both views** — screwworm is why
+these crossings closed, every figure is APHIS's own published count, and a
+client watching the crossings panel has more reason to want it than we do.
+
+### THE DATA IS NOT ON THE PAGE HE LINKED, AND THE BEST FEED IS ON ITS SIBLING
+
+The confirmed-detections page is an **empty shell**: one iframe onto a Tableau
+view at `publicdashboards.dl.usda.gov`. Nothing in the HTML carries a number.
+
+Two routes out of it, and both were probed before anything was written:
+
+- **Tableau's view CSV export works and is keyless** — append `.csv` to the
+  view URL and it returns real data. **It returns ONE worksheet of the
+  dashboard and there is no way to pick another**: `:sheet=`, the dashboard's
+  own filter names, `?:format=csv` and `/crosstab.csv` all return the same 525
+  bytes, and every guessed sibling view name 404s. So it gives the monthly bar
+  chart and nothing else — no all-time headline, no county map, no fly traps.
+- **The `bootstrapSession` JSON holds the whole dashboard** and is not worth
+  it. `tsConfigContainer` in the served HTML is **empty** on this Tableau
+  version — the session id arrives from a separate `startSession` POST — so a
+  plain-`requests` bootstrap means replicating a two-step handshake against an
+  internal API, to get numbers that still cannot do week over week.
+
+**THE USEFUL FEED IS A PLAIN CSV AND IT IS ON THE *CURRENT STATUS* PAGE, ONE
+LEVEL UP:**
+
+    https://www.aphis.usda.gov/sites/default/files/nws-weekly-status.csv
+
+Case-level Mexican detections — confirmed date, state, species, age,
+active/inactive, sterile-fly dispersal, and **approximate miles from the US
+border**. 578 rows reaching back to 2025-09-20 on the edition this was built
+against. It is what the DataTables widget on that page renders, and it is
+**invisible from the HTML**: the table is initialised from a JS data array, so
+the only way to find it was to watch the network while the page loaded. Nothing
+in the markup names it.
+
+**No new host.** `www.aphis.usda.gov` is already fetched from the deployed app
+by `letter/sources.AMS_3208_PDF` and `apps/beef_cutout/am_cutout.py`, so unlike
+`marsapi.ams.usda.gov` this path is proven on Community Cloud.
+
+**IT CARRIES A UTF-8 BOM.** Read as plain `utf-8`, `csv.DictReader` puts
+`﻿` on the front of the first column name, every date lookup returns None,
+and the parse yields **578 empty rows rather than an error**. The same BOM is
+recorded above for two of the app pages. A test asserts a BOM-blind parse comes
+back visibly empty rather than subtly wrong.
+
+### ACTIVE IS EXACTLY A 15-DAY CLOCK, AND THAT IS THE WHOLE PANEL
+
+Measured across all 578 rows: **every case at age 0–14 days was Active (63 of
+63) and every case at 15 days or more was Inactive (515 of 515). Not one date
+carried both statuses.** SENASICA's published rule — active at diagnosis,
+revisited after 15 days — is in practice mechanical, with no exceptions.
+
+Three things fall out, and the tab rests on all three:
+
+- **INACTIVE IS NOT A SECOND MEASUREMENT.** It is total less active. The tile
+  is there because APHIS shows it and Ross asked for it, and it says so.
+- **THE WHOLE HISTORY IS RECONSTRUCTIBLE.** Status is a pure function of
+  (confirmed date, as-of date), so what the dashboard said last Tuesday
+  recomputes from today's file. **Week over week therefore needs no banked
+  snapshots, no table and no cron** — unlike `JSA.BOXED_BEEF.CUTOUT_AM` and
+  `MX_AUCTION_PRICES`, where the source keeps no history and the series only
+  accrues from the day a job starts recording. This one shipped with fourteen
+  months of history on its first load.
+- **IT IS A FREE AUDIT.** `as_of()` DERIVES the file's as-of date from the
+  active/inactive boundary rather than taking `max(date)` or the clock. Three
+  bounds, and on the shipped fixture all three collapse onto one day:
+
+        as_of <= oldest_active   + 14
+        as_of >= newest_inactive + 15
+        as_of >= newest_case
+
+  Where they leave a range the **earliest** is taken: reading the as-of later
+  than it is claims a freshness the file has not got and quietly ages real
+  cases out of the window, while reading it early only understates. When they
+  cross, `as_of()` returns None and the page says the rule no longer holds
+  instead of printing a confident wrong number. `rule_holds()` then re-checks
+  every row, so a single restated case in the middle of the series surfaces
+  too.
+
+  Returning `max(date)` outright would look identical today and would keep
+  looking identical for as long as the rule held — which is exactly why it is
+  not done that way. The point is to notice when it stops.
+
+**NEVER COMPUTE THE ACTIVE WINDOW AGAINST `date.today()`.** The file lags its
+own newest case, so a window anchored on today drops cases APHIS still calls
+active off the back while the front has nothing to replace them. The count
+comes out low, renders perfectly, and nothing raises. Every function takes the
+as-of date as an argument and `test_nothing_in_the_module_reads_the_clock`
+walks the AST for `today`/`now`/`utcnow`.
+
+### THE TWO COUNTRIES' "ACTIVE" ARE DIFFERENT MEASUREMENTS
+
+The single most important thing on the page, and the two numbers sit inches
+apart with nothing about them warning a reader:
+
+| | what active means |
+|---|---|
+| Mexico | confirmed within 15 days. A calendar, not a status. |
+| US | mitigation is still under way. A real case status. |
+
+**APHIS's own monthly split proves the US is not a clock**: on the 2026-11
+reading **24 of October's 33 domestic cases were still active** at 11 to 41
+days old, which a 15-day rule would have closed. A warning box on the page
+says so and a test pins it from the data rather than from the prose.
+
+Summing or averaging them would be the two-surfaces-one-label failure this file
+records five times over.
+
+### WEEK OVER WEEK, AND THE LEG THAT IS STILL SETTLING
+
+Seven-day blocks **anchored on the as-of date**, never calendar weeks — a
+calendar week is part-finished on six days in seven, and differencing three
+days against seven prints a fall that is only the calendar.
+
+Two identities hold and are asserted on every load, because either breaking
+means the window arithmetic has drifted from the counting:
+
+    total_change  == new_7
+    active_change == new_7 - aged_out
+
+**THE TWO LEGS ARE NOT EQUALLY SETTLED, and the page says which is which.**
+`aged_out` is the block that ended 15 days ago: weeks old, fully reported, it
+will not move again. `new_7` is the last seven days, still collecting late
+reports — the file reached only to **two days** before it was written. So the
+change is biased DOWN by an amount no single snapshot can measure, and a week
+that reads flat may well have risen. **That is a caveat to print, not a
+correction to apply**; inventing a completion factor would be the
+plausible-wrong-cause failure this file keeps recording. The starred figures
+on the page are exactly the ones that revise up.
+
+The same lag is why `weekly_new()` flags its **last block `provisional`** and
+the chart draws it hollow. Only the last one, and that is a measurement rather
+than a guess: the observed lag is two days, well inside one block. If it ever
+grows past a week the flag has to follow it.
+
+**The US chart has the same problem and solves it differently.** Eleven days of
+November stood taller than all of October, which invites exactly the wrong
+conclusion. A stacked bar cannot be hollowed legibly, so the **axis label**
+carries it — `November 2026 (so far)` — which also survives a screenshot.
+
+### Things that look wrong and are not
+
+- **The feed is the within-100-miles list, not a national count**, and the tell
+  is that the observed maximum mileage is exactly **100.0**. `in_scope()`
+  checks it on every load, because the caption makes that claim and the claim
+  has to keep being true.
+- **`State` is a literal `"NA"` on 24 rows and they are the NEWEST ones** —
+  2026-11-01 to 11-08 on the shipped fixture. SENASICA releases the state
+  later. Dropping them would silently delete the most recent week from a state
+  chart a reader is consulting for exactly that week, so they are kept, sorted
+  last, and named under the map.
+- **Staleness is judged on when APHIS last REWROTE the file, not on how old its
+  newest case is.** Those are different questions and only the first is a
+  fault: the publication lag means a healthy edition always reaches two or
+  three days back, so a rule on the case date would cry stale every single day
+  and teach a reader to ignore the one time it matters. Four days on the write
+  date clears a Friday edition over a holiday weekend — which is the case that
+  would otherwise have fired for nothing over Veterans Day while this was
+  being built.
+- **The US half is on a host nothing else in this repo reads.**
+  `publicdashboards.dl.usda.gov` is NOT proven from Community Cloud, and
+  `marsapi` is the standing proof a USDA host can be blocked there. So it fails
+  soft and alone: `us` comes back None, that panel says the feed is unavailable
+  and links out, and the Mexican half — the substance, and the only half that
+  can do week over week — is untouched. **The tell is the United States section
+  showing an info box on the deployed app and figures locally.**
+- **The US feed gives the ACTIVE count exactly and cannot give an all-time
+  total.** The worksheet draws four months; the outbreak began June 2026. But
+  an active US case is a recent one, so the window holds every one — 65 on the
+  2026-11 reading, which reconciles against the dashboard's own 126 domestic
+  less 61 inactive. `parse_us()` deliberately returns no `all_time` key and the
+  page links out for it rather than summing a window into a label it has not
+  earned.
+
+### The map, and the two ways it misleads
+
+**PLOTLY SHIPS SUBUNIT BOUNDARIES FOR THE UNITED STATES AND NOT FOR MEXICO**,
+so `showsubunits=True` draws nothing south of the border and the bubbles sat on
+an unlabelled landmass — legible by hover and by nothing else, which means a
+screenshot of it says nothing at all. Each bubble carries its state and count
+as text now. Five states spread across the north label cleanly; the **eight
+crossings could not**, because they string along one line a few degrees apart
+and piled into an unreadable block over exactly the stretch the map exists to
+show. They are markers with hover and a legend entry.
+
+**`scope="north america"` TREATS THE LAT/LON RANGES AS ADVISORY.** It fits a
+conic projection to the whole continent, so the frame came out showing southern
+Mexico — which this panel is not about — and squeezed the border into a band an
+inch tall. `projection=dict(type="mercator")` with explicit ranges honours the
+window as given.
+
+**THE CAPTION HAS TO NAME THE COUNTRY IN ITS FIRST THREE WORDS.** The map draws
+both countries' ground and plots one country's cases, so a reader who takes the
+empty north at face value concludes the United States has none — when it has
+more than a hundred. It opens "Mexican cases only" and ends by pointing at the
+US section below. A test fails the page if that pointer goes.
+
+**The bubble sits at the state's CENTRE, not at the cases.** For a state the
+size of Chihuahua that is a couple of hundred miles from the line, so the map
+must not be read for distance. The chart beside it is APHIS's own per-case
+mileage and is the precise measure; the caption says so.
+
+### Verifying it
+
+`.claude/launch.json` carries `mexican-feeder-imports` on 8524, through a
+scratchpad runner that sets `layout="wide"` and loads `.env` — run the page
+bare and Streamlit centres it at 736px, where tile values wrap mid-number.
+**That config pointed at a runner from a dead session and had to be rebuilt**;
+it also needs `streamlit run <runner>`, not a bare `python <runner>`, which
+starts in bare mode and serves nothing.
+
+Measured at 1440 and 1280 after the change: headline tiles level at 145px and
+the US row at 136px, no value wrapping, no overflow, **zero `.katex` spans and
+zero stranded `**`**.
+
+The headline tile row is **one CSS grid through `st.html`**, not `st.columns` —
+the feet wrap to different line counts and the row renders ragged, the defect
+recorded above for the daily cash tiles which `py_compile`, the suite and
+`get_page_text` all pass. The fourth tile has no week change and carries a
+**reserved blank line**, because without it its foot floats a row higher than
+its three neighbours: the spacer has to reach the tile that has nothing to say.
+
+`screwworm.SCHEMA` exists because the cache serves shape, not freshness — the
+`leverage.SCHEMA` trap — and is passed at the call site, because a default is
+never hashed. `tests/test_screwworm.py` pins the 15-day rule against the real
+file and against a window one day either side, the derived as-of, both
+week-over-week identities, the scope, the two countries' difference, the BOM,
+the hosts the module may reach, and the page decisions above — each checked
+against a deliberately broken form as well as the correct one.
 
 ## Commitment of Traders — the fourteenth dashboard
 
