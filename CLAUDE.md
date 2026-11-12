@@ -107,6 +107,16 @@ Measured on the live app, 2026-10-26:
 | browser, `document.cookie` | `proxy-tracking-id`, `_ga`, `jsa_portal_PORTAL_PASSPHRASE`, `jsa_portal_probe`, … |
 | server, `st.context.cookies` | `[]` |
 
+**AND YET ON 2026-11-12 THE STAFF APP DID NOT ASK.** A full page load of
+`jsa-livestock.streamlit.app` in Ross's Chrome — a fresh navigation, the case
+this section says starts a new session and re-gates — came up unlocked, on the
+Mexican Feeder Imports page, with the whole nav bar. **This is an OBSERVATION
+and the mechanism was NOT established.** It may be the signed cookie working
+after a Streamlit version bump, it may be something else carrying the session,
+and this file's own standing lesson is that writing down a guess here is how
+the entry goes wrong. What it does mean: **do not rely on this gate re-asking
+on a reload**, in either direction, until somebody measures it properly.
+
 **THE DEPLOYED STREAMLIT VERSION MOVES ON ITS OWN AND HAS TWICE.** The
 comment in `Home.py` names **1.64**; it read **1.66.1** when this section was
 written on 2026-10-26, and the reboot of 2026-11-05 installed **1.67.0**, read
@@ -790,7 +800,30 @@ A reboot does a full fresh clone, so it always takes current `master` — the
 startup log says `Cloning repository... Pulling code changes from Github`.
 
 **CLAUDE CAN DO THE REBOOT** as of 2026-09-28, through the Claude in Chrome
-extension driving Ross's signed-in Streamlit session. **"Delete app" sits
+extension driving Ross's signed-in Streamlit session — **but that premise
+broke on 2026-11-12 and the first attempt after it will stall.** Streamlit has
+moved Community Cloud's login onto **WorkOS/AuthKit**: the sign-in page now
+offers Google / GitHub / email as though the account were new, any existing
+session is gone, and GitHub presents a fresh **OAuth authorization** screen
+(`scope=user:email`, redirecting to `auth.workos.com`) because it is a new
+OAuth client.
+
+**CLAUDE CANNOT CLEAR THAT, AND MUST NOT TRY.** Submitting the GitHub password
+form is prohibited outright, and clicking the authorize button is a persistent
+grant on Ross's account rather than part of a reboot. Hand both to him. Two
+further traps from that session: **GitHub is the provider, never Google** —
+Community Cloud deploys from `JSA-Dashboards/livestock-portal`, so the account
+that owns the apps is `baldwinrv` on GitHub, and a Google sign-in would create
+a different Streamlit identity with none of them. And a one-off **HTTP 500 on
+`github.com/session`** is not a bad password; githubstatus.com read all-green
+through it and a retry went straight past.
+
+**BEFORE ANY OF THAT, CHECK WHETHER A REBOOT IS NEEDED AT ALL.** On 2026-11-12
+the push had already auto-deployed to BOTH apps and was serving a newer USDA
+file than the local run — the whole console detour bought nothing. Opening the
+app and reading a figure that only exists in the new code settles it in
+seconds, and the lighter lever below (⋮ → Clear cache → Rerun) covers most of
+what a reboot is reached for. **"Delete app" sits
 directly below "Reboot app" in that menu** — click by element reference, never
 by coordinate. The confirm dialog says "This will disrupt all current users".
 Ask before rebooting: Ross writes the letter on that app.
@@ -4756,13 +4789,16 @@ carries it — `November 2026 (so far)` — which also survives a screenshot.
   date clears a Friday edition over a holiday weekend — which is the case that
   would otherwise have fired for nothing over Veterans Day while this was
   being built.
-- **The US half is on a host nothing else in this repo reads.**
-  `publicdashboards.dl.usda.gov` is NOT proven from Community Cloud, and
-  `marsapi` is the standing proof a USDA host can be blocked there. So it fails
-  soft and alone: `us` comes back None, that panel says the feed is unavailable
-  and links out, and the Mexican half — the substance, and the only half that
-  can do week over week — is untouched. **The tell is the United States section
-  showing an info box on the deployed app and figures locally.**
+- **The US half is on a host nothing else in this repo reads, and it WORKS
+  from Community Cloud — verified live 2026-11-12.** This shipped as an open
+  risk, because `marsapi` is the standing proof a USDA host can be blocked
+  there. It is not: the deployed staff app renders the US panel in full, 65
+  active and the monthly bars, off `publicdashboards.dl.usda.gov`. **Do not
+  re-open this as a worry.** It still fails soft and alone by construction —
+  `us` comes back None, that panel says the feed is unavailable and links out,
+  and the Mexican half, the substance and the only half that can do week over
+  week, is untouched. The tell, if it ever does go, is an info box where the
+  figures are.
 - **The US feed gives the ACTIVE count exactly and cannot give an all-time
   total.** The worksheet draws four months; the outbreak began June 2026. But
   an active US case is a recent one, so the window holds every one — 65 on the
@@ -4808,9 +4844,23 @@ bare and Streamlit centres it at 736px, where tile values wrap mid-number.
 it also needs `streamlit run <runner>`, not a bare `python <runner>`, which
 starts in bare mode and serves nothing.
 
-Measured at 1440 and 1280 after the change: headline tiles level at 145px and
-the US row at 136px, no value wrapping, no overflow, **zero `.katex` spans and
-zero stranded `**`**.
+**THE US ROW SITS AT THE TOP, ABOVE THE MEXICAN ONE** — Ross, 2026-11-12.
+That puts "US cases still active" directly over "Mexican cases still active",
+two adjacent boxes using one word for two different measurements, which is the
+hazard the whole tab exists to warn about. The warning box that carried it
+needs the monthly chart beside it and stays down there, so **the LABELS carry
+it now**: the US tile says "still under mitigation, a real case status and not
+a 15-day clock" and the Mexican one names its window. Each row is also headed
+by its country, because the freshness line dates the MEXICAN file alone and
+under an unheaded US row it reads as dating that instead.
+
+The US row renders ABOVE the Mexican guards, not inside them: the two feeds
+fail independently, and three figures fetched successfully from one host have
+no business vanishing because the other did not answer.
+
+Measured at 1440 and 1280: Mexican tiles level at 145px, the US row at 136px,
+no value wrapping, no overflow, **zero `.katex` spans and zero stranded
+`**`**.
 
 The headline tile row is **one CSS grid through `st.html`**, not `st.columns` —
 the feet wrap to different line counts and the row renders ragged, the defect

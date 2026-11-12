@@ -115,11 +115,41 @@ def test_sources_are_embedded_not_paths(asset):
 
 
 def test_the_png_size_is_read_from_the_file():
-    """The aspect must track the asset, not a constant someone wrote down."""
-    for name, expect in (("logo-full.png", (222, 60)),
+    """The aspect must track the asset, not a constant someone wrote down.
+
+    THESE PIXELS TRACK THE ASSETS AND CHANGE WITH THEM. The wordmark went
+    222x60 -> 500x140 on 2026-11-12 when a higher-resolution logo landed, and
+    this line was the ONLY place in the repo carrying the old numbers --
+    nothing in cof_recap.py did, because `_png_size` reads the IHDR, so the
+    letterhead followed the new file on its own and the client one-pager never
+    stretched. Update the pair below when the asset is replaced; the invariant
+    that must never move is the one in the test underneath.
+    """
+    for name, expect in (("logo-full.png", (500, 140)),
                          ("jsa-50-years.png", (272, 249))):
         raw = (_ROOT / "assets" / name).read_bytes()
-        assert cof_recap._png_size(raw) == expect
+        got = cof_recap._png_size(raw)
+        assert got == expect, (
+            f"{name} is {got[0]}x{got[1]}. If the asset was replaced on "
+            f"purpose, update this pair -- nothing else in the repo needs "
+            f"changing.")
+
+
+def test_the_rendered_aspect_follows_the_file():
+    """The guard that does NOT go stale when an asset is swapped.
+
+    `sizex` and `sizey` are fractions of two different page lengths, so the
+    aspect the figure uses has to be the file's own. Anything that drifts
+    from it squashes the wordmark on a sheet that goes to clients, and it
+    renders perfectly while doing so.
+    """
+    for name in ("logo-full.png", "jsa-50-years.png"):
+        raw = (_ROOT / "assets" / name).read_bytes()
+        w, h = cof_recap._png_size(raw)
+        cof_recap._asset.cache_clear()
+        uri, aspect = cof_recap._asset(name)
+        assert uri.startswith("data:image/png;base64,")
+        assert aspect == pytest.approx(w / h, rel=1e-9), name
 
 
 def test_a_missing_asset_costs_the_branding_and_not_the_page():

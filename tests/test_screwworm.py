@@ -463,3 +463,52 @@ def test_staleness_is_judged_on_the_write_date_not_the_case_date():
     src = _page()
     i = src.index("_stale = ")
     assert "_written_age" in src[i:i + 80], src[i:i + 80]
+
+
+# ── The US row at the top — Ross, 2026-11-12 ────────────────────────────────
+
+def test_the_us_tiles_render_above_the_mexican_row():
+    src = _page()
+    us = src.index('<div class="nws-grid three">')
+    mx = src.index("_cards = [")
+    assert us < mx, "the US tiles must come before the Mexican ones"
+
+
+def test_the_us_tiles_survive_a_mexican_outage():
+    """The two feeds fail independently and the layout has to honour that.
+
+    Inside the Mexican guards, a bad day at aphis.usda.gov would blank the
+    US row as well -- three figures that were fetched successfully from a
+    different host, removed because a different feed was down.
+    """
+    src = _page()
+    us = src.index('if USD and USD.get("months"):')
+    guard = src.index("    if not ROWS:")
+    assert us < guard, "the US row must render above the Mexican guards"
+
+
+def test_both_active_tiles_name_their_own_rule():
+    """"Active" means two different things and the two tiles now touch.
+
+    The warning box that carried this lives further down beside the chart it
+    needs, so the labels have to carry it themselves -- a tile gets
+    screenshotted and read with nothing above it.
+    """
+    src = _page()
+    us = src.index('<div class="nws-grid three">')
+    block = src[us:us + 900]
+    assert "not a 15-day clock" in block, "the US tile must disown the clock"
+    mx = src.index("Mexican cases still active")
+    assert "within {sw.ACTIVE_DAYS} days" in src[mx:mx + 400], \
+        "the Mexican tile must name its window"
+
+
+def test_each_row_is_headed_by_its_country():
+    """Without headings the freshness line -- which dates the MEXICAN file
+    and nothing else -- reads as if it dated the US tiles above it, and
+    seven boxes read as one set."""
+    src = _page()
+    i = src.index('if USD and USD.get("months"):')
+    assert '<div class="sec-header">United States</div>' in src[i:i + 900]
+    assert "Northern Mexico &mdash; Within " in src
+    assert src.index("Northern Mexico &mdash; Within ") < src.index("_cards = [")

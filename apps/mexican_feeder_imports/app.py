@@ -2625,6 +2625,69 @@ with tab_nws:
         "from the case list behind USDA's Current Status page, the United "
         "States from the Confirmed Detections dashboard.")
 
+    _grid_css = (
+        "<style>"
+        ".nws-grid{display:grid;grid-template-columns:repeat(4,1fr);"
+        "gap:12px;margin:6px 0 2px;}"
+        ".nws-grid.three{grid-template-columns:repeat(3,1fr);}"
+        ".nws-grid .tile{background:" + CARD_BG + ";border:1px solid "
+        + BORDER + ";border-top:3px solid " + JPSI_BLUE + ";"
+        "border-radius:10px;padding:16px 14px;text-align:center;"
+        "box-shadow:0 1px 2px rgba(0,0,0,0.04);}"
+        ".nws-grid .tile-label{font-size:.76rem;color:" + MUTED + ";"
+        "text-transform:uppercase;letter-spacing:.04em;line-height:1.25;"
+        "min-height:2.6em;}"
+        ".nws-grid .tile-value{font-size:1.5rem;font-weight:700;color:"
+        + TEXT + ";white-space:nowrap;margin:.3rem 0 .1rem;}"
+        ".nws-grid .tile-sub{font-size:.72rem;color:" + MUTED + ";"
+        "line-height:1.3;margin-top:.35rem;}"
+        ".nws-grid .tile-delta-neg{color:" + NEG + ";font-size:.8rem;"
+        "font-weight:600;}"
+        ".nws-grid .tile-delta-pos{color:" + POS + ";font-size:.8rem;"
+        "font-weight:600;}"
+        ".nws-grid .tile-delta-neu{color:" + NEU + ";font-size:.8rem;}"
+        "@media (max-width:900px){.nws-grid,.nws-grid.three"
+        "{grid-template-columns:repeat(2,1fr);}}"
+        "</style>")
+
+    # ── The United States, at the top ──────────────────────────────────────
+    # Ross asked for these three above the Mexican row, 2026-11-12.
+    #
+    # STACKED DIRECTLY ABOVE "MEXICAN CASES STILL ACTIVE", THE WORD "ACTIVE"
+    # NOW APPEARS TWICE IN ADJACENT BOXES MEANING TWO DIFFERENT THINGS -- a
+    # real case status here, a 15-day calendar there. That is the whole
+    # hazard this tab was built to warn about, and the warning box that
+    # carried it lives further down beside the chart it needs. So the LABELS
+    # carry it now: each tile names its own country and its own rule, which
+    # is the standing headline rule -- a tile gets screenshotted and read
+    # with nothing above it.
+    #
+    # It renders ABOVE the Mexican guards on purpose, not inside them. The
+    # two feeds fail independently, and the US row has no business
+    # disappearing because APHIS's Mexican file did not answer.
+    if USD and USD.get("months"):
+        _us_ms = USD["months"]
+        _us_now, _us_prev = _us_ms[-1], _us_ms[-2]
+        st.markdown('<div class="sec-header">United States</div>',
+                    unsafe_allow_html=True)
+        st.html(
+            _grid_css
+            + '<div class="nws-grid three">'
+            + f'<div class="tile"><div class="tile-label">US cases still '
+              f'active</div><div class="tile-value">{USD["active"]:,}</div>'
+              f'<div class="tile-sub">every one of them &mdash; still under '
+              f'mitigation, a real case status and not a 15-day clock</div>'
+              f'</div>'
+            + f'<div class="tile"><div class="tile-label">New US domestic '
+              f'cases, {_us_now["label"]}</div><div class="tile-value">'
+              f'{_us_now["domestic"]:,}</div><div class="tile-sub">month to '
+              f'date</div></div>'
+            + f'<div class="tile"><div class="tile-label">New US domestic '
+              f'cases, {_us_prev["label"]}</div><div class="tile-value">'
+              f'{_us_prev["domestic"]:,}</div><div class="tile-sub">the full '
+              f'month</div></div>'
+            + '</div>')
+
     if not ROWS:
         st.warning(
             "APHIS's Mexican case list is not answering "
@@ -2644,6 +2707,15 @@ with tab_nws:
         W = sw.wow(ROWS, ASOF)
         NEAR = sw.nearest(ROWS, ASOF)
         SNAP = sw.snapshot(ROWS, ASOF)
+
+        # ── Northern Mexico ────────────────────────────────────────────────
+        # THE ROW NEEDS ITS OWN HEADING NOW THAT THE US ROW SITS ABOVE IT.
+        # Without one the freshness line underneath -- which describes the
+        # MEXICAN file and nothing else -- reads as if it dated the US tiles,
+        # and the two sets of boxes read as one set of seven.
+        st.markdown('<div class="sec-header">Northern Mexico &mdash; Within '
+                    f'{sw.MAX_MILES} Miles of the Border</div>',
+                    unsafe_allow_html=True)
 
         # ── How fresh, in the file's own terms ──────────────────────────────
         # TWO DATES, AND THEY ANSWER DIFFERENT QUESTIONS. One says how far the
@@ -2738,30 +2810,6 @@ with tab_nws:
             ("Nearest active case to the US border",
              _near_v, '<div class="tile-delta-neu">&nbsp;</div>', _near_s),
         ]
-        _grid_css = (
-            "<style>"
-            ".nws-grid{display:grid;grid-template-columns:repeat(4,1fr);"
-            "gap:12px;margin:6px 0 2px;}"
-            ".nws-grid.three{grid-template-columns:repeat(3,1fr);}"
-            ".nws-grid .tile{background:" + CARD_BG + ";border:1px solid "
-            + BORDER + ";border-top:3px solid " + JPSI_BLUE + ";"
-            "border-radius:10px;padding:16px 14px;text-align:center;"
-            "box-shadow:0 1px 2px rgba(0,0,0,0.04);}"
-            ".nws-grid .tile-label{font-size:.76rem;color:" + MUTED + ";"
-            "text-transform:uppercase;letter-spacing:.04em;line-height:1.25;"
-            "min-height:2.6em;}"
-            ".nws-grid .tile-value{font-size:1.5rem;font-weight:700;color:"
-            + TEXT + ";white-space:nowrap;margin:.3rem 0 .1rem;}"
-            ".nws-grid .tile-sub{font-size:.72rem;color:" + MUTED + ";"
-            "line-height:1.3;margin-top:.35rem;}"
-            ".nws-grid .tile-delta-neg{color:" + NEG + ";font-size:.8rem;"
-            "font-weight:600;}"
-            ".nws-grid .tile-delta-pos{color:" + POS + ";font-size:.8rem;"
-            "font-weight:600;}"
-            ".nws-grid .tile-delta-neu{color:" + NEU + ";font-size:.8rem;}"
-            "@media (max-width:900px){.nws-grid,.nws-grid.three"
-            "{grid-template-columns:repeat(2,1fr);}}"
-            "</style>")
         st.html(
             _grid_css
             + '<div class="nws-grid">'
@@ -2988,8 +3036,11 @@ with tab_nws:
             "animal, so a dog or a goat found near the line is the same "
             "surveillance signal as a calf.")
 
-        # ── The United States ──────────────────────────────────────────────
-        st.markdown('<div class="sec-header">United States</div>',
+        # ── The United States, by month ────────────────────────────────────
+        # The US TILES are at the top of the tab, above the Mexican row --
+        # Ross, 2026-11-12. What stays here is the monthly shape and the
+        # caveat, which needs the chart beside it to make its point.
+        st.markdown('<div class="sec-header">US Cases by Month</div>',
                     unsafe_allow_html=True)
         if not USD or not USD.get("months"):
             st.info(
@@ -2999,24 +3050,6 @@ with tab_nws:
         else:
             _ms = USD["months"]
             _this, _prev = _ms[-1], _ms[-2]
-            st.html(
-                _grid_css
-                + '<div class="nws-grid three">'
-                + f'<div class="tile"><div class="tile-label">US cases still '
-                  f'active</div><div class="tile-value">'
-                  f'{USD["active"]:,}</div><div class="tile-sub">all of them, '
-                  f'not a four-month window &mdash; an active US case is a '
-                  f'recent one</div></div>'
-                + f'<div class="tile"><div class="tile-label">New US domestic '
-                  f'cases, {_this["label"]}</div><div class="tile-value">'
-                  f'{_this["domestic"]:,}</div><div class="tile-sub">month to '
-                  f'date</div></div>'
-                + f'<div class="tile"><div class="tile-label">New US domestic '
-                  f'cases, {_prev["label"]}</div><div class="tile-value">'
-                  f'{_prev["domestic"]:,}</div><div class="tile-sub">the full '
-                  f'month</div></div>'
-                + '</div>')
-
             # THE NEWEST MONTH IS PART-FINISHED AND THE AXIS SAYS SO. Drawn
             # bare it is a true number telling a false story -- eleven days
             # of November stood taller than the whole of October on the
