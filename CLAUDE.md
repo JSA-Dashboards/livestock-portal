@@ -7708,6 +7708,107 @@ against an empty list.
   "Tuesday AM". The three stamped letters have shipped "Tues PM" for weeks and
   clients read them, so the existing spelling was kept.
 
+### One dead USDA host cost eight minutes — 2026-11-12
+
+Ross: *"why is my daily cattle email just spinning when i click fetch latest
+data? second time this week that it's happened."*
+
+**IT WAS NOT SPINNING, IT WAS GRINDING**, and that distinction is the whole
+diagnosis. `mpr.datamart.ams.usda.gov` was accepting connections and never
+answering. Three of the letter's fetchers read that host, and each one
+independently waited out the same timeout:
+
+| | |
+|---|---|
+| cash trade LM_CT150/154 | 139s, ConnectionError |
+| cash week-to-date by state | 113s, RetryError |
+| boxed beef PM LM_XB403 | 78s, ConnectionError |
+| **the whole fetch** | **488s** |
+
+`build._try` catches every one and carries on, so nothing raised and the run
+COMPLETED — eight minutes later, by which time Community Cloud had dropped the
+socket and the browser was showing a spinner that would never stop. The outage
+was USDA's; the eight minutes were ours.
+
+**THE HOST WAS DOWN, NOT THE NETWORK, AND THE PROOF IS ONE IP.**
+`mpr.datamart` resolves to **23.2.156.23** — the SAME Akamai address as
+`marsapi.ams.usda.gov`, which answered in 3.3s in the same minute, while
+`www.ams.usda.gov` answered in 3.2s. So DNS was fine, the edge was fine, and
+one application behind it was not. **Probe a sibling host on the same address
+before concluding anything about AMS as a whole**; a breaker that had
+condemned all of AMS would have cost the slaughter, the carcass weights and
+the morning cutout for nothing.
+
+### The breaker: one timeout per host per run
+
+`sources._BreakerSession` subclasses `requests.Session` and overrides
+`request()`. The first connection-level failure records the HOST, and every
+later call to it in the same run raises `HostUnreachable` immediately.
+Measured against the live outage: the second and third calls went from 113s
+and 78s to **0.0s each**, and the two healthy hosts were untouched.
+
+Subclassing rather than wrapping fifteen call sites, so the ones written later
+are covered by construction. `HostUnreachable` subclasses
+`requests.ConnectionError` so `_try` reports it and carries on exactly as it
+already did for a dead source.
+
+**IT TRIPS ON CONNECTION AND TIMEOUT FAILURES, NEVER ON AN HTTP STATUS, and
+that is the safety of the whole thing.** `Retry` carries a `status_forcelist`,
+so one report answering 500 four times surfaces as `RetryError` — which says
+that endpoint is unwell and says nothing whatever about the host. Condemning
+the host on it would skip the afternoon cutout because the cash report was
+sick. requests already draws the line for us: `ConnectionError` (and
+`ConnectTimeout`, which subclasses both) for the connection-level case,
+`RetryError` for the status one.
+
+**ONE FAILURE IS ENOUGH** because the adapter has already tried four times by
+then. A false trip costs one run of two missing figures and is recovered by
+pressing Fetch again; the alternative costs eight minutes every time.
+
+`gather()` calls `reset_hosts()` as its FIRST act — the state is module-level,
+so without it a host that failed at breakfast is still refused at four
+o'clock. `HOST_DOWN_TTL` (120s) is the backstop for the callers that are not
+gather(), the headline panel among them.
+
+### THE FIRST TIMEOUT IS NOT RECOVERABLE, AND IT IS STILL MOST OF THE COST
+
+The breaker saves the SECOND and third discoveries, never the first. Measured
+the same afternoon, the first call took **261s** — against 139s that morning,
+on the same dead host. So the honest figure for a bad day is "the fetch costs
+one timeout instead of three", not a fixed number of minutes.
+
+**THE OBVIOUS NEXT LEVER CANNOT BE PULLED TODAY, and that is worth recording
+rather than attempting.** `fetch_cash_trade`'s `/History` carries
+`timeout=120`, and with retries that is where the 261s goes. Lowering it would
+halve the discovery — but there is no measurement of how long that pull takes
+when it is HEALTHY, and the only way to get one is a day the host answers.
+Tuning it against an outage would be fitting the timeout to the broken case
+and could break the working one. Measure `/History` on a good day first.
+
+### The page names the host once, above its own wreckage
+
+Every call that hit it has already appended a line, and the first is a raw
+urllib3 `HTTPSConnectionPool(host=..., port=443): Max retries exceeded` —
+true, unreadable, and silent about which of the letter's figures are now
+missing. `report_source_health` adds one sentence naming the host and what it
+costs, and it fires only when a host actually tripped.
+
+### What survived the outage, and why it is worth knowing
+
+The cutout line still filled — from the MORNING report, because LM_XB402 is a
+PDF on `www.ams.usda.gov` while the afternoon close is on the datamart. So the
+11-06 change carried the letter through an outage it was not written for:
+`pick_cutout({}, am)` returns the AM reading when the PM fetch yields nothing,
+and the letter printed `Choice cutout- Down 0.09 at 360.17- Thurs AM.` The
+grading percentage did NOT survive — LSWFEDCC is fetched inside `fetch_cutout`
+and dies with it.
+
+**Eight mutations, every one caught**, including the one the harness found:
+`test_the_trip_expires` ages the trip by `HOST_DOWN_TTL + 1`, so it scales
+with the constant and expires however large that constant is — setting the TTL
+to 1e12, a breaker that never releases a host again, passed it untouched. The
+bound gets its own assertion now, as a BAND rather than a number.
+
 ### The `[[?]]` on the deployed app — FIXED 2026-09-26/28
 
 **Both halves of this are now in Snowflake and the section is kept for the
