@@ -505,12 +505,32 @@ def test_the_tabs_render_before_any_data_is_fetched():
 
 
 def test_both_tab_calls_use_one_list_of_labels():
-    """Spelled out twice they drift, and the empty pair has to look like the
-    loaded one or it reads as a different feature."""
-    src = PAGE_SRC
-    assert src.count("TAB_LABELS = [") == 1
-    assert src.count("st.tabs(TAB_LABELS)") == 2
-    assert 'st.tabs(["Letter"' not in src, "a literal label list came back"
+    """
+    Spelled out twice they drift, and the empty pair has to look like the
+    loaded one or it reads as a different feature.
+
+    BY AST, BECAUSE THE LITERAL FORM BROKE ON CORRECT CODE. This asserted
+    `src.count("st.tabs(TAB_LABELS)") == 2` until 2026-11-12, when the loaded
+    pair gained `on_change="rerun"` to take the Sterling mailbox fetch off the
+    page-load path -- a change that does not touch the labels at all. A string
+    match cannot tell "both calls share one list" from "both calls are spelled
+    identically", and only the first is what this test is for.
+    """
+    import ast
+
+    assert PAGE_SRC.count("TAB_LABELS = [") == 1
+    assert 'st.tabs(["Letter"' not in PAGE_SRC, "a literal label list came back"
+
+    calls = [n for n in ast.walk(ast.parse(PAGE_SRC))
+             if isinstance(n, ast.Call)
+             and getattr(n.func, "attr", "") == "tabs"
+             and getattr(n.func.value, "id", "") == "st"]
+    assert len(calls) == 2, f"{len(calls)} st.tabs calls on this page"
+    for call in calls:
+        assert call.args, "st.tabs was given no labels"
+        first = call.args[0]
+        assert isinstance(first, ast.Name) and first.id == "TAB_LABELS", (
+            "a tab set stopped using the shared TAB_LABELS list")
 
 
 def test_the_empty_slide_tab_says_what_belongs_there():

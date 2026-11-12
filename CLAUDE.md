@@ -7859,6 +7859,101 @@ with the constant and expires however large that constant is — setting the TTL
 to 1e12, a breaker that never releases a host again, passed it untouched. The
 bound gets its own assertion now, as a BAND rather than a number.
 
+### The letter page fetched Microsoft before it could paint — 2026-11-12
+
+Ross, an hour after the USDA breaker shipped: *"i've tried refreshing it and
+it's just spinning"*, on the JSA Daily Cattle Reports page.
+
+**IT WAS A SECOND OUTAGE, NOT THE ONE JUST FIXED.** Microsoft Graph was
+answering **502 Bad Gateway**, and the letter page was calling it on every
+load. Measured that afternoon:
+
+    mailbox.token(interactive=False)    28.9s
+    sterling.fetch()                    47.2s -> "502 Bad Gateway"
+
+**The Sterling margins for deck slide 7 are a live mailbox fetch, and they sat
+in the Cattle Market Rundown Slide tab** — which, by the rule this file states
+five times, EXECUTES WHETHER OR NOT IT IS ON SCREEN. So every refresh of the
+one page the letter is written on made a Graph round trip for a slide nobody
+had opened. The comment above it admitted as much — *"A NETWORK CALL IN A TAB
+THAT RUNS WHETHER OR NOT IT IS ON SCREEN"* — and treated an hour's cache as
+the answer. **A cache cannot help the first call, and the first call came
+round on every cold container and every lapsed hour.**
+
+### REFRESHING MADE IT WORSE, and that is why it read as a hang
+
+Streamlit serialises concurrent computation of ONE cache_data key behind a
+lock with **no timeout** (`runtime/caching/cache_utils.py`, `compute_value_lock`).
+So the second refresh did not start afresh: it queued behind the first and
+inherited its wait, and a second browser tab inherited it too. The obvious
+user response was the one thing guaranteed not to work.
+
+### The fix is two lines of behaviour and no re-indentation
+
+`st.tabs(TAB_LABELS, on_change="rerun")`, then
+`_st_data = _sterling_data() if tab_slide.open else _STERLING_IDLE`.
+
+**`on_change="rerun"` IS NOT OPTIONAL HERE.** A `TabContainer.open` is **None**
+without it, and None is falsy — so the guard would skip the fetch for ever and
+the tab would render empty with nothing saying why. The two go together or
+neither; the crush pages are the counter-example where laziness would break a
+hidden sibling, and this page has no such dependency: the slide body is the
+last block in the file and binds nothing read after it.
+
+**NOT re-indented under an `if`.** This repo has shipped a CSS block that ended
+up inside a comment and a `<style>` that ended itself, both from moving code
+containing a multi-line string. The conditional expression leaves all forty
+lines where they are.
+
+**`_STERLING_IDLE` IS NOT AN `{"error": ...}`, and that is deliberate.** The
+branch under it tests `.get("error")`, so a sentinel carrying an error key
+would render *"Sterling tracker unavailable"* on a tab nobody had opened — a
+false claim about Sterling and about the mailbox, on a page that goes on to
+build a client deck. It is tested BEFORE the error branch, because it has no
+error key and an error-first chain would fall through to the success branch
+and read `week_ending` off the sentinel.
+
+### MSAL HAD NO TIMEOUT AT ALL, and that was the only unbounded call
+
+`msal.PublicClientApplication` defaults to `timeout=None` and threads it
+straight into requests —
+`functools.partial(self.http_client.request, timeout=timeout)`. So Graph
+returning a 502 cost 47 seconds, but Graph **stalling** — accepting the
+connection and never answering, exactly what `mpr.datamart.ams.usda.gov` was
+doing the same afternoon — would have hung the page for ever, with no refresh
+able to clear it.
+
+`MSAL_TIMEOUT = 30`. Verified live rather than assumed: the inner requests
+Session's `request` comes back as a `functools.partial` carrying
+`{'timeout': 30}`. A silent token refresh answers in under a second when it is
+healthy, so 30 is already far outside normal.
+
+### A STRING-MATCH TEST BROKE ON CORRECT CODE
+
+`test_print_preview.py::test_both_tab_calls_use_one_list_of_labels` asserted
+`src.count("st.tabs(TAB_LABELS)") == 2`. Adding `on_change="rerun"` to one of
+them failed it, while changing nothing whatever about the labels. A string
+match cannot tell *"both calls share one list"* from *"both calls are spelled
+identically"*, and only the first is what that test is for. It walks the AST
+now and asserts each `st.tabs` call's first positional argument is the Name
+`TAB_LABELS` — the same lesson as `assert "wasde.SCHEMA" in page`, arriving
+from the opposite direction: that one PASSED the broken form, this one FAILED
+the fixed one.
+
+**Six mutations, every one caught**, each being the code as it stood that
+morning: eager tabs, the fetch back on the load path, a second call site, the
+sentinel made to look like a failure, MSAL losing its timeout, and MSAL's
+timeout set to a day.
+
+### What this does NOT fix, and the distinction worth keeping
+
+Nothing here recovers a figure. USDA's outage still costs the cash trade, the
+week-to-date cash, the afternoon cutout and the grading %; Graph's still costs
+the Sterling margins. **An outage outside should cost the figures that come
+from it and nothing else** — and on 2026-11-12 three separate pieces of our
+own code turned "four numbers are unavailable" into "the page is unusable".
+That is the whole of what both fixes that day were for.
+
 ### The `[[?]]` on the deployed app — FIXED 2026-09-26/28
 
 **Both halves of this are now in Snowflake and the section is kept for the
