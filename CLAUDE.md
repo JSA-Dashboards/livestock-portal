@@ -559,7 +559,9 @@ was not a convenience, it was the only invalidation that existed.
 - **Key on a publication stamp, keep `persist`, drop the `ttl`.** Right when
   the probe is much cheaper than what it guards. `cash_trade` does it with
   one ~67 KB list request covering eight Detail calls; `beef_cutout` now does
-  the same for an ~11.5 MB pull. Both read the LMR reports LIST endpoint,
+  the same for a pull measured at **57 MB** on 2026-11-13 (this said
+  "~11.5 MB", which understated it about fivefold; the argument is
+  unaffected and strengthened). Both read the LMR reports LIST endpoint,
   which carries `published_date` per `slug_id`.
 - **Drop `persist` so the `ttl` works.** Right for monthly files — WASDE and
   ERS — where the "probe" would be half the fetch: ESMIS's release list is
@@ -8013,6 +8015,180 @@ and dies with it.
 with the constant and expires however large that constant is — setting the TTL
 to 1e12, a breaker that never releases a host again, passed it untouched. The
 bound gets its own assertion now, as a BAND rather than a number.
+
+## The dashboards had it far worse than the letter — fixed 2026-11-13
+
+Ross, after the letter was fixed: *"now fix the dashboards."* The same dead
+host, and the three pages that read it were exposed on a different scale:
+
+| page | worst case, ONE load | poisoning sites |
+|---|---|---|
+| Beef Cutout | **~3 hours**, and 17.6h reachable by a client | 4 |
+| Beef Trimmings | ~49 minutes | 5 |
+| Cash Cattle Trade | ~8 minutes, 33 on a tab | 3 |
+
+Measured, after the dead host, at **12s / 36s / 12s**.
+
+### THE SLOW WAIT WAS NOT THE WORST OF IT
+
+Several of these pages fetch a batch of independent reports concurrently and
+let a failed job yield `[]` rather than raise. **That reasoning is sound** --
+USDA not publishing one report is no reason to blank the other seven, and a
+fix that re-raised everything would break the page on an ordinary Tuesday.
+
+But **a dead HOST fails every job the same way**, so the same `except
+Exception` turned a whole-host outage into an empty frame -- which
+`@st.cache_data(persist="disk")` with **no ttl at all** then held
+PERMANENTLY: past the end of the outage, surviving a reboot, until somebody
+pressed Refresh. Five of cash_trade's caches and three of beef_cutout's carry
+`persist` with no ttl.
+
+**AND THE READER WAS TOLD THE WRONG THING.** "USDA published no daily reports
+for these regions in this window" is a false claim ABOUT USDA, not a missing
+one about us. The honest warning sat **directly above it, already written,
+already correctly ordered, and unreachable** because nothing ever raised. So
+the fix mostly ACTIVATES existing error handling rather than adding any -- on
+all three pages. That is worth knowing before writing new branches for it.
+
+`http_breaker.is_connection_failure(exc)` draws the line, in one place:
+
+    except Exception as exc:
+        if http_breaker.is_connection_failure(exc):
+            raise
+        return key, []
+
+A status does NOT count, by the breaker's own rule -- requests raises
+`RetryError` when a `status_forcelist` is exhausted, and one endpoint
+answering 500 says nothing about the host.
+
+**IT WORKS BECAUSE `st.cache_data` DOES NOT CACHE AN EXCEPTION.** Measured on
+1.63 rather than assumed, and pinned by a test, because the whole design rests
+on it: a cached loader that raises runs its body again on the next rerun,
+while one that catches and returns a sentinel stores that. **And it is only
+affordable because of the breaker** -- without it every rerun would pay the
+full timeout; with it the retry is instant until the TTL lets one through.
+
+### EVERY TIMEOUT ON THESE PAGES WAS SIZED AGAINST NOTHING, AND TWO MUST NOT BE SHORTENED
+
+This is the third time in one day that a budget turned out to be judged
+against no measurement, so the figures are recorded. Time to first byte,
+which is what a read timeout actually governs, against the live host:
+
+| call | healthy TTFB | budget | verdict |
+|---|---|---|---|
+| beef_cutout, any section | 2.60 – 5.95s | **was 300s** | now 60 |
+| LM_XB460 weekly, 1300 reports | 4.96 – 5.58s | 180s | left alone |
+| LM_XB401 recent, 400 reports | 4.18 – 5.07s | 180s | left alone |
+| **LM_XB401 ARCHIVE, 6000 reports** | **16.21 – 31.18s** | 180s | **earns it** |
+
+**DO NOT TIDY THE ARCHIVE'S 180s INTO LINE WITH beef_cutout's 60.** It is the
+obvious next cleanup and it would break the page: that pull takes up to
+**31 seconds just to start answering**, five to six times anything else on the
+datamart. A test guards against the fix. Once the preflight is in, the
+per-call budget stops mattering for an outage anyway, which is the whole
+reason tightening it buys nothing.
+
+**Two slug ids cost a round of wrong measurements.** LM_XB401 is **2451** and
+LM_XB460 is **2462**; probing 2672/2671 returned a different report at 104 MB
+and an empty 200 -- the "200 that means nothing here" trap this file already
+records for slug 2452. Read the constants, do not guess them.
+
+### The preflight, and where each page gets one
+
+cash_trade and beef_cutout already had a `publication_stamps()` probe for
+their cache key, so **making it breaker-aware was enough** -- no new request on
+a healthy run. Both carried `timeout=(3, 8)` on the LIST endpoint, the same
+too-thin budget the letter had: 1.3x clear of that endpoint's own worst
+healthy TTFB. Widening them to the shared `PROBE_TIMEOUT` had to come FIRST,
+because a trip now also skips the fetches, where before it only degraded the
+cache key.
+
+beef_trimmings had no probe at all, so it got its own.
+
+### TWO WARNINGS SAYING THE SAME THING, FOUND ONLY BY LOADING THE PAGE
+
+The preflight first shipped with its own banner. With the host declared dead
+the page rendered **two stacked alerts** making the same point, and the new one
+claimed *"the figures below are whatever was last cached"* when on a cold
+cache there is nothing below -- the page stops. Enumerated field by field, the
+existing handler was the better of the two: it carries the Technical details
+expander and it tells a network outage apart from a code fault, a distinction
+that page learned the hard way on 2026-10-07. All the banner had that it
+lacked was the host's NAME, so that is what gets handed over. One warning now.
+
+The lesson is the one in memory already: **a redundancy judgement has to
+enumerate what the other surface prints**, field by field, rather than being
+reasoned about.
+
+### Two more things the audit turned up
+
+- **`login_timeout` IS NOT A SOCKET TIMEOUT.** It is snowflake-connector's
+  total retry budget for AUTHENTICATION, consulted between attempts.
+  `socket_timeout` and `network_timeout` both default to `None` -- checked
+  against connector 4.7.1's own `DEFAULT_CONFIGURATION` -- so beef_trimmings'
+  Snowflake read had no duration bound at all while looking as though it had
+  one. It sets `socket_timeout=60` now, and deliberately NOT
+  `network_timeout`: that would bound the whole request-with-retries, and a
+  suspended warehouse legitimately takes time to resume.
+- **A 200 carrying nothing was the one UNBOUNDED poisoning**, and it is not a
+  host failure at all. `_pull_xb401` returned an empty frame when AMS answered
+  200 with no usable rows, and `persist="disk"` with no ttl kept it for ever.
+  It raises now.
+
+### The thin-sections pull is 57 MB, not 11.5
+
+Measured 2026-11-13: **56.93 MB and 22.15 seconds** for the five sections, of
+which **Composite Primal Values alone is 35.81 MB**. The docstring said
+"11.5 MB and about 13 seconds" and the "two ways out" section of this file
+repeats it; both understate it by about five times. The reasoning built on it
+is unaffected and arguably strengthened -- keying on the publication stamp
+rather than dropping `persist` is even more clearly right for a 57 MB pull.
+
+### Verifying this, including the case that matters
+
+`py_compile`, 2,290 tests and `get_page_text` all pass a page that waits three
+hours and then caches the result for ever, so the only check that counts is
+loading it. Two scratchpad runners, both in `.claude/launch.json` (which is
+gitignored, so they will need rebuilding):
+
+- one that `runpy.run_path`s a single page with `layout="wide"` and `.env`
+  loaded, bypassing `Home.py`'s passphrase gate, which Claude cannot type;
+- one that additionally **pre-trips the breaker** for the datamart and lifts
+  `HOST_DOWN_TTL`, so the outage outlasts the page load.
+
+**The second one is the whole point.** The outage path cannot be observed any
+other way once USDA is answering, and it is where every defect in this change
+was found -- the duplicate banner, the false "no daily reports" claim, and the
+`NameError` waiting in `leverage.py` for a host failure that had not happened
+yet. The trip is not cleared by a later success, because the check runs BEFORE
+the request, which is why `HOST_DOWN_TTL` is the real bound on recovery.
+
+Measured through both runners, all three pages: healthy renders in full with
+live data; dead host gives one honest warning naming the host, no traceback,
+no false claim, and beef_cutout still draws its morning panel because that is
+a different host.
+
+### What was found and deliberately NOT changed
+
+- **`am_cutout.fetch_am`** returns `{"error": ...}` on failure under a
+  15-minute ttl. Bounded, visible, on a host that did not fail either day, and
+  two other callers depend on that contract.
+- **`fetch_quota_fills`**' CBP loop keeps swallowing per-PDF failures. One bad
+  week should cost one point on the line, and the breaker already caps the
+  wait at one timeout instead of eleven.
+- **`fetch_us_weekly90`**'s 180s, 32x its measured need. Harmless once the
+  preflight is in, and changing it would be the archive mistake in miniature.
+
+### The guard is scoped, not repo-wide
+
+`tests/test_dashboard_outage.py` names the four batch/loop workers rather than
+banning `except Exception` across the repo. A rule that broad would reject
+dozens of places where swallowing is right, and this file already records what
+happens to a guard that rejects correct code: it gets deleted the first time
+it blocks somebody. Ten mutations, every one caught -- and one survived first
+time, because `"timeout=180" in src` stayed true after the archive call was
+changed: **beef_trimmings has two of them.** The same substring hole as the
+cutout slide test, hours earlier, on the same day.
 
 ### The letter page fetched Microsoft before it could paint — 2026-11-12
 

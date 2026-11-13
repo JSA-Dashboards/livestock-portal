@@ -6,8 +6,6 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 from datetime import datetime, timedelta
 import time
 
@@ -24,6 +22,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).parent))
 
+import http_breaker  # noqa: E402
 import portal_view  # noqa: E402
 import am_cutout
 
@@ -496,14 +495,19 @@ def cuts_panel(sections: dict, years: int = 1):
     # reports of cuts for the recap's last bullet; this view needs years of
     # them for the chart, and paying that on every visit to the other view
     # would be the one slow thing on the page.
-    deep = {}
+    deep, deep_host_down = {}, False
     if years:
         with st.spinner(f"Loading {years} year(s) of individual cuts…"):
             try:
                 deep = fetch_cut_sections(
                     stamps_for(publication_stamps(), [REPORT_ID]), int(years))
-            except Exception:
-                deep = {}
+            except Exception as exc:
+                # Swallowed on purpose so a cuts failure does not blank the
+                # rest of the page -- but WHICH failure decides what the
+                # reader is told twenty lines down. "USDA returned no
+                # individual-cut sections" is a claim about USDA, and on a
+                # dead host it is a false one.
+                deep, deep_host_down = {}, http_breaker.is_connection_failure(exc)
     choice = _cut_numbers(deep.get("Choice Cuts",
                                    sections.get("Choice Cuts", pd.DataFrame())))
     select = _cut_numbers(deep.get("Select Cuts",
@@ -511,7 +515,14 @@ def cuts_panel(sections: dict, years: int = 1):
     primal = _cut_numbers(sections.get("Composite Primal Values", pd.DataFrame()))
 
     if choice.empty:
-        st.warning("USDA returned no individual-cut sections for this report.")
+        if deep_host_down:
+            st.warning(
+                "⏳ **USDA data temporarily unavailable** — the individual-cut sections "
+                "could not be loaded because the USDA LMR server is not responding. "
+                "Nothing is cached from a failed load, so this retries on its own."
+                + (" Use **Refresh Now** in the sidebar." if portal_view.is_staff() else ""))
+        else:
+            st.warning("USDA returned no individual-cut sections for this report.")
         return
 
     piv = choice.pivot_table(index="report_date", columns="item_description",
@@ -702,16 +713,18 @@ def cuts_panel(sections: dict, years: int = 1):
 # ── Data Fetching ────────────────────────────────────────────────────────────
 
 def _lmr_session() -> requests.Session:
-    """Requests session with retry + backoff for the slow USDA LMR API."""
-    session = requests.Session()
-    retry = Retry(
-        total=3,
-        backoff_factor=3,           # waits 3, 9, 27 s between retries
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET"],
-    )
-    session.mount("https://", HTTPAdapter(max_retries=retry))
-    return session
+    """
+    The shared breaker-aware session for the slow USDA LMR API.
+
+    THE OLD COMMENT HERE SAID THE BACKOFF WAITS "3, 9, 27 s" AND IT DOES NOT.
+    urllib3 computes `backoff_factor * 2 ** (n - 1)` and returns 0 for the
+    first retry, so `backoff_factor=3` with `total=3` waits 0, 6 and 12 -- 18
+    seconds, not 39. Measured against urllib3 2.7.0 rather than reasoned about.
+    It mattered: the worst case on the 300s fetch below was being read off a
+    schedule that overstated the backoff by more than double while
+    understating the whole by a factor of sixty.
+    """
+    return http_breaker.session(backoff=3)
 
 
 # ── Archive depth, measured 2026-10-01 ───────────────────────────────────────
@@ -754,12 +767,17 @@ PROBE_FAILED = "probe-unavailable"
 
 
 def _probe_session() -> requests.Session:
-    """No retries, unlike _lmr_session. A probe that stalls is worse than one
-    that fails: the fetches it guards are behind it on every rerun."""
-    s = requests.Session()
-    s.mount("https://", HTTPAdapter(max_retries=Retry(
-        total=0, status_forcelist=[], allowed_methods=["GET"])))
-    return s
+    """
+    No retries, unlike _lmr_session. A probe that stalls is worse than one that
+    fails: the fetches it guards are behind it on every rerun.
+
+    BREAKER-AWARE NOW, on the shared http_breaker.PROBE_TIMEOUT. The old (3, 8)
+    sat 1.3x clear of this endpoint's own worst healthy time to first byte
+    (5.17-6.08s, measured 2026-11-13), which was survivable while a failure
+    here only degraded the cache key and is not now that a trip also skips the
+    fetches.
+    """
+    return http_breaker.probe_session()
 
 
 # NO persist="disk" HERE, AND THAT IS THE WHOLE POINT -- the same trap
@@ -795,7 +813,7 @@ def publication_stamps() -> str:
     refetch -- the opposite of the point.
     """
     try:
-        resp = _probe_session().get(LMR_BASE, timeout=(3, 8))
+        resp = _probe_session().get(LMR_BASE, timeout=http_breaker.PROBE_TIMEOUT)
         resp.raise_for_status()
         rows = resp.json()
     except Exception:
@@ -832,9 +850,30 @@ def stamps_for(stamps: str, slugs) -> str:
     return "|".join(keep) if keep else PROBE_FAILED
 
 
+# WHAT ONE OF THESE CALLS ACTUALLY COSTS, measured against the live host on
+# 2026-11-13 rather than guessed at, because a read timeout is judged against
+# TIME TO FIRST BYTE and the 300s this replaces was judged against nothing:
+#
+#     Summary                  ttfb 2.60 - 5.65s    4.63 MB
+#     Current Cutout Values    ttfb 3.64s           4.98 MB
+#     Current Volume           ttfb 4.11s           6.57 MB
+#     Change From Prior Day    ttfb 3.67s           4.94 MB
+#     Composite Primal Values  ttfb 4.99 - 5.95s   35.81 MB
+#     Choice Cuts, one year    ttfb 3.74 - 5.52s    9.76 MB
+#
+# Worst time to first byte over fourteen runs: 5.95s. The old 300 was FIFTY
+# TIMES that, and with four attempts and 18s of backoff it made one dead host
+# cost 1,218 seconds PER CALL -- nine of them on a page load, up to fifty-two
+# if a reader picks 26 years. 60s is ten times the worst healthy first byte,
+# which is margin enough that a slow day is still served; a read timeout
+# measures the gap BETWEEN bytes, so the 35.8 MB body does not come into it.
+LMR_TIMEOUT = 60
+
+
 def _lmr_get(section: str, params: dict) -> pd.DataFrame:
     sess = _lmr_session()
-    resp = sess.get(f"{LMR_BASE}/{REPORT_ID}/{section}", params=params, timeout=300)
+    resp = sess.get(f"{LMR_BASE}/{REPORT_ID}/{section}", params=params,
+                    timeout=LMR_TIMEOUT)
     resp.raise_for_status()
     rows = resp.json().get("results") or []
     if not rows:
@@ -849,9 +888,15 @@ def fetch_thin_sections(stamps: str) -> dict:
     """
     The one-row-per-report sections, at FULL archive depth.
 
-    These are small enough that there is no reason to window them: the whole
-    25 years is 11.5 MB and about 13 seconds, once per publication. Primal
-    Values is seven rows a report, so ~45k -- still inside the 100k cap.
+    There is no reason to window them -- the whole 25 years comes in one pull
+    per publication -- but it is not small. Measured 2026-11-13: FIFTY-SEVEN
+    MB and 22 seconds for the five, of which Composite Primal Values alone is
+    35.8 MB. This docstring said "11.5 MB and about 13 seconds" and CLAUDE.md
+    repeats that figure; both understate it by about five times. The reasoning
+    built on it is unaffected and arguably strengthened -- keying on the
+    publication stamp rather than dropping persist is even more clearly right
+    for a 57 MB pull than for an 11.5 MB one -- but the number was wrong.
+    Primal Values is seven rows a report, so ~45k -- still inside the 100k cap.
 
     `stamps` is unused in the body and must stay: it is LM_XB403's
     published_date, taken as an argument so st.cache_data keys on it and this
@@ -862,7 +907,16 @@ def fetch_thin_sections(stamps: str) -> dict:
                  "Change From Prior Day", "Composite Primal Values"):
         try:
             df = _lmr_get(name, {"lastReports": 9999})
-        except Exception:
+        except Exception as exc:
+            # A MISSING SECTION IS NOT A DEAD HOST. Swallowing one section is
+            # right -- USDA does drop them -- but every section fails the same
+            # way when the host is unreachable, so this returned {} and
+            # `persist="disk"` with no ttl kept it PERMANENTLY, past the end
+            # of the outage and across a reboot. The page's own "USDA data
+            # temporarily unavailable" branch was already written, already
+            # correctly ordered, and unreachable because nothing ever raised.
+            if http_breaker.is_connection_failure(exc):
+                raise
             df = pd.DataFrame()
         if not df.empty:
             out[name] = df
@@ -898,7 +952,14 @@ def fetch_cut_sections(stamps: str, years: int, _today=None) -> dict:
         for yr in range(first, this_year + 1):
             try:
                 frames.append(_lmr_get(name, {"q": f"report_date=01/01/{yr}:12/31/{yr}"}))
-            except Exception:
+            except Exception as exc:
+                # A YEAR WITH NO ROWS IS NOT A DEAD HOST -- see
+                # fetch_thin_sections. At 26 years this loop made 52 calls, so
+                # swallowing a host failure here was the worst of the four:
+                # 52 x 1,218s is over seventeen hours, and the empty result
+                # was cached for ever.
+                if http_breaker.is_connection_failure(exc):
+                    raise
                 continue
         frames = [f for f in frames if not f.empty]
         if frames:

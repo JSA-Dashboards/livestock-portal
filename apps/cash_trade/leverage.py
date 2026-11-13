@@ -36,10 +36,20 @@ in the mix, and never silently picks.
 from __future__ import annotations
 
 import re
+import sys
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pandas as pd
+
+# THIS MODULE IS IMPORTED BY TWO PAGES -- cash_trade and US Beef Trade -- so it
+# puts the repo root on sys.path itself rather than relying on whichever page
+# got there first. Same reason it is not copied in beside either of them.
+_REPO = Path(__file__).resolve().parents[2]
+if str(_REPO) not in sys.path:
+    sys.path.insert(0, str(_REPO))
+import http_breaker  # noqa: E402  -- needs the repo root on the path first
 
 # Bump whenever load() changes the SHAPE of what it returns — a new key, a
 # renamed column, a different index. The page passes this into its cached
@@ -116,7 +126,17 @@ def _rows(payload) -> list:
 
 
 def fetch(session_factory, jobs: list, timeout: int = 180) -> dict:
-    """Run the independent section GETs concurrently; a failure yields []."""
+    """
+    Run the independent section GETs concurrently; a failed SECTION yields [].
+
+    A DEAD HOST IS NOT A FAILED SECTION. Every job fails the same way when the
+    host is unreachable, so a bare `except Exception` here returned five empty
+    lists, `load()` handed each to a _*_frame builder that answers an empty
+    list with an empty DataFrame, and the caller cached the lot under
+    `persist="disk"` with no ttl -- permanently, past the end of the outage,
+    with `lev_err` left empty so the page said nothing at all. A host failure
+    propagates now; st.cache_data stores no exception, so nothing is kept.
+    """
     def run(job):
         key, slug, section = job
         url = f"{LMR_BASE}/{slug}"
@@ -128,7 +148,9 @@ def fetch(session_factory, jobs: list, timeout: int = 180) -> dict:
                 return key, []
             resp.raise_for_status()
             return key, _rows(resp.json())
-        except Exception:
+        except Exception as exc:
+            if http_breaker.is_connection_failure(exc):
+                raise
             return key, []
 
     if not jobs:

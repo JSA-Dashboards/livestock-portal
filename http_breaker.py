@@ -94,6 +94,7 @@ from urllib3.util.retry import Retry
 __all__ = [
     "HOST_DOWN_TTL", "HostUnreachable", "BreakerSession",
     "reset_hosts", "hosts_down", "session", "probe_session", "preflight",
+    "is_connection_failure",
     "PROBE_TIMEOUT",
 ]
 
@@ -163,6 +164,36 @@ class BreakerSession(requests.Session):
             if not isinstance(exc, HostUnreachable):
                 _HOST_DOWN[host] = time.monotonic()
             raise
+
+
+def is_connection_failure(exc: BaseException) -> bool:
+    """
+    Did this fail because the HOST is unreachable, rather than because one
+    report is?
+
+    THE DISTINCTION THAT DECIDES WHETHER A FAILURE MAY BE SWALLOWED. Several
+    pages fetch a batch of independent reports concurrently and let a failed
+    job yield [] rather than raising, on the sound reasoning that USDA not
+    publishing one report is no reason to blank the other seven. A dead HOST
+    fails every job the same way -- so the same `except Exception` turns a
+    whole-host outage into an empty frame, which is then cached, often under
+    `persist="disk"` with no ttl, and outlives the outage by days.
+
+    So: swallow a report, re-raise a host.
+
+        except Exception as exc:
+            if http_breaker.is_connection_failure(exc):
+                raise
+            return key, []
+
+    HostUnreachable subclasses ConnectionError, so a breaker skip counts as a
+    host failure and propagates too -- which is the point. An HTTP status does
+    NOT count, by the same rule the breaker itself follows: requests raises
+    RetryError when a status_forcelist is exhausted, and one endpoint
+    answering 500 says nothing about the host.
+    """
+    return isinstance(exc, (requests.exceptions.ConnectionError,
+                            requests.exceptions.Timeout))
 
 
 def session(backoff: float = 1.5, total: int = 3,

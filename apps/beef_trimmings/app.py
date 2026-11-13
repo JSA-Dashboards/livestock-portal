@@ -3,8 +3,6 @@ import pandas as pd
 import plotly.graph_objects as go
 import traceback
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 from datetime import date, datetime, timedelta
 from pathlib import Path
 import time
@@ -24,6 +22,7 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).parent))
 
+import http_breaker  # noqa: E402
 import portal_view  # noqa: E402
 
 import io
@@ -336,11 +335,13 @@ PREV    = qc.PREV
 # ── Data Fetching ────────────────────────────────────────────────────────────
 
 def _session(backoff=3) -> requests.Session:
-    s = requests.Session()
-    retry = Retry(total=3, backoff_factor=backoff,
-                   status_forcelist=[429, 500, 502, 503, 504], allowed_methods=["GET"])
-    s.mount("https://", HTTPAdapter(max_retries=retry))
-    return s
+    """
+    The shared breaker-aware session. See http_breaker.py for the whole story;
+    the two things that matter here are that one dead host now costs this page
+    ONE timeout rather than one per call, and that a read timeout is no longer
+    retried -- which on the budgets below is most of what an outage cost.
+    """
+    return http_breaker.session(backoff=backoff)
 
 
 def _pull_xb401(n_reports: int) -> pd.DataFrame:
@@ -408,6 +409,23 @@ def _pull_xb401(n_reports: int) -> pd.DataFrame:
         for _c in ("central", "central_low", "central_high",
                    "central_trades", "central_pounds"):
             out[_c] = None
+    if out.empty:
+        # A 200 CARRYING NOTHING IS A FAILURE, AND RETURNING IT WAS THE ONE
+        # UNBOUNDED POISONING ON THIS PAGE. AMS answers 200 with a payload that
+        # yields no usable rows -- the "200 that means no" shape this repo
+        # documents for slug 2452 -- and an empty frame returned from here goes
+        # straight into _fetch_us_archive's @st.cache_data(persist="disk"),
+        # which carries NO ttl at all. That entry then survives every rerun and
+        # every reboot, so the chart stays blank long after AMS recovers, with
+        # nothing on the page saying why.
+        #
+        # Raising instead keeps NOTHING: st.cache_data does not store an
+        # exception, so the next rerun tries again, and the page's own
+        # "what failed, not a guess at why" handler reports it. A real pull is
+        # never empty -- the archive window is 6,000 reports back to 2003.
+        raise RuntimeError(
+            f"LM_XB401 answered {resp.status_code} for lastReports="
+            f"{n_reports} but carried no {US_ITEM} rows")
     return out.sort_values("report_date").reset_index(drop=True)
 
 
@@ -611,6 +629,20 @@ def _sf_connect():
         database=_sf_secret("SNOWFLAKE_DATABASE") or "JSA",
         schema=_sf_secret("SNOWFLAKE_SCHEMA") or "BEEF_TRIMMINGS",
         login_timeout=30,
+        # login_timeout IS NOT A SOCKET TIMEOUT, and reading it as one is how
+        # this looked bounded while it was not. It is the connector's total
+        # retry budget for AUTHENTICATION, consulted between attempts. Both
+        # socket_timeout and network_timeout default to None -- checked
+        # against connector 4.7.1's own DEFAULT_CONFIGURATION -- so a
+        # Snowflake endpoint that accepted the connection and stopped
+        # answering would have hung this page with nothing to cut it off,
+        # which is exactly what USDA's datamart did twice this week.
+        #
+        # socket_timeout only. network_timeout would bound the whole
+        # request-with-retries, and a suspended warehouse legitimately takes
+        # time to resume; capping that would turn a cold warehouse into an
+        # error on a day nothing is wrong.
+        socket_timeout=60,
     )
     pkey = _sf_load_private_key()
     if pkey is not None:
@@ -1013,6 +1045,36 @@ if _view == VIEW_QUOTA:
 
 # ── Load Data ────────────────────────────────────────────────────────────────
 
+# ONE CHEAP QUESTION BEFORE THE EXPENSIVE ONES. Unlike Cash Cattle Trade and
+# Beef Cutout, this page has no publication probe to double as a preflight, so
+# its first discovery of a dead host was a full read budget on the 180s archive
+# pull. That budget is NOT the thing to shorten -- measured against the live
+# host on 2026-11-13, the 6,000-report archive takes 16.21-31.18s just to its
+# FIRST BYTE, so 180s is about six times the worst healthy figure and earns its
+# size. What was missing was asking first.
+#
+# Cached so a rerun does not re-probe; the breaker's own TTL is what bounds a
+# trip, and the return value is used rather than discarded so this cannot be
+# read as a call with no effect.
+@st.cache_data(ttl=300, show_spinner=False)
+def _datamart_preflight() -> list:
+    """Hosts found down, so the page can say so before it waits on them."""
+    return http_breaker.preflight(
+        (f"{LMR_BASE}/{XB401_ID}/",), http_breaker.PROBE_TIMEOUT)
+
+
+# ITS RESULT FEEDS THE WARNING THAT ALREADY EXISTS, rather than adding a second
+# one. The first version put a banner here and the page then showed TWO stacked
+# alerts saying the same thing -- visible only by loading it with the host
+# declared dead. The one below is the better of the two: it carries the
+# Technical details expander and it tells a network outage apart from a code
+# fault, which is a distinction this page learned the hard way on 2026-10-07.
+# All this one had that it lacked was the host's NAME, so that is what gets
+# handed over. The banner also claimed "the figures below are whatever was last
+# cached", which is false on a cold cache -- there is nothing below, the page
+# stops.
+_down_hosts = _datamart_preflight()
+
 with st.spinner("Loading full USDA beef trimmings history (US pull can take ~60-90s on a cold cache)…"):
     try:
         us_hist = fetch_us_fresh90()
@@ -1076,8 +1138,11 @@ with _header:
 if not load_ok:
     if load_was_network:
         st.warning(
-            "⏳ **USDA data temporarily unavailable** — the USDA server is not responding. "
-            "This usually resolves in a few minutes."
+            "⏳ **USDA data temporarily unavailable** — "
+            + (" · ".join(_down_hosts) + " is not responding."
+               if _down_hosts else "the USDA server is not responding.")
+            + " This usually resolves in a few minutes. Nothing is cached from a "
+              "failed load, so the page recovers on its own once USDA is back."
             + (" Use **Refresh now** in the sidebar to retry."
                if portal_view.is_staff() else "")
         )

@@ -2,8 +2,6 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 import html
@@ -27,6 +25,7 @@ if str(REPO) not in sys.path:
 sys.path.insert(0, str(Path(__file__).parent))
 import leverage  # noqa: E402
 import scorecard  # noqa: E402
+import http_breaker  # noqa: E402
 import portal_view  # noqa: E402
 import wasde  # noqa: E402
 
@@ -421,11 +420,13 @@ def tile(label, value, delta="", cls=""):
 # ── Data Fetching ────────────────────────────────────────────────────────────
 
 def _session(backoff=3) -> requests.Session:
-    s = requests.Session()
-    retry = Retry(total=3, backoff_factor=backoff,
-                   status_forcelist=[429, 500, 502, 503, 504], allowed_methods=["GET"])
-    s.mount("https://", HTTPAdapter(max_retries=retry))
-    return s
+    """
+    The shared breaker-aware session. See http_breaker.py for the whole story;
+    the two things that matter here are that one dead host now costs this page
+    ONE timeout rather than one per call, and that a read timeout is no longer
+    retried -- which on the budgets below is most of what an outage cost.
+    """
+    return http_breaker.session(backoff=backoff)
 
 
 def _probe_session() -> requests.Session:
@@ -438,13 +439,18 @@ def _probe_session() -> requests.Session:
     show without it. It is the wrong trade here: the probe runs at module scope
     above st.tabs, so during an outage EVERY visitor would pay that wait on
     every rerun, on whichever tab they are looking at, to learn something the
-    page already has a fallback for. One attempt, split connect/read timeout,
-    worst case about eleven seconds.
+    page already has a fallback for. One attempt, split connect/read timeout.
+
+    IT IS BREAKER-AWARE NOW, and the budget widened with it. An 8s read budget
+    sat only 1.3x clear of this endpoint's own worst HEALTHY time to first byte
+    -- 5.17-6.08s measured over five runs when the datamart came back on
+    2026-11-13 -- so a busy-but-alive USDA would have tripped it. That was
+    survivable while a failure here only degraded the cache KEY; it is not
+    survivable now that a trip also skips the fetches, so the margin had to
+    come first. http_breaker.PROBE_TIMEOUT is the shared budget and the
+    reasoning lives there.
     """
-    s = requests.Session()
-    s.mount("https://", HTTPAdapter(max_retries=Retry(
-        total=0, status_forcelist=[], allowed_methods=["GET"])))
-    return s
+    return http_breaker.probe_session()
 
 
 # `stamps` is unused in the body and must stay: it is USDA's published_date for
@@ -621,7 +627,7 @@ def publication_stamps() -> str:
     first failure refetches once and every failure after it is a cache hit.
     """
     try:
-        resp = _probe_session().get(LMR_BASE, timeout=(3, 8))
+        resp = _probe_session().get(LMR_BASE, timeout=http_breaker.PROBE_TIMEOUT)
         resp.raise_for_status()
         rows = resp.json()
     except Exception:
@@ -703,6 +709,17 @@ def _fetch_many(jobs: list, timeout: int = 90) -> dict:
 
     A job that fails yields [] rather than raising: these are independent
     reports and one being down is not a reason to blank the others.
+
+    A DEAD HOST IS NOT A FAILED JOB, and the distinction is the whole reason
+    this function has an exception type test in it. Every job fails the same
+    way when the host is unreachable, so a bare `except Exception` turned a
+    whole-host outage into an empty frame -- which `@st.cache_data(persist=
+    "disk")` with no ttl then held PERMANENTLY, past the end of the outage,
+    until a reboot or a Refresh. The reader was told "USDA published no daily
+    reports for these regions", which is a false claim about USDA rather than
+    a missing one about us. A host failure re-raises now, nothing is cached
+    (st.cache_data does not store an exception -- measured on 1.63), and the
+    breaker keeps the retry on the next rerun instant.
     """
     def run(job):
         key, slug, section, params = job
@@ -713,7 +730,9 @@ def _fetch_many(jobs: list, timeout: int = 90) -> dict:
                 return key, []
             resp.raise_for_status()
             return key, _daily_rows(resp.json())
-        except Exception:
+        except Exception as exc:
+            if http_breaker.is_connection_failure(exc):
+                raise
             return key, []
 
     if not jobs:
