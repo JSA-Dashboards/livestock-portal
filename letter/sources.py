@@ -142,10 +142,91 @@ class _BreakerSession(requests.Session):
 
 
 def _session(backoff: float = 1.5) -> requests.Session:
+    # read=0 -- A READ TIMEOUT IS NOT WORTH RETRYING, and retrying it is most
+    # of what a dead host costs. A read timeout means the server took the
+    # request and sent no byte inside the budget; a retry hands the same
+    # budget to the same server, so it almost never converts a failure into a
+    # success and always multiplies the wait. `total=3` still governs CONNECT
+    # failures (a genuinely transient "could not get there") and the status
+    # retries below, which are the two cases where trying again does work.
+    #
+    # Measured against the live outage of 2026-11-13, with a deliberately
+    # small 3s budget so the experiment cost seconds instead of minutes:
+    #
+    #     as shipped (read retried)   30.8s
+    #     read=0                       5.1s
+    #
+    # Both raise requests.ConnectionError, so _BreakerSession trips either
+    # way; what changes is how long it takes to find out. At the real 120s
+    # budget on fetch_cash_trade that is the difference between the 139-261s
+    # first discoveries observed on 11-12 and one read budget.
     s = _BreakerSession()
-    retry = Retry(total=3, backoff_factor=backoff,
+    retry = Retry(total=3, read=0, backoff_factor=backoff,
                   status_forcelist=[429, 500, 502, 503, 504], allowed_methods=["GET"])
     s.mount("https://", HTTPAdapter(max_retries=retry))
+    return s
+
+
+# -- Preflight ----------------------------------------------------------------
+#
+# THE BREAKER SAVES THE SECOND AND THIRD DISCOVERIES, NEVER THE FIRST, and on
+# 2026-11-13 the first was still the whole problem: the datamart was down for a
+# second day, Ross pressed Fetch, and the run sat on fetch_cash_trade's 120s
+# read budget before anything else could be reported. Seven of this module's
+# calls hang off that one host, so whichever of them goes first pays for all of
+# them.
+#
+# So the host is asked ONE CHEAP QUESTION before the expensive calls start. The
+# LIST endpoint is the right question and is not a guess: apps/cash_trade
+# already probes it for its own cache key and records the healthy figure --
+# ~67KB, ~3.7s -- so `timeout=(3, 8)` is that page's own budget rather than a
+# number invented here. Any answer at all, 404 included, means the service is
+# alive; only a connection-level failure condemns it, which is the same line
+# _BreakerSession draws and is drawn in exactly one place because this function
+# reads the breaker's own record rather than re-deciding.
+#
+# NO RETRIES ON THE PROBE. A status answer is a pass, so there is nothing a
+# second attempt could turn into one, and the status_forcelist on _session()
+# would otherwise spend 9s of backoff asking a sick-but-alive host four times.
+#
+# THE FALSE TRIP IS REAL AND IS THE PRICE. A datamart that is merely slow --
+# alive, but more than 8s to its first byte -- loses the cash trade, the
+# week-to-date cash, the afternoon cutout and the grading % for that run. The
+# page names the host, and pressing Fetch again calls reset_hosts() and tries
+# it properly. Against that: the behaviour it replaces is a two-to-eight minute
+# spinner on exactly the same day.
+#
+# It is ONLY the datamart, deliberately. A preflight is worth a request of its
+# own where several expensive calls share one host; esmis, CFTC and Yahoo have
+# one apiece and marsapi has one, so for those the breaker's own first
+# discovery IS the only discovery and a probe would just add latency to a
+# healthy run.
+
+PREFLIGHT_TIMEOUT = (3, 8)
+
+PREFLIGHT_URLS = (LMR_BASE,)
+
+
+def preflight() -> list:
+    """
+    Touch the hosts that carry several expensive calls, so the breaker learns
+    about an outage in one short request rather than in one long one.
+
+    Returns the hosts found down, which is read off `_HOST_DOWN` rather than
+    from the exception: _BreakerSession already decides what counts as a dead
+    host, and deciding it twice is how the two rules drift apart.
+    """
+    for url in PREFLIGHT_URLS:
+        try:
+            _probe_session().get(url, timeout=PREFLIGHT_TIMEOUT)
+        except requests.exceptions.RequestException:
+            pass
+    return hosts_down()
+
+
+def _probe_session() -> requests.Session:
+    s = _BreakerSession()
+    s.mount("https://", HTTPAdapter(max_retries=Retry(total=0)))
     return s
 
 

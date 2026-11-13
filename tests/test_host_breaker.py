@@ -267,3 +267,198 @@ def test_gather_resets_the_breaker_before_it_fetches_anything():
     assert tries, "gather() fetches nothing -- this test is looking at the wrong function"
     assert min(resets) < min(tries), (
         f"reset_hosts() at line {min(resets)} runs after the first _try at {min(tries)}")
+
+
+# -- ...and the FIRST discovery, which the breaker above cannot help with ----
+#
+# Added 2026-11-13, the second day of the same outage. Ross: "i opened the
+# daily cattle reports email up- it fetched the data- but now when i refresh
+# fetching the data, it just spins and won't load it."
+#
+# The breaker skips the second and third call to a dead host and never the
+# first, and the first is where the time goes: seven of sources.py's calls hang
+# off the USDA datamart, so whichever ran first paid a 120s read budget for all
+# of them. Observed first discoveries on 11-12: 139s and 261s.
+
+def test_a_read_timeout_is_not_retried():
+    """
+    A read timeout means the server TOOK the request and sent no byte inside
+    the budget. A retry hands the same budget to the same server, so it
+    almost never converts a failure into a success and always multiplies the
+    wait -- four attempts at 120s is most of what a dead host costs.
+
+    Measured against the live outage with a 3s budget: 30.8s as shipped
+    against 5.1s with read=0, both raising ConnectionError, so the breaker
+    trips either way and only the waiting changes.
+    """
+    retry = sources._session().get_adapter("https://x/").max_retries
+    assert retry.read == 0, (
+        f"read retries are {retry.read} -- a dead host costs that many read "
+        f"budgets before anyone is told")
+
+
+def test_connect_and_status_retries_are_left_alone():
+    """
+    The two cases where trying again DOES work. A refused connection can be
+    transient and a 500 can be one endpoint having a bad minute -- neither
+    says the host is unreachable, and `total` still governs both.
+    """
+    retry = sources._session().get_adapter("https://x/").max_retries
+    assert retry.total == 3, "connect/status retries went with the read ones"
+    assert 500 in retry.status_forcelist and 429 in retry.status_forcelist
+
+
+def test_the_probe_session_asks_once_AND_is_the_one_the_probe_uses():
+    """
+    A status answer of ANY kind is a pass for the probe, so there is nothing
+    a second attempt could turn into one -- and _session()'s status_forcelist
+    would otherwise spend 9s of backoff asking a sick-but-alive host four
+    times, on the call whose whole purpose is to be cheap.
+
+    THE SECOND HALF WAS MISSING AND A MUTATION FOUND IT. The first version
+    inspected _probe_session() alone, so swapping the probe's own call over to
+    _session() left this green while the probe retried four times -- the
+    config was right and nothing used it. Same hole as `assert "wasde.SCHEMA"
+    in page`: a test on the DEFINITION says nothing about the USE.
+    """
+    retry = sources._probe_session().get_adapter("https://x/").max_retries
+    assert retry.total == 0, "the probe retries, which is what it exists not to do"
+
+    tree = ast.parse((REPO / "letter" / "sources.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "preflight")
+    makers = {n.func.id for n in ast.walk(fn)
+              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+              and n.func.id.endswith("session")}
+    assert makers == {"_probe_session"}, (
+        f"preflight() builds its session with {sorted(makers)} -- the no-retry "
+        f"config above is not what the probe actually uses")
+
+
+def test_the_preflight_trips_the_breaker(monkeypatch):
+    """THE WHOLE POINT: one short request, and every later call is free."""
+    calls = _patch(monkeypatch, requests.exceptions.ConnectionError("dead"))
+    assert sources.preflight() == ["mpr.datamart.ams.usda.gov"]
+    assert len(calls) == 1, "the preflight is not one request"
+
+    before = len(calls)
+    with pytest.raises(sources.HostUnreachable):
+        sources._session().get(DEAD, timeout=120)
+    assert len(calls) == before, "the guarded call still reached the network"
+
+
+def test_the_preflight_does_NOT_trip_on_a_status(monkeypatch):
+    """
+    A 500 says one endpoint is unwell and says nothing whatever about the
+    host. Condemning it here would skip the cash trade, the week-to-date
+    cash, the afternoon cutout and the grading % because the catalogue had a
+    bad minute -- four figures for no reason, on a host that was answering.
+    """
+    sick = requests.Response()
+    sick.status_code = 500
+    _patch(monkeypatch, sick)
+    assert sources.preflight() == []
+
+
+def test_the_preflight_does_NOT_trip_on_a_404(monkeypatch):
+    """Any answer at all means the service is alive. That is the whole test."""
+    gone = requests.Response()
+    gone.status_code = 404
+    _patch(monkeypatch, gone)
+    assert sources.preflight() == []
+
+
+def test_the_preflight_reads_the_breakers_own_record():
+    """
+    BY AST, because this is about there being ONE rule rather than two.
+    _BreakerSession already decides what counts as a dead host; a preflight
+    that inspected the exception itself would be a second copy of that
+    decision, free to drift from it -- and the drift would be invisible,
+    since both forms return a plausible list of hostnames.
+    """
+    tree = ast.parse((REPO / "letter" / "sources.py").read_text(encoding="utf-8"))
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "preflight")
+    returns = [n for n in ast.walk(fn) if isinstance(n, ast.Return)]
+    assert len(returns) == 1, "preflight() has more than one way out"
+    val = returns[0].value
+    assert isinstance(val, ast.Call) and isinstance(val.func, ast.Name)
+    assert val.func.id == "hosts_down", (
+        "preflight() decides for itself which hosts are down instead of "
+        "reading the breaker's record")
+
+
+def test_the_preflight_covers_the_datamart_and_nothing_else():
+    """
+    A probe earns its request where SEVERAL expensive calls share one host.
+    esmis, CFTC and Yahoo have one apiece and marsapi has one, so for those
+    the breaker's first discovery is the only discovery and a probe would add
+    latency to every healthy run to save nothing.
+    """
+    from urllib.parse import urlsplit
+    hosts = [urlsplit(u).hostname for u in sources.PREFLIGHT_URLS]
+    assert hosts == ["mpr.datamart.ams.usda.gov"]
+    assert urlsplit(sources.LMR_BASE).hostname in hosts
+
+
+def test_the_preflight_budget_is_the_one_that_was_measured():
+    """
+    (3, 8) is NOT a number invented here. apps/cash_trade probes this exact
+    endpoint for its own cache key and records the healthy figure in its
+    docstring -- ~67KB, ~3.7s -- on that budget. Pinning the two together is
+    what stops this one being "tuned" against an outage, where any value
+    looks fine because nothing answers.
+    """
+    assert sources.PREFLIGHT_TIMEOUT == (3, 8)
+    page = (REPO / "apps" / "cash_trade" / "app.py").read_text(encoding="utf-8-sig")
+    assert "timeout=(3, 8)" in page, (
+        "the page this budget was borrowed from has changed its own -- decide "
+        "which is right rather than leaving the two to disagree")
+
+
+def test_gather_preflights_after_the_reset_and_before_any_fetch():
+    """
+    BY POSITION, in all three directions. After reset_hosts(), or it probes
+    and then forgets what it learned. Before the first _try, or it is not a
+    preflight at all. And exactly once, because a second call after the
+    breaker has tripped would raise HostUnreachable from inside gather()
+    rather than through _try.
+    """
+    tree = ast.parse((REPO / "letter" / "build.py").read_text(encoding="utf-8"))
+    gather = next(n for n in ast.walk(tree)
+                  if isinstance(n, ast.FunctionDef) and n.name == "gather")
+
+    def lines(attr):
+        return [n.lineno for n in ast.walk(gather)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr == attr]
+
+    pre, reset = lines("preflight"), lines("reset_hosts")
+    tries = [n.lineno for n in ast.walk(gather)
+             if isinstance(n, ast.Call)
+             and isinstance(n.func, ast.Name) and n.func.id == "_try"]
+
+    assert len(pre) == 1, f"gather() calls preflight() {len(pre)} times"
+    assert reset and tries
+    assert min(reset) < pre[0], "the preflight runs before the breaker is reset"
+    assert pre[0] < min(tries), (
+        f"preflight() at line {pre[0]} runs after the first _try at {min(tries)}")
+
+
+@pytest.mark.parametrize("broken,why", [
+    ("retry = Retry(total=3, backoff_factor=b)", "read is back to the default"),
+    ("return [h for h in _HOST_DOWN]", "preflight re-decides for itself"),
+])
+def test_the_new_guards_reject_the_broken_form(broken, why):
+    """
+    A guard that cannot fail is the thing it guards against. Both of these
+    are forms that compile, render and read perfectly well.
+    """
+    tree = ast.parse(broken)
+    if "Retry" in broken:
+        call = next(n for n in ast.walk(tree) if isinstance(n, ast.Call))
+        assert "read" not in {k.arg for k in call.keywords}, why
+    else:
+        ret = next(n for n in ast.walk(tree) if isinstance(n, ast.Return))
+        assert not (isinstance(ret.value, ast.Call)
+                    and getattr(ret.value.func, "id", "") == "hosts_down"), why

@@ -7820,20 +7820,111 @@ so without it a host that failed at breakfast is still refused at four
 o'clock. `HOST_DOWN_TTL` (120s) is the backstop for the callers that are not
 gather(), the headline panel among them.
 
-### THE FIRST TIMEOUT IS NOT RECOVERABLE, AND IT IS STILL MOST OF THE COST
+### THE FIRST TIMEOUT WAS MOST OF THE COST — RECOVERED 2026-11-13
 
 The breaker saves the SECOND and third discoveries, never the first. Measured
 the same afternoon, the first call took **261s** — against 139s that morning,
-on the same dead host. So the honest figure for a bad day is "the fetch costs
+on the same dead host. So the honest figure for a bad day was "the fetch costs
 one timeout instead of three", not a fixed number of minutes.
 
-**THE OBVIOUS NEXT LEVER CANNOT BE PULLED TODAY, and that is worth recording
-rather than attempting.** `fetch_cash_trade`'s `/History` carries
-`timeout=120`, and with retries that is where the 261s goes. Lowering it would
-halve the discovery — but there is no measurement of how long that pull takes
-when it is HEALTHY, and the only way to get one is a day the host answers.
-Tuning it against an outage would be fitting the timeout to the broken case
-and could break the working one. Measure `/History` on a good day first.
+**THAT WAS NOT ENOUGH AND ROSS HIT IT AGAIN THE NEXT DAY**: *"i opened the
+daily cattle reports email up- it fetched the data- but now when i refresh
+fetching the data, it just spins and won't load it."* Same host, second day.
+The page itself painted (Graph was healthy again, and the 11-12 lazy-tab fix
+had landed), so only the Fetch button hung — which is exactly the shape of a
+breaker that cannot help the first call.
+
+**THE CONCLUSION BELOW WAS RIGHT AND THE SCOPE OF IT WAS WRONG.** It read:
+
+> **THE OBVIOUS NEXT LEVER CANNOT BE PULLED TODAY** … `fetch_cash_trade`'s
+> `/History` carries `timeout=120` … there is no measurement of how long that
+> pull takes when it is HEALTHY … Measure `/History` on a good day first.
+
+Still true of `/History`, and its timeout is untouched. But it reasoned as
+though that were the only lever, and two others were available without any
+healthy measurement of that endpoint at all.
+
+#### A read timeout is not worth retrying
+
+`Retry(total=3)` leaves `read` at its default, so a read timeout is retried —
+four attempts at 120s, which is where the 139-261s went. A read timeout means
+the server TOOK the request and sent no byte inside the budget; a retry hands
+the same budget to the same server, so it almost never converts a failure into
+a success and always multiplies the wait. Measured against the live outage
+with a deliberately small 3s budget, so the experiment cost seconds instead of
+minutes:
+
+| | |
+|---|---|
+| as shipped | **30.8s** |
+| `read=0` | **5.1s** |
+
+**Both raise `requests.ConnectionError`, so the breaker trips either way** —
+urllib3 wraps an exhausted read retry in `MaxRetryError` and requests falls
+through to `ConnectionError`. Only the waiting changes. `total=3` still
+governs CONNECT failures and the `status_forcelist`, which are the two cases
+where trying again does work; **do not take those out with it.**
+
+#### ...and the host can be asked one cheap question first
+
+`sources.preflight()`, called by `gather()` immediately after `reset_hosts()`.
+Seven of `sources.py`'s calls hang off the datamart, so whichever ran first
+paid a 120s read budget on behalf of all of them. The probe pays a short one
+instead and the breaker does the rest.
+
+**THE BUDGET IS NOT A NUMBER INVENTED HERE, and that is the whole reason this
+lever was available when `/History`'s was not.** `apps/cash_trade` already
+probes the LMR reports LIST endpoint for its own cache key and its docstring
+records the healthy figure — **~67KB, ~3.7s** — on `timeout=(3, 8)`. So the
+measurement the `/History` note was waiting for already existed, for a
+different endpoint on the same host. `test_the_preflight_budget_is_the_one_that_was_measured`
+pins the two files together, so this one cannot be "tuned" against an outage
+where any value looks fine because nothing answers.
+
+Measured end to end against the live outage, 2026-11-13:
+
+    preflight                10.21s   down=['mpr.datamart.ams.usda.gov']
+    fetch_cash_trade          0.00s   HostUnreachable
+    fetch_cutout              0.00s   HostUnreachable
+
+**~10s for the whole outage**, against 331s of 488s on 11-12.
+
+Four things in it that look arbitrary and are not:
+
+- **`preflight()` returns `hosts_down()`, never its own list.** `_BreakerSession`
+  already decides what counts as a dead host. A probe that inspected the
+  exception itself would be a second copy of that rule, free to drift — and
+  invisibly, since both forms return a plausible list of hostnames.
+- **No retries on the probe** (`_probe_session`, `Retry(total=0)`). A status
+  answer of any kind is a pass, so there is nothing a second attempt could
+  turn into one, and `_session()`'s `status_forcelist` would otherwise spend
+  9s of backoff asking a sick-but-alive host four times — on the one call
+  whose entire purpose is to be cheap.
+- **A 404 and a 500 are both passes.** Only a connection-level failure
+  condemns the host, the same line the breaker draws. A catalogue having a bad
+  minute must not cost the cash trade, the week-to-date cash, the afternoon
+  cutout and the grading %.
+- **The datamart only.** A probe earns a request of its own where SEVERAL
+  expensive calls share one host. esmis, CFTC and Yahoo have one apiece and
+  marsapi has one, so for those the breaker's first discovery is the only
+  discovery and a probe would add latency to every healthy run to save
+  nothing. A test pins the list at one entry.
+
+**THE FALSE TRIP IS REAL AND IS THE PRICE.** A datamart that is merely slow —
+alive, but more than 8s to its first byte — loses those four figures for that
+run. The page names the host and pressing Fetch again calls `reset_hosts()`
+and tries it properly. Against that, the behaviour it replaces is a two-to-
+eight-minute spinner on exactly the same day.
+
+#### A MUTATION FOUND A HOLE IN THE PROBE'S OWN GUARD
+
+`test_the_probe_session_asks_once` inspected `_probe_session()` alone, so
+pointing `preflight()` at `_session()` left it green while the probe retried
+four times — the config was right and nothing used it. **A test on the
+DEFINITION says nothing about the USE**, which is the `assert "wasde.SCHEMA"
+in page` failure arriving in a new place. It asserts by AST that `preflight()`
+builds its session with `_probe_session` and nothing else. Ten mutations,
+every one caught after that.
 
 ### The page names the host once, above its own wreckage
 

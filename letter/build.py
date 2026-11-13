@@ -404,6 +404,16 @@ def gather(issue: date, errors: list, kind: str = "tuesday", cof_guesses: dict =
     # makes "one fetch, one chance per host" true.
     sources.reset_hosts()
 
+    # ...AND THEN ONE CHEAP QUESTION BEFORE ANY EXPENSIVE ONE. The breaker
+    # above saves the second and third call to a dead host and never the
+    # first, and the first is where the time goes: seven of this letter's
+    # fetches hang off the USDA datamart, so whichever ran first paid a 120s
+    # read budget on behalf of all of them. preflight() asks the LIST endpoint
+    # instead, on apps/cash_trade's own measured budget, and the breaker does
+    # the rest. report_source_health() names whatever it finds, so nothing is
+    # reported from here -- a second message would say the same thing twice.
+    sources.preflight()
+
     api_key = os.environ.get("MASSIVE_API_KEY", "").strip()
     if not api_key:
         errors.append("MASSIVE_API_KEY not set -- futures and technicals unavailable")
