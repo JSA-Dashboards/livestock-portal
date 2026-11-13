@@ -7840,9 +7840,16 @@ breaker that cannot help the first call.
 > `/History` carries `timeout=120` … there is no measurement of how long that
 > pull takes when it is HEALTHY … Measure `/History` on a good day first.
 
-Still true of `/History`, and its timeout is untouched. But it reasoned as
-though that were the only lever, and two others were available without any
-healthy measurement of that endpoint at all.
+Two other levers were available without any healthy measurement of that
+endpoint at all, and are below.
+
+**AND THEN THE HOST CAME BACK AND `/History` WAS MEASURED.** Healthy, three
+runs: **5.12s, 5.13s, 5.92s, 13.9 MB**. So `timeout=120` is about **20x** the
+real figure and is not the thing to shorten — which is the answer the 11-12
+note was waiting for, and it is "leave it alone". A read timeout is a gap
+BETWEEN bytes, so a slow link does not trip it; only a stall does, and 120s of
+stall is already far past any plausible one. **Its timeout stays untouched,
+now on evidence rather than on the absence of it.**
 
 #### A read timeout is not worth retrying
 
@@ -7872,15 +7879,6 @@ Seven of `sources.py`'s calls hang off the datamart, so whichever ran first
 paid a 120s read budget on behalf of all of them. The probe pays a short one
 instead and the breaker does the rest.
 
-**THE BUDGET IS NOT A NUMBER INVENTED HERE, and that is the whole reason this
-lever was available when `/History`'s was not.** `apps/cash_trade` already
-probes the LMR reports LIST endpoint for its own cache key and its docstring
-records the healthy figure — **~67KB, ~3.7s** — on `timeout=(3, 8)`. So the
-measurement the `/History` note was waiting for already existed, for a
-different endpoint on the same host. `test_the_preflight_budget_is_the_one_that_was_measured`
-pins the two files together, so this one cannot be "tuned" against an outage
-where any value looks fine because nothing answers.
-
 Measured end to end against the live outage, 2026-11-13:
 
     preflight                10.21s   down=['mpr.datamart.ams.usda.gov']
@@ -7888,6 +7886,51 @@ Measured end to end against the live outage, 2026-11-13:
     fetch_cutout              0.00s   HostUnreachable
 
 **~10s for the whole outage**, against 331s of 488s on 11-12.
+
+#### THE FIRST VERSION'S BUDGET WAS TOO THIN AND ONLY A HEALTHY HOST COULD SAY SO
+
+It probed the LIST endpoint on `timeout=(3, 8)`, borrowed from
+`apps/cash_trade`, which probes that same endpoint for its own cache key and
+records a healthy **~67KB, ~3.7s** in its docstring. Borrowing a measured
+budget rather than inventing one was the right instinct and the figure was the
+wrong figure: **~3.7s is the TOTAL, and a read timeout measures TIME TO FIRST
+BYTE.** The datamart came back later the same afternoon, and on five runs each:
+
+| | time to first byte | total |
+|---|---|---|
+| GET the LIST endpoint | **5.17 – 6.08s** | 6.13 – 9.71s |
+| GET one report slug | 3.81 – 4.96s | 2.52 – 3.70s |
+| HEAD one report slug | 3.47 – 4.02s | — |
+| HEAD the LIST endpoint | **18.18 – 28.19s** | and one outright failure |
+
+So the shipped probe sat **1.3x** clear of its own worst healthy run. A
+busy-but-alive datamart would have tripped it and cost four figures on a day
+USDA was answering. **A probe that cries wolf is worse than no probe**, because
+it fails on exactly the days the letter is fine.
+
+It is a **report slug on `timeout=(3, 20)`** now — 4x clear of the worst
+healthy TTFB, and measured at **3.52 – 3.57s** over four healthy runs, which is
+both faster and far tighter than the catalogue was. Three reasons for the slug
+over the catalogue, in order of weight:
+
+- **A pass has to mean the thing the letter needs is being served.** The
+  catalogue is a different code path, so "the catalogue answered" is a weaker
+  claim.
+- It is **cheaper in total** despite moving 1.8MB, because the catalogue is
+  slow to generate.
+- **Both directions are proven on that path**: a slug URL is what timed out
+  during the outage itself, in the `read=0` experiment above.
+
+**HEAD IS THE FASTEST AND IS NOT TAKEN.** The same service handled HEAD on the
+catalogue in 18–28s and failed once in four. Four samples on one path is not
+enough to put a liveness probe on a verb this host is visibly inconsistent
+about.
+
+The test is a **band** (`15 <= read <= 45`) and not the number, for the reason
+`HOST_DOWN_TTL` and `MSAL_TIMEOUT` needed one: the lower bound is the bug it
+had, the upper bound is what keeps it a timeout rather than a value large
+enough to be none. A test pinned to `(3, 8)` would have held the defect in
+place as firmly as it would have held the fix.
 
 Four things in it that look arbitrary and are not:
 
@@ -7911,8 +7954,8 @@ Four things in it that look arbitrary and are not:
   nothing. A test pins the list at one entry.
 
 **THE FALSE TRIP IS REAL AND IS THE PRICE.** A datamart that is merely slow —
-alive, but more than 8s to its first byte — loses those four figures for that
-run. The page names the host and pressing Fetch again calls `reset_hosts()`
+alive, but more than 20s to its first byte, against 3.81–4.96s measured —
+loses those four figures for that run. The page names the host and pressing Fetch again calls `reset_hosts()`
 and tries it properly. Against that, the behaviour it replaces is a two-to-
 eight-minute spinner on exactly the same day.
 
@@ -7923,7 +7966,7 @@ pointing `preflight()` at `_session()` left it green while the probe retried
 four times — the config was right and nothing used it. **A test on the
 DEFINITION says nothing about the USE**, which is the `assert "wasde.SCHEMA"
 in page` failure arriving in a new place. It asserts by AST that `preflight()`
-builds its session with `_probe_session` and nothing else. Ten mutations,
+builds its session with `_probe_session` and nothing else. Twelve mutations,
 every one caught after that.
 
 ### The page names the host once, above its own wreckage

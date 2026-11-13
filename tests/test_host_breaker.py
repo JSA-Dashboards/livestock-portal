@@ -401,19 +401,37 @@ def test_the_preflight_covers_the_datamart_and_nothing_else():
     assert urlsplit(sources.LMR_BASE).hostname in hosts
 
 
-def test_the_preflight_budget_is_the_one_that_was_measured():
+def test_the_preflight_budget_clears_the_measured_healthy_response():
     """
-    (3, 8) is NOT a number invented here. apps/cash_trade probes this exact
-    endpoint for its own cache key and records the healthy figure in its
-    docstring -- ~67KB, ~3.7s -- on that budget. Pinning the two together is
-    what stops this one being "tuned" against an outage, where any value
-    looks fine because nothing answers.
+    A BAND, AND THE REASON IS A BUG THIS ALREADY HAD. The first version
+    borrowed apps/cash_trade's (3, 8) for the LIST endpoint, on that page's
+    recorded ~3.7s healthy figure, and pinned the two files together. When
+    the datamart came back the real time to first byte -- which is what a read
+    timeout measures -- was 5.17-6.08s over five runs, so the probe sat 1.3x
+    clear of its own worst healthy run and a busy-but-alive host would have
+    tripped it. A probe that cries wolf costs four figures on a good day.
+
+    The slug endpoint it probes now measured 3.81-4.96s TTFB, so 20s is 4x
+    clear. The lower bound is what the bug was; the upper bound is what makes
+    it a timeout at all rather than a number large enough to be none, the
+    reason HOST_DOWN_TTL and MSAL_TIMEOUT are bands too.
     """
-    assert sources.PREFLIGHT_TIMEOUT == (3, 8)
-    page = (REPO / "apps" / "cash_trade" / "app.py").read_text(encoding="utf-8-sig")
-    assert "timeout=(3, 8)" in page, (
-        "the page this budget was borrowed from has changed its own -- decide "
-        "which is right rather than leaving the two to disagree")
+    connect, read = sources.PREFLIGHT_TIMEOUT
+    assert 2 <= connect <= 10, f"connect budget is {connect}s"
+    assert 15 <= read <= 45, (
+        f"read budget is {read}s -- under 15 it is inside the measured spread "
+        f"of a HEALTHY response, over 45 it is not bounding anything")
+
+
+def test_the_preflight_probes_a_report_rather_than_the_catalogue():
+    """
+    A pass has to mean the thing the letter needs is being served. The
+    catalogue is a different code path, it measured slower and far more
+    variable than a report slug, and under HEAD it took 18-28s and failed
+    once in four -- so "the catalogue answered" is a weaker claim, more
+    slowly.
+    """
+    assert sources.PREFLIGHT_URLS == (f"{sources.LMR_BASE}/{sources.CT154_ID}",)
 
 
 def test_gather_preflights_after_the_reset_and_before_any_fetch():

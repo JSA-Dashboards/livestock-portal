@@ -176,14 +176,44 @@ def _session(backoff: float = 1.5) -> requests.Session:
 # calls hang off that one host, so whichever of them goes first pays for all of
 # them.
 #
-# So the host is asked ONE CHEAP QUESTION before the expensive calls start. The
-# LIST endpoint is the right question and is not a guess: apps/cash_trade
-# already probes it for its own cache key and records the healthy figure --
-# ~67KB, ~3.7s -- so `timeout=(3, 8)` is that page's own budget rather than a
-# number invented here. Any answer at all, 404 included, means the service is
-# alive; only a connection-level failure condemns it, which is the same line
-# _BreakerSession draws and is drawn in exactly one place because this function
-# reads the breaker's own record rather than re-deciding.
+# So the host is asked ONE CHEAP QUESTION before the expensive calls start. Any
+# answer at all, 404 included, means the service is alive; only a
+# connection-level failure condemns it, which is the same line _BreakerSession
+# draws and is drawn in exactly one place, because this function reads the
+# breaker's own record rather than re-deciding.
+#
+# THE ENDPOINT AND THE BUDGET WERE BOTH MEASURED, and the first version of this
+# had them wrong in a way only a healthy host could reveal. It probed the LIST
+# endpoint on apps/cash_trade's `timeout=(3, 8)`, borrowed because that page's
+# docstring records a healthy ~67KB/~3.7s for it. The datamart came back later
+# the same afternoon and the real figures are worse than that: TIME TO FIRST
+# BYTE, which is what a read timeout actually measures, over five runs each --
+#
+#     GET  the LIST endpoint        5.17 - 6.08s     (total 6.13 - 9.71s)
+#     GET  one report slug          3.81 - 4.96s     (total 2.52 - 3.70s)
+#     HEAD one report slug          3.47 - 4.02s
+#     HEAD the LIST endpoint       18.18 - 28.19s    and one outright failure
+#
+# -- so an 8s read budget left the shipped probe barely 1.3x clear of its own
+# worst healthy run. A busy-but-alive datamart would have tripped it and cost
+# the cash trade, the week-to-date cash, the afternoon cutout and the grading %
+# on a day USDA was answering. A probe that cries wolf is worse than none.
+#
+# It is a REPORT SLUG on `timeout=(3, 20)` now: 4x clear of the worst healthy
+# TTFB, cheaper in total than the catalogue despite moving 1.8MB, and it
+# exercises the report backend rather than the catalogue, so a pass means the
+# thing the letter needs is being served. Both directions are proven on that
+# path -- a slug URL is what timed out during the outage itself.
+#
+# HEAD is tempting and is not taken. It is the fastest and tightest of the four
+# and this service handles it unevenly -- the catalogue under HEAD took 18-28s
+# and failed once in four. Four samples on one path is not enough to put a
+# liveness probe on a verb this host is visibly inconsistent about.
+#
+# WORST CASE ON A DEAD HOST IS NOW ~23s rather than the ~10s measured on the
+# 8s budget. That is the trade and it is the right way round: 23s against the
+# 139-261s this replaces is still the whole win, and the margin it buys is
+# against a failure mode that costs four figures on a good day.
 #
 # NO RETRIES ON THE PROBE. A status answer is a pass, so there is nothing a
 # second attempt could turn into one, and the status_forcelist on _session()
@@ -202,9 +232,9 @@ def _session(backoff: float = 1.5) -> requests.Session:
 # discovery IS the only discovery and a probe would just add latency to a
 # healthy run.
 
-PREFLIGHT_TIMEOUT = (3, 8)
+PREFLIGHT_TIMEOUT = (3, 20)
 
-PREFLIGHT_URLS = (LMR_BASE,)
+PREFLIGHT_URLS = (f"{LMR_BASE}/{CT154_ID}",)
 
 
 def preflight() -> list:
