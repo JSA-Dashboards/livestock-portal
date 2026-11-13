@@ -7789,6 +7789,27 @@ before concluding anything about AMS as a whole**; a breaker that had
 condemned all of AMS would have cost the slaughter, the carcass weights and
 the morning cutout for nothing.
 
+### `http_breaker.py` IS AT THE REPO ROOT, AND IS ONE FILE
+
+Moved there 2026-11-13, the moment the dashboards needed the same thing — the
+`wasde.py` rule, and it bites harder here. Python caches modules by NAME, so a
+second copy under an app directory would mean whichever page loaded first
+decided which copy every other page got; and **this one keeps STATE**, so two
+copies would be two disagreeing records of which hosts are down. A page reading
+the wrong one waits out a timeout the other had already learned about — the
+exact bug the module exists to fix, reintroduced where nothing would report it.
+`tests/test_host_breaker.py` asserts `rglob` returns exactly one path, that
+`letter/sources.py` kept no second copy (no `Breaker` class and no `Retry(` of
+its own), and that the module imports **nothing of this project's and not
+streamlit** — letter/, apps/ and deploy/ all use it, and a droplet cron must
+not need Streamlit installed to fetch a PDF.
+
+`letter/sources.py` re-exports the names rather than rewriting fifteen call
+sites, and keeps only its own choice of which host to probe. **The import needs
+`REPO` on `sys.path` first** and does it explicitly, because nothing guarantees
+the root is there: every app page inserts its own directory at position 0 and
+deploy/ scripts load modules by path.
+
 ### The breaker: one timeout per host per run
 
 `sources._BreakerSession` subclasses `requests.Session` and overrides

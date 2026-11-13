@@ -22,6 +22,7 @@ from datetime import date
 import pytest
 import requests
 
+import http_breaker
 from letter import build, sources
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
@@ -191,7 +192,7 @@ def test_the_trip_expires(monkeypatch):
     with pytest.raises(requests.exceptions.ConnectionError):
         sources._session().get(DEAD, timeout=5)
 
-    sources._HOST_DOWN["mpr.datamart.ams.usda.gov"] -= sources.HOST_DOWN_TTL + 1
+    http_breaker._HOST_DOWN["mpr.datamart.ams.usda.gov"] -= sources.HOST_DOWN_TTL + 1
     assert sources.hosts_down() == []
     with pytest.raises(requests.exceptions.ConnectionError):
         sources._session().get(DEAD, timeout=5)
@@ -324,13 +325,13 @@ def test_the_probe_session_asks_once_AND_is_the_one_the_probe_uses():
     retry = sources._probe_session().get_adapter("https://x/").max_retries
     assert retry.total == 0, "the probe retries, which is what it exists not to do"
 
-    tree = ast.parse((REPO / "letter" / "sources.py").read_text(encoding="utf-8"))
+    tree = ast.parse((REPO / "http_breaker.py").read_text(encoding="utf-8"))
     fn = next(n for n in ast.walk(tree)
               if isinstance(n, ast.FunctionDef) and n.name == "preflight")
     makers = {n.func.id for n in ast.walk(fn)
               if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
               and n.func.id.endswith("session")}
-    assert makers == {"_probe_session"}, (
+    assert makers == {"probe_session"}, (
         f"preflight() builds its session with {sorted(makers)} -- the no-retry "
         f"config above is not what the probe actually uses")
 
@@ -376,7 +377,7 @@ def test_the_preflight_reads_the_breakers_own_record():
     decision, free to drift from it -- and the drift would be invisible,
     since both forms return a plausible list of hostnames.
     """
-    tree = ast.parse((REPO / "letter" / "sources.py").read_text(encoding="utf-8"))
+    tree = ast.parse((REPO / "http_breaker.py").read_text(encoding="utf-8"))
     fn = next(n for n in ast.walk(tree)
               if isinstance(n, ast.FunctionDef) and n.name == "preflight")
     returns = [n for n in ast.walk(fn) if isinstance(n, ast.Return)]
@@ -480,3 +481,54 @@ def test_the_new_guards_reject_the_broken_form(broken, why):
         ret = next(n for n in ast.walk(tree) if isinstance(n, ast.Return))
         assert not (isinstance(ret.value, ast.Call)
                     and getattr(ret.value.func, "id", "") == "hosts_down"), why
+
+
+# -- the move to the repo root, 2026-11-13 ----------------------------------
+
+def test_there_is_exactly_one_breaker():
+    """
+    The same guard `wasde.py` and `portal_view.py` carry, and it matters more
+    here than for either of them: Python caches modules by NAME, so a second
+    copy under an app directory would mean whichever page loaded first decided
+    which copy every other page got -- and this one keeps STATE, so two copies
+    would be two disagreeing records of which hosts are down. A page reading
+    the wrong one would wait out a timeout the other had already learned
+    about, which is the entire bug this module exists to fix, reintroduced
+    where nothing would report it.
+    """
+    found = sorted(q.relative_to(REPO).as_posix() for q in REPO.rglob("http_breaker.py")
+                   if ".venv" not in q.parts and "scratchpad" not in q.parts)
+    assert found == ["http_breaker.py"], found
+
+
+def test_the_letter_kept_no_second_copy():
+    """
+    The extraction has to have REMOVED the old one, not merely added a new
+    one. Both would import cleanly and the letter would use whichever name
+    resolved -- and a divergence between them would show up as a page that
+    sometimes waits and sometimes does not.
+    """
+    src = (REPO / "letter" / "sources.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    classes = {n.name for n in ast.walk(tree) if isinstance(n, ast.ClassDef)}
+    assert not {c for c in classes if "Breaker" in c or "Unreachable" in c}, (
+        "letter/sources.py still defines its own breaker")
+    retries = [n for n in ast.walk(tree)
+               if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "Retry"]
+    assert not retries, "letter/sources.py still builds its own Retry policy"
+
+
+def test_the_breaker_depends_on_nothing_of_ours():
+    """
+    letter/, apps/ and deploy/ all import it, so it must not import any of
+    them -- and it must not import streamlit either, or a droplet cron that
+    uses it needs Streamlit installed to fetch a PDF.
+    """
+    tree = ast.parse((REPO / "http_breaker.py").read_text(encoding="utf-8"))
+    mods = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            mods |= {a.name.split(".")[0] for a in n.names}
+        elif isinstance(n, ast.ImportFrom):
+            mods.add((n.module or "").split(".")[0])
+    assert mods == {"time", "urllib", "requests", "urllib3"}, sorted(mods)

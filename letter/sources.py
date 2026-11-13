@@ -23,18 +23,19 @@ import sys
 import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import urlsplit
 
 import pandas as pd
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 from . import config
 from . import settle_log
 
 REPO = Path(__file__).resolve().parent.parent
 APPS = REPO / "apps"
+
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+import http_breaker  # noqa: E402  -- needs REPO on the path first
 
 # -- AMS LMR: mirrored from the dashboards (see module docstring) -------------
 LMR_BASE = "https://mpr.datamart.ams.usda.gov/services/v1.1/reports"
@@ -54,210 +55,44 @@ AMS_3208_PDF = "https://www.ams.usda.gov/mnreports/ams_3208.pdf"
 
 # -- ONE DEAD HOST MUST NOT COST THE WHOLE FETCH ------------------------------
 #
-# Added 2026-11-12, after the letter page span twice in a week. Ross: "why is
-# my daily cattle email just spinning when i click fetch latest data?"
+# Added 2026-11-12 after the letter page spun twice in a week, and MOVED to the
+# repo root on 2026-11-13 the moment the dashboards needed the same thing. The
+# measurements, the read=0 reasoning and the interaction with @st.cache_data
+# all live in http_breaker.py's docstring; what stays here is only the letter's
+# own choice of WHICH host to probe.
 #
-# `mpr.datamart.ams.usda.gov` was accepting connections and never answering.
-# Measured that morning, one fetch of the letter:
-#
-#     cash trade LM_CT150/154    139s  ConnectionError
-#     cash week-to-date by state 113s  RetryError
-#     boxed beef PM LM_XB403      78s  ConnectionError
-#     ---------------------------------------------------------------
-#     331s of 488s total, spent three times over on one dead host
-#
-# NOTHING WAS BROKEN AND NOTHING RAISED OUT. `_try` catches each failure and
-# carries on, so the fetch completes -- eight minutes later, by which time
-# Community Cloud has dropped the socket and the browser is showing a spinner
-# that will never stop. The outage is USDA's; the eight minutes are ours.
-#
-# So the first connection-level failure marks that HOST, and every later call
-# to it in the same run raises immediately instead of waiting out the same
-# timeout again. The three calls above cost one timeout between them.
-#
-# IT TRIPS ON CONNECTION AND TIMEOUT FAILURES, NEVER ON AN HTTP STATUS, and
-# that distinction is the whole safety of it. `Retry` carries a
-# `status_forcelist`, so a report answering 500 four times surfaces as
-# `RetryError` -- which says that one endpoint is unwell and says nothing
-# whatever about the host. Condemning the host on it would skip the cutout
-# because the cash report was sick. requests raises ConnectionError (and
-# ConnectTimeout, which subclasses both) for the connection-level case and
-# RetryError for the status one, so the exception types already draw the line.
-#
-# ONE FAILURE IS ENOUGH because the adapter has already tried four times by
-# then. A false trip costs one run of two missing figures and is recovered by
-# pressing Fetch again; the alternative costs eight minutes every time.
+# The names below are re-exported rather than rewritten at fifteen call sites,
+# and `_session` keeps its leading underscore because this module's own callers
+# and tests use it.
+_session = http_breaker.session
+_probe_session = http_breaker.probe_session
+HostUnreachable = http_breaker.HostUnreachable
+HOST_DOWN_TTL = http_breaker.HOST_DOWN_TTL
+reset_hosts = http_breaker.reset_hosts
+hosts_down = http_breaker.hosts_down
+_BreakerSession = http_breaker.BreakerSession
 
-HOST_DOWN_TTL = 120.0
+PREFLIGHT_TIMEOUT = http_breaker.PROBE_TIMEOUT
 
-_HOST_DOWN: dict = {}
-
-
-class HostUnreachable(requests.exceptions.ConnectionError):
-    """
-    Raised in place of re-waiting out a host that already failed this run.
-
-    A ConnectionError SUBCLASS on purpose: `build._try` reports whatever is
-    raised and carries on, and every caller that already handles a dead host
-    handles this unchanged.
-    """
-
-
-def reset_hosts() -> None:
-    """Forget every tripped host. `gather()` calls this as its first act."""
-    _HOST_DOWN.clear()
-
-
-def hosts_down() -> list:
-    """The hosts tripped and not yet expired, for the page to name."""
-    now = time.monotonic()
-    return sorted(h for h, t in _HOST_DOWN.items() if now - t < HOST_DOWN_TTL)
-
-
-class _BreakerSession(requests.Session):
-    """
-    A Session that refuses a host it has already seen fail.
-
-    Subclassing rather than wrapping every call site: there are fifteen of
-    them across this module and they all go through Session.request, so one
-    override covers the ones written later too.
-    """
-
-    def request(self, method, url, **kw):
-        host = urlsplit(url).hostname or ""
-        failed_at = _HOST_DOWN.get(host)
-        if failed_at is not None and time.monotonic() - failed_at < HOST_DOWN_TTL:
-            raise HostUnreachable(
-                f"{host} did not respond earlier in this run, so this call was "
-                f"skipped rather than waiting out the same timeout again")
-        try:
-            return super().request(method, url, **kw)
-        except (requests.exceptions.ConnectionError,
-                requests.exceptions.Timeout) as exc:
-            # Recorded at the FAILURE, not at the attempt: a 120s read timeout
-            # would otherwise start its own TTL two minutes in the past.
-            if not isinstance(exc, HostUnreachable):
-                _HOST_DOWN[host] = time.monotonic()
-            raise
-
-
-def _session(backoff: float = 1.5) -> requests.Session:
-    # read=0 -- A READ TIMEOUT IS NOT WORTH RETRYING, and retrying it is most
-    # of what a dead host costs. A read timeout means the server took the
-    # request and sent no byte inside the budget; a retry hands the same
-    # budget to the same server, so it almost never converts a failure into a
-    # success and always multiplies the wait. `total=3` still governs CONNECT
-    # failures (a genuinely transient "could not get there") and the status
-    # retries below, which are the two cases where trying again does work.
-    #
-    # Measured against the live outage of 2026-11-13, with a deliberately
-    # small 3s budget so the experiment cost seconds instead of minutes:
-    #
-    #     as shipped (read retried)   30.8s
-    #     read=0                       5.1s
-    #
-    # Both raise requests.ConnectionError, so _BreakerSession trips either
-    # way; what changes is how long it takes to find out. At the real 120s
-    # budget on fetch_cash_trade that is the difference between the 139-261s
-    # first discoveries observed on 11-12 and one read budget.
-    s = _BreakerSession()
-    retry = Retry(total=3, read=0, backoff_factor=backoff,
-                  status_forcelist=[429, 500, 502, 503, 504], allowed_methods=["GET"])
-    s.mount("https://", HTTPAdapter(max_retries=retry))
-    return s
-
-
-# -- Preflight ----------------------------------------------------------------
-#
-# THE BREAKER SAVES THE SECOND AND THIRD DISCOVERIES, NEVER THE FIRST, and on
-# 2026-11-13 the first was still the whole problem: the datamart was down for a
-# second day, Ross pressed Fetch, and the run sat on fetch_cash_trade's 120s
-# read budget before anything else could be reported. Seven of this module's
-# calls hang off that one host, so whichever of them goes first pays for all of
-# them.
-#
-# So the host is asked ONE CHEAP QUESTION before the expensive calls start. Any
-# answer at all, 404 included, means the service is alive; only a
-# connection-level failure condemns it, which is the same line _BreakerSession
-# draws and is drawn in exactly one place, because this function reads the
-# breaker's own record rather than re-deciding.
-#
-# THE ENDPOINT AND THE BUDGET WERE BOTH MEASURED, and the first version of this
-# had them wrong in a way only a healthy host could reveal. It probed the LIST
-# endpoint on apps/cash_trade's `timeout=(3, 8)`, borrowed because that page's
-# docstring records a healthy ~67KB/~3.7s for it. The datamart came back later
-# the same afternoon and the real figures are worse than that: TIME TO FIRST
-# BYTE, which is what a read timeout actually measures, over five runs each --
-#
-#     GET  the LIST endpoint        5.17 - 6.08s     (total 6.13 - 9.71s)
-#     GET  one report slug          3.81 - 4.96s     (total 2.52 - 3.70s)
-#     HEAD one report slug          3.47 - 4.02s
-#     HEAD the LIST endpoint       18.18 - 28.19s    and one outright failure
-#
-# -- so an 8s read budget left the shipped probe barely 1.3x clear of its own
-# worst healthy run. A busy-but-alive datamart would have tripped it and cost
-# the cash trade, the week-to-date cash, the afternoon cutout and the grading %
-# on a day USDA was answering. A probe that cries wolf is worse than none.
-#
-# It is a REPORT SLUG on `timeout=(3, 20)` now: 4x clear of the worst healthy
-# TTFB, cheaper in total than the catalogue despite moving 1.8MB, and it
-# exercises the report backend rather than the catalogue, so a pass means the
-# thing the letter needs is being served. Both directions are proven on that
-# path -- a slug URL is what timed out during the outage itself.
-#
-# HEAD is tempting and is not taken. It is the fastest and tightest of the four
-# and this service handles it unevenly -- the catalogue under HEAD took 18-28s
-# and failed once in four. Four samples on one path is not enough to put a
-# liveness probe on a verb this host is visibly inconsistent about.
-#
-# WORST CASE ON A DEAD HOST IS NOW ~23s rather than the ~10s measured on the
-# 8s budget. That is the trade and it is the right way round: 23s against the
-# 139-261s this replaces is still the whole win, and the margin it buys is
-# against a failure mode that costs four figures on a good day.
-#
-# NO RETRIES ON THE PROBE. A status answer is a pass, so there is nothing a
-# second attempt could turn into one, and the status_forcelist on _session()
-# would otherwise spend 9s of backoff asking a sick-but-alive host four times.
+# ONLY THE DATAMART, DELIBERATELY. A preflight is worth a request of its own
+# where SEVERAL expensive calls share one host -- seven of this module's do.
+# esmis, CFTC and Yahoo have one apiece and marsapi has one, so for those the
+# breaker's first discovery is the only discovery and a probe would add latency
+# to every healthy run to save nothing.
 #
 # THE FALSE TRIP IS REAL AND IS THE PRICE. A datamart that is merely slow --
-# alive, but more than 8s to its first byte -- loses the cash trade, the
-# week-to-date cash, the afternoon cutout and the grading % for that run. The
-# page names the host, and pressing Fetch again calls reset_hosts() and tries
-# it properly. Against that: the behaviour it replaces is a two-to-eight minute
-# spinner on exactly the same day.
-#
-# It is ONLY the datamart, deliberately. A preflight is worth a request of its
-# own where several expensive calls share one host; esmis, CFTC and Yahoo have
-# one apiece and marsapi has one, so for those the breaker's own first
-# discovery IS the only discovery and a probe would just add latency to a
-# healthy run.
-
-PREFLIGHT_TIMEOUT = (3, 20)
-
+# alive, but slower to its first byte than PROBE_TIMEOUT allows, against
+# 3.81-4.96s measured -- loses the cash trade, the week-to-date cash, the
+# afternoon cutout and the grading % for that run. The page names the host, and
+# pressing Fetch again calls reset_hosts() and tries it properly. Against that,
+# the behaviour it replaces is a two-to-eight-minute spinner on the same day.
 PREFLIGHT_URLS = (f"{LMR_BASE}/{CT154_ID}",)
 
 
 def preflight() -> list:
-    """
-    Touch the hosts that carry several expensive calls, so the breaker learns
-    about an outage in one short request rather than in one long one.
+    """The letter's hosts. See http_breaker.preflight for the reasoning."""
+    return http_breaker.preflight(PREFLIGHT_URLS, PREFLIGHT_TIMEOUT)
 
-    Returns the hosts found down, which is read off `_HOST_DOWN` rather than
-    from the exception: _BreakerSession already decides what counts as a dead
-    host, and deciding it twice is how the two rules drift apart.
-    """
-    for url in PREFLIGHT_URLS:
-        try:
-            _probe_session().get(url, timeout=PREFLIGHT_TIMEOUT)
-        except requests.exceptions.RequestException:
-            pass
-    return hosts_down()
-
-
-def _probe_session() -> requests.Session:
-    s = _BreakerSession()
-    s.mount("https://", HTTPAdapter(max_retries=Retry(total=0)))
-    return s
 
 
 def _num(x):
